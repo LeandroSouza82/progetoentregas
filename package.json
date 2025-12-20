@@ -4,11 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 192.168.2.127",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
     "firebase-admin": "^13.6.0",
     "jspdf": "^3.0.4",
     "jspdf-autotable": "^5.0.2",
