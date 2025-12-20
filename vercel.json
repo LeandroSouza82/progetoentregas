@@ -1,4 +1,6 @@
 {
+  "installCommand": "npm install --prefix motorista",
+  "buildCommand": "npm run build --prefix motorista",
   "builds": [
     {
       "src": "motorista/package.json",
