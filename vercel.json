@@ -1,6 +1,7 @@
 {
   "installCommand": "npm install",
   "buildCommand": "npm run build",
+  "outputDirectory": "motorista/dist",
   "builds": [
     {
       "src": "motorista/package.json",
