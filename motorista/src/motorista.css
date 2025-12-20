@@ -1,0 +1,54 @@
+import React, { useState, useEffect } from 'react';
+import io from 'socket.io-client';
+
+const socket = io('http://192.168.2.127:3000');
+
+export default function AppMotorista() {
+  const [entregas, setEntregas] = useState([]);
+  const [status, setStatus] = useState("Localizando...");
+
+  useEffect(() => {
+    socket.on('NOVA_ROTA', (d) => { setEntregas(d.entregas); alert("🔔 Nova rota recebida!"); });
+    socket.on('ENTREGA_CONCLUIDA', (d) => setEntregas(p => p.filter(e => e.id !== d.id)));
+    
+    navigator.geolocation.watchPosition(
+      (p) => {
+        socket.emit('posicao_motorista', { lat: p.coords.latitude, lng: p.coords.longitude });
+        setStatus("GPS Ativo ✅");
+      },
+      () => setStatus("Erro no GPS ❌"),
+      { enableHighAccuracy: true }
+    );
+    return () => socket.off();
+  }, []);
+
+  return (
+    <div style={{ padding: '20px', background: '#121212', color: '#fff', minHeight: '100vh', fontFamily: 'sans-serif' }}>
+      <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#00e676' }}>TRUCK GO</div>
+        <div style={{ fontSize: '12px', color: '#888' }}>{status}</div>
+      </div>
+
+      {entregas.length === 0 ? (
+        <div style={{ textAlign: 'center', color: '#444', marginTop: '100px' }}>
+          <div style={{ fontSize: '60px' }}>🚛</div>
+          <p>Aguardando novas entregas...</p>
+        </div>
+      ) : (
+        entregas.map((e, i) => (
+          <div key={e.id} style={mCard}>
+            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {i+1}</div>
+            <div style={{ fontSize: '20px', margin: '5px 0' }}>{e.cliente}</div>
+            <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>📍 {e.endereco}</div>
+            <button onClick={() => { socket.emit('entrega_feita', e.id); setEntregas(p => p.filter(x => x.id !== e.id)); }} style={mBtn}>
+              CONCLUIR ENTREGA
+            </button>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+const mCard = { background: '#1e1e1e', padding: '20px', borderRadius: '15px', marginBottom: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.5)' };
+const mBtn = { width: '100%', padding: '15px', background: '#00e676', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', fontSize: '16px' };
