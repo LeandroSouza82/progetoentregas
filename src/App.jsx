@@ -39,6 +39,10 @@ const iconeCentral = L.icon({
     popupAnchor: [0, -40],
 });
 
+// aliases usados em outros pontos do código
+const iconeBase = iconeCentral;
+const iconePedido = L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/1673/1673221.png', iconSize: [30, 30], iconAnchor: [15, 30] });
+
 // --- COMPONENTE PRINCIPAL ---
 
 import './App.css';
@@ -97,7 +101,7 @@ function App() {
                                 <TileLayer url={modoNoturno ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'} />
 
                                 {/* ATIVA O ZOOM AUTOMÁTICO DINÂMICO */}
-                                <AutoZoom posicaoCentral={posicaoCentral} pedidos={pedidos} />
+                                <AjustarMapa posicaoCentral={posicaoCentral} pedidos={pedidos} />
 
                                 {/* ÍCONE DA SUA BASE (CASINHA) - SEM PONTO AZUL */}
                                 <Marker position={posicaoCentral} icon={iconeBase}>
