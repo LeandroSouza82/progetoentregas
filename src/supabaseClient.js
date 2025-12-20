@@ -115,6 +115,9 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
+// Debug: show whether envs were present at build/runtime (do not print keys)
+console.log('[supabaseClient-debug] isSupabaseConfigured=', isSupabaseConfigured, 'SUPABASE_URL=', SUPABASE_URL ? 'SET' : 'MISSING', 'SUPABASE_ANON_KEY=', SUPABASE_ANON_KEY ? 'SET' : 'MISSING');
+
 let realClient = null;
 if (isSupabaseConfigured) {
     // dynamic import so projects without @supabase/supabase-js still run
