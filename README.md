@@ -38,6 +38,28 @@ O código já foi enviado para: https://github.com/LeandroSouza82/progetoentrega
 
 ---
 Arquivo gerado automaticamente pelo assistente.
+
+Deploy
+
+O projeto pode ser publicado no GitHub Pages automaticamente via workflow.
+
+- O workflow `deploy.yml` está configurado para rodar no push para a branch `main` e irá:
+	- instalar dependências (root e `motorista`),
+	- gerar os builds, e
+	- publicar o conteúdo de `dist/` usando `peaceiris/actions-gh-pages`.
+
+Como publicar manualmente
+
+```bash
+# Build local
+npm run build
+npm --prefix motorista run build
+
+# Opcional: publicar com a action (push para main) ou usar um deploy manual
+git add -A
+git commit -m "chore: build and deploy"
+git push origin main
+```
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
