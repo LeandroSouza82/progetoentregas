@@ -1,3 +1,20 @@
+# App Motorista
+
+Micro-aplicação React (Vite) para motoristas — parte do projeto `dashboard`.
+
+Como rodar
+
+```bash
+cd motorista
+npm install
+npm run dev
+```
+
+Build
+
+```bash
+npm run build
+```
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

@@ -1,3 +1,43 @@
+# Projeto Logística - Dashboard
+
+Monorepo com painel de gestão e app do motorista (Vite + React).
+
+Como rodar localmente
+
+- Instalar dependências:
+
+```bash
+npm install
+```
+
+- Rodar o servidor de desenvolvimento (root):
+
+```bash
+npm run dev
+```
+
+- Rodar apenas o app do motorista (dentro da pasta `motorista`):
+
+```bash
+cd motorista
+npm install
+npm run dev
+```
+
+Build para produção
+
+```bash
+npm run build
+# ou para o app do motorista:
+npm --prefix motorista run build
+```
+
+Remote
+
+O código já foi enviado para: https://github.com/LeandroSouza82/progetoentregas
+
+---
+Arquivo gerado automaticamente pelo assistente.
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
