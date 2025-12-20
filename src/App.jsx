@@ -113,6 +113,7 @@ export default function App() {
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     const [gestorPosicao, setGestorPosicao] = useState([-23.5505, -46.6333]);
+    const gestorUpdateTimeoutRef = useRef(null);
 
     // Estados do Supabase
     const [pedidosEmEspera, setPedidosEmEspera] = useState([]);
@@ -125,21 +126,66 @@ export default function App() {
         carregarDados();
         // Tenta obter geolocalização real do gestor no carregamento
         if (navigator && navigator.geolocation) {
+            // obtém a posição inicial e começa a observar mudanças (watchPosition)
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     const { latitude, longitude } = pos.coords;
                     setGestorPosicao([latitude, longitude]);
-                    // recarrega dados caso precise (opcional)
-                    // carregarDados();
                 },
                 (err) => {
-                    // Não conseguiu obter: mantém fallback
-                    console.warn('Geolocation not available or denied:', err.message);
+                    console.warn('Geolocation init failed:', err.message);
                 },
                 { enableHighAccuracy: true, timeout: 5000 }
             );
+
+            const watchId = navigator.geolocation.watchPosition(
+                (pos) => {
+                    const { latitude, longitude } = pos.coords;
+                    setGestorPosicao(prev => {
+                        // atualiza apenas se houver mudança significativa
+                        if (!prev || prev[0] !== latitude || prev[1] !== longitude) return [latitude, longitude];
+                        return prev;
+                    });
+                },
+                (err) => {
+                    console.warn('Geolocation watch error:', err.message);
+                },
+                { enableHighAccuracy: true, maximumAge: 3000, timeout: 7000 }
+            );
+
+            // limpa o watch ao desmontar
+            return () => {
+                try { navigator.geolocation.clearWatch(watchId); } catch (e) { }
+            };
         }
     }, []);
+
+    // Envia a posição do gestor para o banco (tabela `frota`) com debounce
+    useEffect(() => {
+        if (!gestorPosicao || gestorPosicao.length !== 2) return;
+        if (gestorUpdateTimeoutRef.current) clearTimeout(gestorUpdateTimeoutRef.current);
+        gestorUpdateTimeoutRef.current = setTimeout(async () => {
+            try {
+                const [lat, lng] = gestorPosicao;
+                console.log('[dashboard] atualizando posição do gestor no banco', { lat, lng });
+                // Tenta encontrar um registro identificado como Gestor
+                const { data: existing, error: selErr } = await supabase.from('frota').select('*').ilike('nome', 'gestor').limit(1);
+                if (selErr) console.warn('[dashboard] buscar frota (gestor) falhou', selErr);
+                if (existing && existing.length > 0) {
+                    const id = existing[0].id;
+                    const { error: upErr } = await supabase.from('frota').update({ lat, lng }).eq('id', id);
+                    if (upErr) console.warn('[dashboard] falha ao atualizar posição do gestor', upErr);
+                } else {
+                    // Se não existir, insere um registro simples para o gestor
+                    const { error: insErr } = await supabase.from('frota').insert([{ nome: 'Gestor', fone: '', lat, lng, status: 'Online' }]);
+                    if (insErr) console.warn('[dashboard] falha ao inserir registro do gestor', insErr);
+                }
+            } catch (err) {
+                console.error('[dashboard] erro ao enviar posição do gestor', err);
+            }
+        }, 1500);
+        return () => { if (gestorUpdateTimeoutRef.current) clearTimeout(gestorUpdateTimeoutRef.current); };
+    }, [gestorPosicao]);
 
     // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
     const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
