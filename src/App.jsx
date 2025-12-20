@@ -111,6 +111,9 @@ const otimizarRota = (pontoPartida, listaPedidos) => {
 export default function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
+    const [authUser, setAuthUser] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('auth_user') || 'null'); } catch { return null; }
+    });
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     const [gestorPosicao, setGestorPosicao] = useState([-23.5505, -46.6333]);
     const gestorUpdateTimeoutRef = useRef(null);
@@ -316,8 +319,13 @@ export default function App() {
                         <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE</div>
                         <div style={{ opacity: 0.6 }}>São Paulo, BR</div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                        <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {authUser && (
+                            <div style={{ color: theme.headerText, fontSize: 13, marginRight: 8 }}>
+                                {authUser.email || authUser.nome || 'Usuário'}
+                            </div>
+                        )}
+                        <button onClick={() => { setDarkMode(d => !d); }} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                         <button onClick={async () => {
                             if (navigator && navigator.geolocation) {
                                 navigator.geolocation.getCurrentPosition(
@@ -333,6 +341,9 @@ export default function App() {
                                 alert('Geolocalização não suportada neste navegador.');
                             }
                         }} style={{ padding: '8px 12px', borderRadius: '8px', border: 'none', background: theme.accent, color: '#fff', cursor: 'pointer' }}>Atualizar Posição</button>
+                        {authUser && (
+                            <button onClick={() => { localStorage.removeItem('auth_user'); setAuthUser(null); window.location.reload(); }} style={{ padding: '8px 12px', borderRadius: '8px', border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sair</button>
+                        )}
                     </div>
                 </div>
             </header>
