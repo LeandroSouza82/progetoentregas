@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient'; // Certifique-se que o arquivo existe
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
@@ -32,6 +32,8 @@ export default function MobileApp() {
     const [entregas, setEntregas] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
     const [carregando, setCarregando] = useState(true);
+    const audioCtxRef = useRef(null);
+    const prevEntregasRef = useRef([]);
 
     // Carrega pedidos do Supabase
     useEffect(() => {
@@ -43,6 +45,30 @@ export default function MobileApp() {
         const intervalo = setInterval(carregarRota, 5000);
         return () => clearInterval(intervalo);
     }, []);
+
+    // Função utilitária para tocar um tom simples (Web Audio API)
+    function playTone(freq = 880, duration = 200) {
+        try {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+            const ctx = audioCtxRef.current;
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = 'sine';
+            o.frequency.value = freq;
+            o.connect(g);
+            g.connect(ctx.destination);
+            g.gain.setValueAtTime(0.0001, ctx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+            o.start();
+            setTimeout(() => {
+                g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.02);
+                try { o.stop(); } catch (e) { }
+            }, duration);
+        } catch (err) {
+            console.warn('[motorista] playTone: falha ao tocar som', err);
+        }
+    }
 
     // Marca o motorista como Online no backend (mock ou real)
     async function markOnline() {
@@ -84,7 +110,17 @@ export default function MobileApp() {
             }
 
             if (!error && finalData) {
+                // Detecta novos pedidos para tocar notificação
+                const prevIds = Array.isArray(prevEntregasRef.current) ? prevEntregasRef.current.map(p => p.id) : [];
+                const newIds = finalData.map(d => d.id);
+                const added = newIds.filter(id => !prevIds.includes(id));
+                if (added.length > 0 && newIds.length > 0) {
+                    // toca som curto ao receber novos pedidos
+                    playTone(1000, 220);
+                }
+
                 setEntregas(finalData);
+                prevEntregasRef.current = finalData.slice();
                 setSelectedId(prev => prev || (finalData.length > 0 ? finalData[0].id : null));
             } else if (error) {
                 console.error('[motorista] carregarRota: erro do supabase', error);
@@ -120,6 +156,8 @@ export default function MobileApp() {
             // Remove da lista local instantaneamente para a próxima subir
             const remaining = entregas.filter(item => item.id !== id);
             setEntregas(remaining);
+            // tocar som de sucesso
+            playTone(520, 300);
             alert("✅ Entrega confirmada! Carregando a próxima...");
 
             // Se não houver mais entregas em rota, marca o motorista como disponível
@@ -270,6 +308,27 @@ export default function MobileApp() {
             {/* 2. ÁREA PRINCIPAL */}
             <main style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
+                {/* MAPA COM BADGES NUMERADOS (apenas visualização rápida) - MOVEU PARA O TOPO */}
+                {orderedRota.length > 0 && (
+                    <div style={{ background: '#fff', borderRadius: '12px', padding: '10px', boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
+                        <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
+                        <div style={{ height: '220px', borderRadius: '8px', overflow: 'hidden' }}>
+                            <MapContainer center={[orderedRota[0].lat, orderedRota[0].lng]} zoom={13} style={{ width: '100%', height: '100%' }}>
+                                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                {orderedRota.map((p, i) => (
+                                    <Marker key={p.id} position={[p.lat, p.lng]} icon={numberedIcon(p.ordem || (i + 1))}>
+                                        <Popup>
+                                            <div style={{ fontWeight: 'bold' }}>{p.ordem || (i + 1)}: {p.cliente}</div>
+                                            <div>{p.endereco}</div>
+                                        </Popup>
+                                    </Marker>
+                                ))}
+                                {orderedRota.length > 0 && <Polyline positions={orderedRota.map(p => [p.lat, p.lng])} color={theme.primary} weight={4} />}
+                            </MapContainer>
+                        </div>
+                    </div>
+                )}
+
                 {carregando ? (
                     <div style={{ textAlign: 'center', padding: '40px', color: theme.textLight }}>Buscando rota...</div>
                 ) : !tarefaAtual ? (
@@ -350,26 +409,7 @@ export default function MobileApp() {
                     </>
                 )}
 
-                {/* MAPA COM BADGES NUMERADOS (apenas visualização rápida) */}
-                {orderedRota.length > 0 && (
-                    <div style={{ background: '#fff', borderRadius: '12px', padding: '10px', boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
-                        <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
-                        <div style={{ height: '220px', borderRadius: '8px', overflow: 'hidden' }}>
-                            <MapContainer center={[orderedRota[0].lat, orderedRota[0].lng]} zoom={13} style={{ width: '100%', height: '100%' }}>
-                                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                                {orderedRota.map((p, i) => (
-                                    <Marker key={p.id} position={[p.lat, p.lng]} icon={numberedIcon(p.ordem || (i + 1))}>
-                                        <Popup>
-                                            <div style={{ fontWeight: 'bold' }}>{p.ordem || (i + 1)}: {p.cliente}</div>
-                                            <div>{p.endereco}</div>
-                                        </Popup>
-                                    </Marker>
-                                ))}
-                                {orderedRota.length > 0 && <Polyline positions={orderedRota.map(p => [p.lat, p.lng])} color={theme.primary} weight={4} />}
-                            </MapContainer>
-                        </div>
-                    </div>
-                )}
+                {/* mapa já renderizado no topo; duplicata removida */}
 
                 {/* LISTA DE ENTREGAS (SELECIONÁVEL) */}
                 <div style={{ marginTop: '10px' }}>
