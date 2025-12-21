@@ -1,12 +1,14 @@
 {
-  "installCommand": "npm install",
-  "buildCommand": "npm run build",
-  "outputDirectory": "motorista/dist",
-  "builds": [
-    {
-      "src": "motorista/package.json",
-      "use": "@vercel/static-build",
-      "config": { "distDir": "dist" }
-    }
-  ]
+    "installCommand": "npm install",
+    "buildCommand": "npm run build",
+    "outputDirectory": "motorista/dist",
+    "builds": [
+        {
+            "src": "motorista/package.json",
+            "use": "@vercel/static-build",
+            "config": {
+                "distDir": "dist"
+            }
+        }
+    ]
 }

@@ -1,0 +1,7 @@
+{
+  "framework": "vite",
+  "rootDirectory": "motorista",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist"
+}
