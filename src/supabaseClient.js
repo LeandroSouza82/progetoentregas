@@ -1,9 +1,14 @@
-// Mock minimal supabase client for local development
-// - Stores data in localStorage under keys 'mock_frota' and 'mock_pedidos'
-// - Implements chainable `.from(table).select()/insert()/delete()/update().eq()`
-// This avoids build errors when Supabase isn't configured. Replace with a
-// real Supabase client when ready.
+import { createClient } from '@supabase/supabase-js';
 
+// Detect env vars (safe for both browser Vite and Node)
+const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : process.env;
+const SUPABASE_URL = env.VITE_SUPABASE_URL || env.SUPABASE_URL;
+const SUPABASE_KEY = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY;
+
+let isMock = false;
+let supabase;
+
+// --- Mock implementation (fallback) ---
 function storageKey(table) {
     return `mock_${table}`;
 }
@@ -96,10 +101,52 @@ if (!localStorage.getItem(storageKey('pedidos'))) {
     writeTable('pedidos', []);
 }
 
-export const supabase = {
-    from(table) {
-        return createQuery(table);
-    }
-};
+// If env vars are present, use the real Supabase client; otherwise fallback to mock
+if (SUPABASE_URL && SUPABASE_KEY) {
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+} else {
+    isMock = true;
+    supabase = {
+        from(table) {
+            return createQuery(table);
+        }
+    };
+}
 
+// Helper: subscribe to a table's postgres_changes (works with real Supabase)
+// Returns an unsubscribe function. If mock, it falls back to a polling mechanism.
+export function subscribeToTable(table, handler, opts = { event: '*', schema: 'public', pollMs: 2000 }) {
+    if (isMock) {
+        // Simple polling for mock: call handler with latest data periodically
+        let stopped = false;
+        const poll = async () => {
+            if (stopped) return;
+            try {
+                const { data } = await supabase.from(table).select('*');
+                handler({ type: 'poll', table, data });
+            } catch (e) { /* ignore */ }
+            setTimeout(poll, opts.pollMs || 2000);
+        };
+        poll();
+        return () => { stopped = true; };
+    }
+
+    const channel = supabase
+        .channel(`public:${table}`)
+        .on('postgres_changes', { event: opts.event, schema: opts.schema, table }, (payload) => {
+            handler(payload);
+        })
+        .subscribe();
+
+    return () => {
+        try {
+            supabase.removeChannel(channel);
+        } catch (e) {
+            // fallback
+            channel.unsubscribe && channel.unsubscribe();
+        }
+    };
+}
+
+export { isMock };
 export default supabase;

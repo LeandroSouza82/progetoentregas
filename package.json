@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:realtime": "node scripts/test-realtime.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
     "firebase": "^11.0.0",
     "jspdf": "^3.0.4",
     "jspdf-autotable": "^5.0.2",

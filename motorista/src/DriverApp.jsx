@@ -61,7 +61,7 @@ export default function AppMotorista() {
             setLoggedIn(sess);
             setLoginVisible(false);
             setStatus('Online (logado)');
-            try { if (window.Notification && Notification.permission === 'granted') new Notification('Bem vindo, ' + sess.nome); } catch(e) {}
+            try { if (window.Notification && Notification.permission === 'granted') new Notification('Bem vindo, ' + sess.nome); } catch (e) { }
         } catch (err) {
             console.error('Erro no login:', err);
             setLoginError('Erro ao realizar login. Tente novamente.');
@@ -83,7 +83,7 @@ export default function AppMotorista() {
             const res = await supabase.from('pedidos').select('*').eq('status', 'Em Rota').order('ordem', { ascending: true });
             const data = res && res.data ? res.data : [];
             setEntregas(Array.isArray(data) ? data : []);
-            console.log("[motorista] carregarRota: resultado", { preview: data.slice ? data.slice(0,5) : data });
+            console.log("[motorista] carregarRota: resultado", { preview: data.slice ? data.slice(0, 5) : data });
         } catch (error) {
             console.error("Erro ao carregar rota:", error);
         } finally {

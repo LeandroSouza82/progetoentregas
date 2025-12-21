@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { supabase } from './supabaseClient';
+import supabase, { subscribeToTable } from './supabaseClient';
 
 // --- CONFIGURAÇÃO VISUAL ---
 // Ícones (Mantive os mesmos, pois funcionam bem)
@@ -150,6 +150,26 @@ export default function App() {
         const { data: pedidos } = await supabase.from('pedidos').select('*').eq('status', 'Aguardando');
         if (pedidos) setPedidosEmEspera(pedidos);
     }
+
+    // Realtime: escuta alterações em 'pedidos' e 'frota'
+    useEffect(() => {
+        const unsubPedidos = subscribeToTable('pedidos', (payload) => {
+            // payload format: { commit_timestamp, event, schema, table, record } OR mock poll
+            console.log('Realtime pedidos ->', payload);
+            // Recarrega lista para manter fonte de verdade simples
+            carregarDados();
+        }, { event: '*', schema: 'public' });
+
+        const unsubFrota = subscribeToTable('frota', (payload) => {
+            console.log('Realtime frota ->', payload);
+            carregarDados();
+        }, { event: '*', schema: 'public' });
+
+        return () => {
+            try { unsubPedidos && unsubPedidos(); } catch (e) { /* ignore */ }
+            try { unsubFrota && unsubFrota(); } catch (e) { /* ignore */ }
+        };
+    }, []);
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();

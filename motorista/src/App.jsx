@@ -39,7 +39,7 @@ function numberedIcon(number) {
     return L.divIcon({ html, className: '', iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -30] });
 }
 
-export default function MobileApp() {
+function InternalMobileApp() {
     // Estado da bateria (simulado)
     const [battery, setBattery] = useState({ level: 0.85, charging: false });
 
@@ -503,3 +503,5 @@ export default function MobileApp() {
         </div>
     );
 }
+
+export default function App() { return <DriverApp />; }

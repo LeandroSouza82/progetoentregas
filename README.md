@@ -76,3 +76,30 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+---
+
+## Configuração do Supabase (Realtime)
+
+Se você usa Supabase para Realtime, configure as variáveis de ambiente no diretório `dashboard` seguindo o arquivo `.env.example`.
+
+1. Crie um arquivo local **não comitado** chamado `.env` ou `.env.local` e cole suas credenciais (use **apenas** a publishable/anon key):
+
+```
+VITE_SUPABASE_URL=https://<seu-projeto>.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_XXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+2. Reinicie o dev server:
+
+```bash
+npm run dev
+```
+
+3. Segurança:
+- **Não** coloque a chave `sb_secret_...` (server key) no frontend ou em repositórios públicos; revogue/rotacione se ela foi exposta.
+- O `.gitignore` já contém `.env` e `.env.local` para evitar commits acidentais.
+
+4. Teste rápido: insira um registro na tabela `pedidos` via Supabase Studio ou SQL e verifique o console do dashboard (`Realtime pedidos -> …`) ou se o app atualiza automaticamente.
+
+Se desejar, posso criar um `.env.local` local para você (não será comitado) e testar o fluxo agora — quer que eu faça isso? (Não vou adicionar chaves sensíveis ao repositório.)
