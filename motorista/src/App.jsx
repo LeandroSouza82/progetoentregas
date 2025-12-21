@@ -1,18 +1,18 @@
-    // Estado do chat rápido
-    const [chatOpen, setChatOpen] = useState(false);
-    const [chatMsg, setChatMsg] = useState('');
-    const [chatLog, setChatLog] = useState([]);
+// Estado do chat rápido
+const [chatOpen, setChatOpen] = useState(false);
+const [chatMsg, setChatMsg] = useState('');
+const [chatLog, setChatLog] = useState([]);
 
-    // Função para enviar mensagem (simulação)
-    function enviarMsgGestor() {
-        if (!chatMsg.trim()) return;
-        setChatLog(log => [...log, { autor: 'Motorista', texto: chatMsg, ts: new Date().toLocaleTimeString() }]);
-        setChatMsg('');
-        // Simula resposta do gestor
-        setTimeout(() => {
-            setChatLog(log => [...log, { autor: 'Gestor', texto: 'Recebido! 👍', ts: new Date().toLocaleTimeString() }]);
-        }, 1200);
-    }
+// Função para enviar mensagem (simulação)
+function enviarMsgGestor() {
+    if (!chatMsg.trim()) return;
+    setChatLog(log => [...log, { autor: 'Motorista', texto: chatMsg, ts: new Date().toLocaleTimeString() }]);
+    setChatMsg('');
+    // Simula resposta do gestor
+    setTimeout(() => {
+        setChatLog(log => [...log, { autor: 'Gestor', texto: 'Recebido! 👍', ts: new Date().toLocaleTimeString() }]);
+    }, 1200);
+}
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient'; // Certifique-se que o arquivo existe
 import 'leaflet/dist/leaflet.css';
@@ -275,29 +275,29 @@ export default function MobileApp() {
                         </div>
                         <button onClick={() => setChatOpen(true)} title="Chat rápido com gestor" style={{ marginLeft: '10px', background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>💬 Chat</button>
                     </div>
-                                {/* MODAL DE CHAT RÁPIDO */}
-                                {chatOpen && (
-                                    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#0008', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <div style={{ background: theme.card, borderRadius: '18px', padding: '28px 22px', minWidth: '320px', boxShadow: '0 8px 32px #0004', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '80vh', overflowY: 'auto' }}>
-                                            <h3 style={{ margin: 0, color: theme.primary }}>Chat com Gestor</h3>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px', maxHeight: '180px', overflowY: 'auto', background: theme.bg, borderRadius: '8px', padding: '8px' }}>
-                                                {chatLog.length === 0 && <div style={{ color: theme.textLight, fontSize: '13px' }}>Nenhuma mensagem ainda.</div>}
-                                                {chatLog.map((msg, i) => (
-                                                    <div key={i} style={{ alignSelf: msg.autor === 'Motorista' ? 'flex-end' : 'flex-start', background: msg.autor === 'Motorista' ? theme.primary : theme.secondary, color: '#fff', borderRadius: '8px', padding: '6px 10px', marginBottom: '2px', maxWidth: '80%' }}>
-                                                        <div style={{ fontSize: '12px', fontWeight: 'bold' }}>{msg.autor}</div>
-                                                        <div style={{ fontSize: '14px' }}>{msg.texto}</div>
-                                                        <div style={{ fontSize: '10px', opacity: 0.7, textAlign: 'right' }}>{msg.ts}</div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div style={{ display: 'flex', gap: '8px' }}>
-                                                <input value={chatMsg} onChange={e => setChatMsg(e.target.value)} placeholder="Digite sua mensagem..." style={{ flex: 1, padding: '8px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px' }} onKeyDown={e => { if (e.key === 'Enter') enviarMsgGestor(); }} />
-                                                <button onClick={enviarMsgGestor} style={{ background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>Enviar</button>
-                                            </div>
-                                            <button onClick={() => setChatOpen(false)} style={{ marginTop: '8px', background: theme.secondary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px' }}>Fechar</button>
+                    {/* MODAL DE CHAT RÁPIDO */}
+                    {chatOpen && (
+                        <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#0008', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <div style={{ background: theme.card, borderRadius: '18px', padding: '28px 22px', minWidth: '320px', boxShadow: '0 8px 32px #0004', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '80vh', overflowY: 'auto' }}>
+                                <h3 style={{ margin: 0, color: theme.primary }}>Chat com Gestor</h3>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px', maxHeight: '180px', overflowY: 'auto', background: theme.bg, borderRadius: '8px', padding: '8px' }}>
+                                    {chatLog.length === 0 && <div style={{ color: theme.textLight, fontSize: '13px' }}>Nenhuma mensagem ainda.</div>}
+                                    {chatLog.map((msg, i) => (
+                                        <div key={i} style={{ alignSelf: msg.autor === 'Motorista' ? 'flex-end' : 'flex-start', background: msg.autor === 'Motorista' ? theme.primary : theme.secondary, color: '#fff', borderRadius: '8px', padding: '6px 10px', marginBottom: '2px', maxWidth: '80%' }}>
+                                            <div style={{ fontSize: '12px', fontWeight: 'bold' }}>{msg.autor}</div>
+                                            <div style={{ fontSize: '14px' }}>{msg.texto}</div>
+                                            <div style={{ fontSize: '10px', opacity: 0.7, textAlign: 'right' }}>{msg.ts}</div>
                                         </div>
-                                    </div>
-                                )}
+                                    ))}
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <input value={chatMsg} onChange={e => setChatMsg(e.target.value)} placeholder="Digite sua mensagem..." style={{ flex: 1, padding: '8px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px' }} onKeyDown={e => { if (e.key === 'Enter') enviarMsgGestor(); }} />
+                                    <button onClick={enviarMsgGestor} style={{ background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>Enviar</button>
+                                </div>
+                                <button onClick={() => setChatOpen(false)} style={{ marginTop: '8px', background: theme.secondary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px' }}>Fechar</button>
+                            </div>
+                        </div>
+                    )}
                     <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{entregas.length}</div>
