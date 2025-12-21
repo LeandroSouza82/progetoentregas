@@ -237,12 +237,14 @@ export default function MobileApp() {
                                 onClick={() => seedPedido()}
                                 title="Semear pedido de teste"
                                 style={{
-                                    padding: '6px 10px',
+                                    padding: '10px 20px',
                                     borderRadius: '10px',
                                     border: 'none',
                                     background: '#ffffff22',
                                     color: '#fff',
-                                    cursor: 'pointer'
+                                    cursor: 'pointer',
+                                    fontWeight: 'bold',
+                                    fontSize: '16px'
                                 }}
                             >
                                 +
