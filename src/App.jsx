@@ -26,10 +26,10 @@ const lightTheme = {
     headerText: '#f8fafc',
     bg: '#f1f5f9',
     card: '#ffffff',
-    primary: '#4f46e5',
-    accent: '#0ea5e9',
-    success: '#10b981',
-    danger: '#ef4444',
+    primary: '#2563EB',
+    accent: '#60A5FA',
+    success: '#10B981',
+    danger: '#EF4444',
     textMain: '#334155',
     textLight: '#94a3b8',
     shadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
@@ -40,12 +40,12 @@ const darkTheme = {
     headerText: '#e6eef8',
     bg: '#071228',
     card: '#0b1220',
-    primary: '#60a5fa',
-    accent: '#38bdf8',
-    success: '#34d399',
-    danger: '#f87171',
-    textMain: '#cbd5e1',
-    textLight: '#94a3b8',
+    primary: '#2563EB',
+    accent: '#60A5FA',
+    success: '#34D399',
+    danger: '#F87171',
+    textMain: '#CBD5E1',
+    textLight: '#94A3B8',
     shadow: '0 6px 18px rgba(0,0,0,0.6)'
 };
 
