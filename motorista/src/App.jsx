@@ -1,3 +1,18 @@
+    // Estado do chat rápido
+    const [chatOpen, setChatOpen] = useState(false);
+    const [chatMsg, setChatMsg] = useState('');
+    const [chatLog, setChatLog] = useState([]);
+
+    // Função para enviar mensagem (simulação)
+    function enviarMsgGestor() {
+        if (!chatMsg.trim()) return;
+        setChatLog(log => [...log, { autor: 'Motorista', texto: chatMsg, ts: new Date().toLocaleTimeString() }]);
+        setChatMsg('');
+        // Simula resposta do gestor
+        setTimeout(() => {
+            setChatLog(log => [...log, { autor: 'Gestor', texto: 'Recebido! 👍', ts: new Date().toLocaleTimeString() }]);
+        }, 1200);
+    }
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient'; // Certifique-se que o arquivo existe
 import 'leaflet/dist/leaflet.css';
@@ -39,13 +54,27 @@ function numberedIcon(number) {
 }
 
 export default function MobileApp() {
+    // Estado da bateria (simulado)
+    const [battery, setBattery] = useState({ level: 0.85, charging: false });
+
+    // Simulação de atualização da bateria (pode ser adaptado para API real)
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setBattery(b => {
+                let newLevel = b.level - 0.01;
+                if (newLevel < 0.1) newLevel = 1;
+                return { ...b, level: newLevel };
+            });
+        }, 10000);
+        return () => clearInterval(interval);
+    }, []);
     // Estado do Motorista (Simulado)
-        const [motorista] = useState({
-            id: 1,
-            nome: 'Carlos Oliveira',
-            status: 'Online',
-            foto: 'https://randomuser.me/api/portraits/men/32.jpg' // exemplo de foto
-        });
+    const [motorista] = useState({
+        id: 1,
+        nome: 'Carlos Oliveira',
+        status: 'Online',
+        foto: 'https://randomuser.me/api/portraits/men/32.jpg' // exemplo de foto
+    });
     const [entregas, setEntregas] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
     const [carregando, setCarregando] = useState(true);
@@ -196,6 +225,12 @@ export default function MobileApp() {
         }
     }
 
+    // Função para estimar tempo de entrega (simulação: 8 min por parada)
+    function estimarTempoEntrega(ordem) {
+        if (!ordem) return '8 min';
+        return `${ordem * 8} min`;
+    }
+
     // A tarefa atual é a selecionada pelo motorista (ou a primeira)
     const tarefaAtual = selectedId ? entregas.find(e => e.id === selectedId) : (entregas.length > 0 ? entregas[0] : null);
     const proximasTarefas = entregas.filter(e => e.id !== (tarefaAtual ? tarefaAtual.id : null));
@@ -228,14 +263,41 @@ export default function MobileApp() {
             }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <div style={{ width: '45px', height: '45px', borderRadius: '50%', backgroundColor: darkMode ? '#444' : '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', overflow: 'hidden' }}>
-                                <img src={motorista.foto} alt="Foto do motorista" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                        <div style={{ width: '45px', height: '45px', borderRadius: '50%', backgroundColor: darkMode ? '#444' : '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', overflow: 'hidden', position: 'relative' }}>
+                            <img src={motorista.foto} alt="Foto do motorista" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                            <div style={{ position: 'absolute', bottom: '-8px', right: '-8px', background: battery.level > 0.2 ? '#10b981' : '#f59e0b', color: '#fff', borderRadius: '8px', padding: '2px 6px', fontSize: '10px', fontWeight: 'bold', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>
+                                {Math.round(battery.level * 100)}% {battery.charging ? '⚡' : ''}
                             </div>
+                        </div>
                         <div>
                             <h2 style={{ margin: 0, fontSize: '16px' }}>{motorista.nome}</h2>
                             <span style={{ fontSize: '12px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px' }}>● Online</span>
                         </div>
+                        <button onClick={() => setChatOpen(true)} title="Chat rápido com gestor" style={{ marginLeft: '10px', background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>💬 Chat</button>
                     </div>
+                                {/* MODAL DE CHAT RÁPIDO */}
+                                {chatOpen && (
+                                    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: '#0008', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <div style={{ background: theme.card, borderRadius: '18px', padding: '28px 22px', minWidth: '320px', boxShadow: '0 8px 32px #0004', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '80vh', overflowY: 'auto' }}>
+                                            <h3 style={{ margin: 0, color: theme.primary }}>Chat com Gestor</h3>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px', maxHeight: '180px', overflowY: 'auto', background: theme.bg, borderRadius: '8px', padding: '8px' }}>
+                                                {chatLog.length === 0 && <div style={{ color: theme.textLight, fontSize: '13px' }}>Nenhuma mensagem ainda.</div>}
+                                                {chatLog.map((msg, i) => (
+                                                    <div key={i} style={{ alignSelf: msg.autor === 'Motorista' ? 'flex-end' : 'flex-start', background: msg.autor === 'Motorista' ? theme.primary : theme.secondary, color: '#fff', borderRadius: '8px', padding: '6px 10px', marginBottom: '2px', maxWidth: '80%' }}>
+                                                        <div style={{ fontSize: '12px', fontWeight: 'bold' }}>{msg.autor}</div>
+                                                        <div style={{ fontSize: '14px' }}>{msg.texto}</div>
+                                                        <div style={{ fontSize: '10px', opacity: 0.7, textAlign: 'right' }}>{msg.ts}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <input value={chatMsg} onChange={e => setChatMsg(e.target.value)} placeholder="Digite sua mensagem..." style={{ flex: 1, padding: '8px', borderRadius: '8px', border: '1px solid #ddd', fontSize: '14px' }} onKeyDown={e => { if (e.key === 'Enter') enviarMsgGestor(); }} />
+                                                <button onClick={enviarMsgGestor} style={{ background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '8px 14px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>Enviar</button>
+                                            </div>
+                                            <button onClick={() => setChatOpen(false)} style={{ marginTop: '8px', background: theme.secondary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '13px' }}>Fechar</button>
+                                        </div>
+                                    </div>
+                                )}
                     <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{entregas.length}</div>
@@ -317,6 +379,10 @@ export default function MobileApp() {
                             flexDirection: 'column',
                             gap: '20px'
                         }}>
+                            {/* Tempo estimado para entrega */}
+                            <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '14px', fontWeight: 'bold' }}>
+                                ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem || 1)}
+                            </div>
                             {/* Dados do Cliente */}
                             <div>
                                 <h1 style={{ margin: '0 0 5px 0', color: theme.textMain, fontSize: '22px' }}>{tarefaAtual.cliente}</h1>
@@ -361,9 +427,9 @@ export default function MobileApp() {
                                     fontWeight: '800',
                                     fontSize: '18px',
                                     cursor: 'pointer',
-                                            borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                            borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                            transition: 'background 0.3s'
+                                    borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                    borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                    transition: 'background 0.3s'
                                 }}
                             >
                                 ✅ FINALIZAR ENTREGA
@@ -389,7 +455,7 @@ export default function MobileApp() {
                                 ))}
                                 {orderedRota.length > 0 && <Polyline positions={orderedRota.map(p => [p.lat, p.lng])} color={theme.primary} weight={4} />}
                             </MapContainer>
-                                                             <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
+                            <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
                         </div>
                     </div>
                 )}
@@ -421,6 +487,7 @@ export default function MobileApp() {
                                         <div>
                                             <div style={{ fontWeight: '700' }}>{task.cliente}</div>
                                             <div style={{ fontSize: '12px', color: theme.textLight }}>{task.endereco.substring(0, 40)}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textLight, marginTop: '2px' }}>⏱️ {estimarTempoEntrega(task.ordem || (idx + 1))}</div>
                                         </div>
                                     </div>
                                     <div style={{ fontSize: '16px' }}>📦</div>
