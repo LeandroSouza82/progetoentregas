@@ -24,7 +24,7 @@ function numberedIcon(number) {
 const lightTheme = {
     headerBg: '#0f172a',
     headerText: '#f8fafc',
-    bg: '#f1f5f9',
+    bg: '#ff0000',
     card: '#ffffff',
     primary: '#2563EB',
     accent: '#60A5FA',
@@ -38,7 +38,7 @@ const lightTheme = {
 const darkTheme = {
     headerBg: '#071028',
     headerText: '#e6eef8',
-    bg: '#071228',
+    bg: '#ff0000',
     card: '#0b1220',
     primary: '#2563EB',
     accent: '#60A5FA',
