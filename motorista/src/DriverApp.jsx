@@ -1,46 +1,89 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 
 export default function AppMotorista() {
-  // Sessão do motorista (persistida)
-  const [loggedIn, setLoggedIn] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('motorista')) || null;
-    } catch (e) { return null; }
-  });
-  const [entregas, setEntregas] = useState([]);
-  const [status, setStatus] = useState("Localizando...");
+    // Sessão do motorista (persistida)
+    const [loggedIn, setLoggedIn] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('motorista')) || null;
+        } catch (e) { return null; }
+    });
+    const [entregas, setEntregas] = useState([]);
+    const [status, setStatus] = useState("Localizando...");
 
-  // Campos temporários do formulário de login
-  const [formNome, setFormNome] = useState(loggedIn ? loggedIn.nome : '');
-  const [formPlaca, setFormPlaca] = useState(loggedIn ? loggedIn.veiculo : '');
-  const [formFoto, setFormFoto] = useState(loggedIn ? (loggedIn.foto || '') : '');
+    // Campos temporários do formulário de login
+    const [formNome, setFormNome] = useState(loggedIn ? loggedIn.nome : '');
+    const [formPlaca, setFormPlaca] = useState(loggedIn ? loggedIn.veiculo : '');
+    const [formFoto, setFormFoto] = useState(loggedIn ? (loggedIn.foto || '') : '');
+    const [loginLoading, setLoginLoading] = useState(false);
+    const [loginError, setLoginError] = useState('');
+    const [loginVisible, setLoginVisible] = useState(false); // animação modal
 
-  function fazerLogin(e) {
-    e.preventDefault();
-    const sess = { id: Date.now(), nome: formNome || 'Motorista', veiculo: formPlaca || '', foto: formFoto };
-    localStorage.setItem('motorista', JSON.stringify(sess));
-    setLoggedIn(sess);
-    setStatus('Online (logado)');
-  }
+    useEffect(() => {
+        if (!loggedIn) {
+            setLoginVisible(false);
+            const t = setTimeout(() => setLoginVisible(true), 20);
+            return () => clearTimeout(t);
+        }
+    }, [loggedIn]);
 
-  function fazerLogout() {
-    localStorage.removeItem('motorista');
-    setLoggedIn(null);
-    setEntregas([]);
-    setStatus('Desconectado');
-  }
-    // Função para buscar os dados que já aparecem nos seus logs
+    async function fazerLogin(e) {
+        e.preventDefault();
+        setLoginError('');
+        if (!formNome.trim() || !formPlaca.trim()) {
+            setLoginError('Nome e Veículo/Placa são obrigatórios.');
+            return;
+        }
+        setLoginLoading(true);
+        try {
+            // procura por placa primeiro
+            let existing = null;
+            if (formPlaca.trim()) {
+                const res = await supabase.from('frota').select('*').eq('placa', formPlaca.trim());
+                existing = res && res.data ? res.data[0] : null;
+            }
+            if (!existing) {
+                const res2 = await supabase.from('frota').select('*').eq('nome', formNome.trim());
+                existing = res2 && res2.data ? res2.data[0] : null;
+            }
+
+            let driver = null;
+            if (existing && existing.id) {
+                const upd = await supabase.from('frota').update({ nome: formNome.trim(), veiculo: formPlaca.trim(), foto: formFoto, status: 'Online' }).eq('id', existing.id);
+                driver = Array.isArray(upd.data) ? upd.data[0] : upd.data;
+            } else {
+                const ins = await supabase.from('frota').insert([{ nome: formNome.trim(), veiculo: formPlaca.trim(), foto: formFoto, status: 'Online' }]);
+                driver = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+            }
+
+            const sess = { id: driver.id, nome: driver.nome, veiculo: driver.veiculo, foto: driver.foto };
+            localStorage.setItem('motorista', JSON.stringify(sess));
+            setLoggedIn(sess);
+            setLoginVisible(false);
+            setStatus('Online (logado)');
+            try { if (window.Notification && Notification.permission === 'granted') new Notification('Bem vindo, ' + sess.nome); } catch(e) {}
+        } catch (err) {
+            console.error('Erro no login:', err);
+            setLoginError('Erro ao realizar login. Tente novamente.');
+        } finally {
+            setLoginLoading(false);
+        }
+    }
+
+    function fazerLogout() {
+        localStorage.removeItem('motorista');
+        setLoggedIn(null);
+        setEntregas([]);
+        setStatus('Desconectado');
+    }
+    // Função para buscar os dados (usa mock supabase local)
     const carregarRota = async () => {
         try {
-            console.log("[motorista] carregarRota: iniciando fetch de pedidos");
-            // Substitua pela sua URL de API ou lógica de busca do Firebase
-            const response = await fetch('SUA_URL_AQUI_OU_LOGICA_FIREBASE');
-            const resultado = await response.json();
-
-            if (resultado && resultado.dataPreview) {
-                setEntregas(resultado.dataPreview);
-                console.log("[motorista] carregarRota: resultado", resultado);
-            }
+            console.log("[motorista] carregarRota: iniciando fetch de pedidos (mock supabase)");
+            const res = await supabase.from('pedidos').select('*').eq('status', 'Em Rota').order('ordem', { ascending: true });
+            const data = res && res.data ? res.data : [];
+            setEntregas(Array.isArray(data) ? data : []);
+            console.log("[motorista] carregarRota: resultado", { preview: data.slice ? data.slice(0,5) : data });
         } catch (error) {
             console.error("Erro ao carregar rota:", error);
         } finally {
@@ -54,7 +97,7 @@ export default function AppMotorista() {
 
         // pedir permissão de notificações (opcional)
         if (window.Notification && Notification.permission !== 'granted') {
-            Notification.requestPermission().catch(() => {});
+            Notification.requestPermission().catch(() => { });
         }
 
         // GPS - Funciona direto no navegador (Vercel)
@@ -96,15 +139,16 @@ export default function AppMotorista() {
 
             {!loggedIn && (
                 <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(180deg, rgba(0,0,0,0.6), rgba(0,0,0,0.7))', zIndex: 999 }}>
-                    <form onSubmit={fazerLogin} style={{ background: '#0f1724', color: '#fff', padding: '28px', borderRadius: '14px', width: '360px', boxShadow: '0 12px 40px rgba(0,0,0,0.6)' }}>
+                    <form onSubmit={fazerLogin} style={{ background: '#0f1724', color: '#fff', padding: '28px', borderRadius: '14px', width: '360px', boxShadow: '0 12px 40px rgba(0,0,0,0.6)', transform: loginVisible ? 'translateY(0)' : 'translateY(10px)', opacity: loginVisible ? 1 : 0, transition: 'all 300ms ease' }}>
                         <h2 style={{ margin: '0 0 8px 0', fontSize: '20px' }}>Entrar como Motorista</h2>
                         <p style={{ margin: '0 0 18px 0', color: '#9aa4b2' }}>Insira seus dados para acessar o app</p>
+                        {loginError && <div style={{ marginBottom: '10px', color: '#ffb4b4', background: '#2b1010', padding: '8px', borderRadius: '8px' }}>{loginError}</div>}
                         <input value={formNome} onChange={e => setFormNome(e.target.value)} placeholder="Nome" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #223344', marginBottom: '10px', background: '#0b1220', color: '#fff' }} />
                         <input value={formPlaca} onChange={e => setFormPlaca(e.target.value)} placeholder="Veículo / Placa" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #223344', marginBottom: '10px', background: '#0b1220', color: '#fff' }} />
                         <input value={formFoto} onChange={e => setFormFoto(e.target.value)} placeholder="URL da foto (opcional)" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #223344', marginBottom: '16px', background: '#0b1220', color: '#fff' }} />
                         <div style={{ display: 'flex', gap: '10px' }}>
-                            <button type="submit" style={{ flex: 1, padding: '12px', borderRadius: '10px', border: 'none', background: '#00e676', color: '#000', fontWeight: '800', cursor: 'pointer' }}>Entrar</button>
-                            <button type="button" onClick={() => { setFormNome(''); setFormPlaca(''); setFormFoto(''); }} style={{ padding: '12px', borderRadius: '10px', border: '1px solid #223344', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Limpar</button>
+                            <button type="submit" disabled={loginLoading} style={{ flex: 1, padding: '12px', borderRadius: '10px', border: 'none', background: loginLoading ? '#7be79a' : '#00e676', color: '#000', fontWeight: '800', cursor: loginLoading ? 'wait' : 'pointer' }}>{loginLoading ? 'Entrando...' : 'Entrar'}</button>
+                            <button type="button" onClick={() => { setFormNome(''); setFormPlaca(''); setFormFoto(''); setLoginError(''); }} style={{ padding: '12px', borderRadius: '10px', border: '1px solid #223344', background: 'transparent', color: '#fff', cursor: 'pointer' }}>Limpar</button>
                         </div>
                     </form>
                 </div>
