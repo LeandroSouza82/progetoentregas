@@ -101,10 +101,33 @@ if (!localStorage.getItem(storageKey('pedidos'))) {
     writeTable('pedidos', []);
 }
 
-// If env vars are present, use the real Supabase client; otherwise fallback to mock
-if (SUPABASE_URL && SUPABASE_KEY) {
-    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// If env vars are present, validate SUPABASE_URL and use the real Supabase client; otherwise fallback to mock
+function isValidUrl(u) {
+    try {
+        const parsed = new URL(u);
+        // Basic checks: protocol should be http or https, and hostname should contain 'supabase'
+        return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname && parsed.hostname.includes('supabase');
+    } catch (e) {
+        return false;
+    }
+}
+
+if (SUPABASE_URL && SUPABASE_KEY && isValidUrl(SUPABASE_URL)) {
+    try {
+        supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    } catch (e) {
+        console.error('Failed to initialize Supabase client:', e, { SUPABASE_URL, SUPABASE_KEY: !!SUPABASE_KEY });
+        isMock = true;
+        supabase = {
+            from(table) {
+                return createQuery(table);
+            }
+        };
+    }
 } else {
+    if (SUPABASE_URL || SUPABASE_KEY) {
+        console.warn('Supabase env vars present but invalid. Falling back to mock. Supabase URL:', SUPABASE_URL);
+    }
     isMock = true;
     supabase = {
         from(table) {
