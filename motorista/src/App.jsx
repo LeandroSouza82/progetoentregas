@@ -5,15 +5,27 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import L from 'leaflet';
 
 // --- ESTILOS MOBILE (CSS-in-JS) ---
-const theme = {
-    bg: '#f3f4f6',
-    header: '#111827',
-    card: '#ffffff',
-    primary: '#2563eb', // Azul Waze
-    secondary: '#10b981', // Verde Concluir
-    textMain: '#1f2937',
-    textLight: '#6b7280',
-    maps: '#34a853' // Verde Google
+const themes = {
+    light: {
+        bg: '#f3f4f6',
+        header: '#111827',
+        card: '#ffffff',
+        primary: '#2563eb',
+        secondary: '#10b981',
+        textMain: '#1f2937',
+        textLight: '#6b7280',
+        maps: '#34a853'
+    },
+    dark: {
+        bg: '#18181b',
+        header: '#27272a',
+        card: '#23232b',
+        primary: '#60a5fa',
+        secondary: '#22d3ee',
+        textMain: '#f3f4f6',
+        textLight: '#a1a1aa',
+        maps: '#34a853'
+    }
 };
 
 // Cria DivIcon numerado para o motorista (badge pequena)
@@ -28,10 +40,17 @@ function numberedIcon(number) {
 
 export default function MobileApp() {
     // Estado do Motorista (Simulado)
-    const [motorista] = useState({ id: 1, nome: 'Carlos Oliveira', status: 'Online' });
+        const [motorista] = useState({
+            id: 1,
+            nome: 'Carlos Oliveira',
+            status: 'Online',
+            foto: 'https://randomuser.me/api/portraits/men/32.jpg' // exemplo de foto
+        });
     const [entregas, setEntregas] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
     const [carregando, setCarregando] = useState(true);
+    const [darkMode, setDarkMode] = useState(false);
+    const theme = darkMode ? themes.dark : themes.light;
 
     // Carrega pedidos do Supabase
     useEffect(() => {
@@ -209,7 +228,9 @@ export default function MobileApp() {
             }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ width: '45px', height: '45px', borderRadius: '50%', backgroundColor: '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>🧔🏻‍♂️</div>
+                            <div style={{ width: '45px', height: '45px', borderRadius: '50%', backgroundColor: darkMode ? '#444' : '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', overflow: 'hidden' }}>
+                                <img src={motorista.foto} alt="Foto do motorista" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                            </div>
                         <div>
                             <h2 style={{ margin: 0, fontSize: '16px' }}>{motorista.nome}</h2>
                             <span style={{ fontSize: '12px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px' }}>● Online</span>
@@ -340,8 +361,9 @@ export default function MobileApp() {
                                     fontWeight: '800',
                                     fontSize: '18px',
                                     cursor: 'pointer',
-                                    boxShadow: '0 4px 15px rgba(16, 185, 129, 0.4)',
-                                    display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px'
+                                            borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                            borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                            transition: 'background 0.3s'
                                 }}
                             >
                                 ✅ FINALIZAR ENTREGA
@@ -367,6 +389,7 @@ export default function MobileApp() {
                                 ))}
                                 {orderedRota.length > 0 && <Polyline positions={orderedRota.map(p => [p.lat, p.lng])} color={theme.primary} weight={4} />}
                             </MapContainer>
+                                                             <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
                         </div>
                     </div>
                 )}
