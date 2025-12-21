@@ -103,15 +103,15 @@ function createQuery(table) {
     };
 }
 
-// initialize sample data if missing
-if (!localStorage.getItem(storageKey('frota'))) {
+// initialize sample data if missing (use readTable/writeTable to support Node env without localStorage)
+if (readTable('frota').length === 0) {
     writeTable('frota', [
         { id: 1, nome: 'Carlos Oliveira', status: 'Online', veiculo: 'Fiorino', placa: 'ABC-1234', fone: '5511999990000' },
         { id: 2, nome: 'Ana Souza', status: 'Ocupado', veiculo: 'Van', placa: 'XYZ-9876', fone: '5511988887777' }
     ]);
 }
 
-if (!localStorage.getItem(storageKey('pedidos'))) {
+if (readTable('pedidos').length === 0) {
     writeTable('pedidos', []);
 }
 
