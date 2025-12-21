@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import DriverApp from './DriverApp';
 import { supabase } from './supabaseClient'; // Certifique-se que o arquivo existe
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
