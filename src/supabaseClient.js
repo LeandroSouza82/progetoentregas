@@ -13,9 +13,18 @@ function storageKey(table) {
     return `mock_${table}`;
 }
 
+// Fallback storage for environments without localStorage (e.g., Node tests)
+const _inMemoryMockStorage = {};
+const hasLocalStorage = typeof localStorage !== 'undefined' && localStorage && typeof localStorage.getItem === 'function' && typeof localStorage.setItem === 'function';
+
 function readTable(table) {
     try {
-        const raw = localStorage.getItem(storageKey(table));
+        if (hasLocalStorage) {
+            const raw = localStorage.getItem(storageKey(table));
+            if (!raw) return [];
+            return JSON.parse(raw);
+        }
+        const raw = _inMemoryMockStorage[storageKey(table)];
         if (!raw) return [];
         return JSON.parse(raw);
     } catch (e) {
@@ -24,7 +33,12 @@ function readTable(table) {
 }
 
 function writeTable(table, data) {
-    localStorage.setItem(storageKey(table), JSON.stringify(data));
+    const payload = JSON.stringify(data);
+    if (hasLocalStorage) {
+        localStorage.setItem(storageKey(table), payload);
+    } else {
+        _inMemoryMockStorage[storageKey(table)] = payload;
+    }
 }
 
 function applyFilters(items, filters) {
