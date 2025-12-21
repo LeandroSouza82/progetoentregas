@@ -1,18 +1,3 @@
-// Estado do chat rápido
-const [chatOpen, setChatOpen] = useState(false);
-const [chatMsg, setChatMsg] = useState('');
-const [chatLog, setChatLog] = useState([]);
-
-// Função para enviar mensagem (simulação)
-function enviarMsgGestor() {
-    if (!chatMsg.trim()) return;
-    setChatLog(log => [...log, { autor: 'Motorista', texto: chatMsg, ts: new Date().toLocaleTimeString() }]);
-    setChatMsg('');
-    // Simula resposta do gestor
-    setTimeout(() => {
-        setChatLog(log => [...log, { autor: 'Gestor', texto: 'Recebido! 👍', ts: new Date().toLocaleTimeString() }]);
-    }, 1200);
-}
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient'; // Certifique-se que o arquivo existe
 import 'leaflet/dist/leaflet.css';
@@ -80,6 +65,22 @@ export default function MobileApp() {
     const [carregando, setCarregando] = useState(true);
     const [darkMode, setDarkMode] = useState(false);
     const theme = darkMode ? themes.dark : themes.light;
+
+    // Estado do chat rápido
+    const [chatOpen, setChatOpen] = useState(false);
+    const [chatMsg, setChatMsg] = useState('');
+    const [chatLog, setChatLog] = useState([]);
+
+    // Função para enviar mensagem (simulação)
+    function enviarMsgGestor() {
+        if (!chatMsg.trim()) return;
+        setChatLog(log => [...log, { autor: 'Motorista', texto: chatMsg, ts: new Date().toLocaleTimeString() }]);
+        setChatMsg('');
+        // Simula resposta do gestor
+        setTimeout(() => {
+            setChatLog(log => [...log, { autor: 'Gestor', texto: 'Recebido! 👍', ts: new Date().toLocaleTimeString() }]);
+        }, 1200);
+    }
 
     // Carrega pedidos do Supabase
     useEffect(() => {

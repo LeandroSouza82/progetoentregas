@@ -1,75 +1,64 @@
-
 import React, { useState, useEffect } from 'react';
-import io from 'socket.io-client';
-
-// Mudança: Tenta conectar, mas não trava o app se o IP estiver offline
-const socket = io('http://192.168.2.127:3000', { 
-  transports: ['websocket'],
-  timeout: 5000 
-});
 
 export default function AppMotorista() {
   const [entregas, setEntregas] = useState([]);
   const [status, setStatus] = useState("Localizando...");
 
+  // Função para buscar os dados que já aparecem nos seus logs
+  const carregarRota = async () => {
+    try {
+      console.log("[motorista] carregarRota: iniciando fetch de pedidos");
+      // Substitua pela sua URL de API ou lógica de busca do Firebase
+      const response = await fetch('SUA_URL_AQUI_OU_LOGICA_FIREBASE');
+      const resultado = await response.json();
+      
+      if (resultado && resultado.dataPreview) {
+        setEntregas(resultado.dataPreview);
+        console.log("[motorista] carregarRota: resultado", resultado);
+      }
+    } catch (error) {
+      console.error("Erro ao carregar rota:", error);
+    } finally {
+      console.log("[motorista] carregarRota: fim");
+    }
+  };
+
   useEffect(() => {
-    // Escutar eventos do socket
-    socket.on('connect', () => setStatus("Conectado ao Servidor ✅"));
-    socket.on('connect_error', () => setStatus("Servidor Offline (Local) ⚠️"));
+    carregarRota();
 
-    socket.on('NOVA_ROTA', (d) => { 
-      setEntregas(d.entregas); 
-      alert("🔔 Nova rota recebida!"); 
-    });
-
-    socket.on('ENTREGA_CONCLUIDA', (d) => 
-      setEntregas(p => p.filter(e => e.id !== d.id))
-    );
-    
-    // GPS
+    // GPS - Funciona direto no navegador (Vercel)
     const watchId = navigator.geolocation.watchPosition(
       (p) => {
-        const { latitude, longitude } = p.coords;
-        socket.emit('posicao_motorista', { lat: latitude, lng: longitude });
         setStatus("GPS Online 📍");
-        console.log("Posição enviada:", latitude, longitude);
+        // Aqui você enviaria a posição para o Firebase no futuro
       },
-      (err) => {
-        console.error(err);
-        setStatus("Erro no GPS ❌");
-      },
-      { enableHighAccuracy: true, distanceFilter: 10 }
+      () => setStatus("Erro no GPS ❌"),
+      { enableHighAccuracy: true }
     );
 
-    return () => {
-      socket.off();
-      navigator.geolocation.clearWatch(watchId);
-    };
+    return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
   return (
     <div style={{ padding: '20px', background: '#121212', color: '#fff', minHeight: '100vh', fontFamily: 'sans-serif' }}>
       <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#00e676', letterSpacing: '2px' }}>TRUCK GO</div>
-        <div style={{ fontSize: '11px', color: '#888', marginTop: '5px', textTransform: 'uppercase' }}>{status}</div>
+        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#00e676' }}>TRUCK GO</div>
+        <div style={{ fontSize: '12px', color: '#888' }}>{status}</div>
       </div>
 
       {entregas.length === 0 ? (
-        <div style={{ textAlign: 'center', color: '#333', marginTop: '100px' }}>
-          <div style={{ fontSize: '80px', marginBottom: '10px' }}>🚛</div>
-          <p style={{ color: '#666' }}>Aguardando novas rotas do painel...</p>
+        <div style={{ textAlign: 'center', color: '#444', marginTop: '100px' }}>
+          <div style={{ fontSize: '60px' }}>🚛</div>
+          <p>Aguardando novas entregas...</p>
         </div>
       ) : (
         entregas.map((e, i) => (
           <div key={e.id || i} style={mCard}>
-            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '11px' }}>PARADA {i+1}</div>
-            <div style={{ fontSize: '18px', fontWeight: 'bold', margin: '8px 0' }}>{e.cliente}</div>
-            <div style={{ color: '#aaa', fontSize: '13px', marginBottom: '20px', lineHeight: '1.4' }}>📍 {e.endereco}</div>
+            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {i+1}</div>
+            <div style={{ fontSize: '20px', margin: '5px 0' }}>{e.cliente || 'Cliente'}</div>
+            <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>📍 {e.endereco || 'Endereço não informado'}</div>
             <button 
-              onClick={() => { 
-                socket.emit('entrega_feita', e.id); 
-                setEntregas(p => p.filter(x => x.id !== e.id)); 
-              }} 
+              onClick={() => setEntregas(p => p.filter((_, index) => index !== i))} 
               style={mBtn}
             >
               CONCLUIR ENTREGA
@@ -81,23 +70,5 @@ export default function AppMotorista() {
   );
 }
 
-const mCard = { 
-  background: '#1e1e1e', 
-  padding: '20px', 
-  borderRadius: '16px', 
-  marginBottom: '15px', 
-  border: '1px solid #333',
-  boxShadow: '0 4px 20px rgba(0,0,0,0.4)' 
-};
-
-const mBtn = { 
-  width: '100%', 
-  padding: '16px', 
-  background: '#00e676', 
-  color: '#000', 
-  border: 'none', 
-  borderRadius: '12px', 
-  fontWeight: 'bold', 
-  fontSize: '15px',
-  cursor: 'pointer'
-};
+const mCard = { background: '#1e1e1e', padding: '20px', borderRadius: '15px', marginBottom: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.5)' };
+const mBtn = { width: '100%', padding: '15px', background: '#00e676', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 'bold', fontSize: '16px', cursor: 'pointer' };
