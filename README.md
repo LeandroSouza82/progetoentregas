@@ -102,4 +102,15 @@ npm run dev
 
 4. Teste rápido: insira um registro na tabela `pedidos` via Supabase Studio ou SQL e verifique o console do dashboard (`Realtime pedidos -> …`) ou se o app atualiza automaticamente.
 
+5. Validação e comportamento em tempo de execução:
+- O frontend valida que `VITE_SUPABASE_URL` seja uma URL bem-formada (ex.: `https://<seu-projeto>.supabase.co`). A URL deve incluir o esquema (`https://`) e o hostname normalmente contém `supabase`.
+- Se as variáveis estiverem presentes mas a URL for inválida, o app fará fallback para um mock local (funcionalidade de desenvolvimento), e um `console.warn` será emitido para facilitar o diagnóstico.
+
+6. Testes automatizados:
+- Adicionei um teste que verifica o comportamento de fallback. Execute localmente com:
+
+```bash
+npm run test:supabase
+```
+
 Se desejar, posso criar um `.env.local` local para você (não será comitado) e testar o fluxo agora — quer que eu faça isso? (Não vou adicionar chaves sensíveis ao repositório.)
