@@ -1,11 +1,22 @@
 :root {
+  /* Typography */
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
+  /* Color tokens */
+  --primary: #2563EB;
+  --accent: #60A5FA;
+  --bg-dark: #121212;
+  --bg: #242424;
+  --card: #1e1e1e;
+  --text-main: #ffffff;
+  --text-muted: #888;
+  --btn-text: #ffffff;
+
   color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  color: var(--text-main);
+  background-color: var(--bg);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -15,7 +26,7 @@
 
 a {
   font-weight: 500;
-  color: #2563EB;
+  color: var(--primary);
   /* primary blue */
   text-decoration: inherit;
 }
@@ -56,7 +67,9 @@ button:hover {
 
 button:focus,
 button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(37,99,235,0.14); /* subtle primary focus */
+  border-color: var(--accent);
 }
 
 @media (prefers-color-scheme: light) {
@@ -72,4 +85,17 @@ button:focus-visible {
   button {
     background-color: #f9f9f9;
   }
+}
+
+/* Responsividade */
+@media (max-width: 480px) {
+  body {
+    padding: 10px;
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    font-size: 16px;
+  }
+  h1 { font-size: 2.4em; }
 }
