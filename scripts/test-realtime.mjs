@@ -12,16 +12,21 @@ global.localStorage = (() => {
     };
 })();
 
-let supabase, subscribeToTable, isMock;
+let supabase, subscribeToTable, HAS_SUPABASE_CREDENTIALS;
 
 (async () => {
     // importa dinamicamente para garantir que o polyfill de localStorage seja definido antes
     const mod = await import('../src/supabaseClient.js');
     supabase = mod.default;
     subscribeToTable = mod.subscribeToTable;
-    isMock = mod.isMock;
+    HAS_SUPABASE_CREDENTIALS = mod.HAS_SUPABASE_CREDENTIALS;
 
-    console.log('isMock:', isMock);
+    console.log('HAS_SUPABASE_CREDENTIALS:', HAS_SUPABASE_CREDENTIALS);
+
+    if (!HAS_SUPABASE_CREDENTIALS) {
+        console.error('Supabase credentials missing — test-realtime requires a real Supabase connection.');
+        process.exit(2);
+    }
 
     let received = [];
 

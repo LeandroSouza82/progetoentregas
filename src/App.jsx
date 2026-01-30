@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleMap, InfoWindow } from '@react-google-maps/api';
-import supabase, { subscribeToTable, isMock } from './supabaseClient';
+import supabase, { HAS_SUPABASE_CREDENTIALS } from './supabaseClient';
 
 // --- CONFIGURAÇÃO VISUAL ---
 // Google Maps helpers
@@ -14,12 +14,13 @@ function numberedIconUrl(number) {
 
 const motoristaIconUrl = 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png';
 
-function motoristaIconUrlFor(heading = 0) {
+function motoristaIconUrlFor(heading = 0, color = '#2563eb') {
     // simple truck / arrow SVG rotated by `heading` degrees around center
+    // color param controls the main fill color (ex: azul, laranja, roxo, verde)
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'>
         <g transform='translate(20 20) rotate(${heading})'>
-            <rect x='-10' y='-8' width='20' height='12' rx='3' fill='%232563eb' stroke='%23fff' stroke-width='1'/>
-            <polygon points='10,-5 16,0 10,5' fill='%232563eb' />
+            <rect x='-10' y='-8' width='20' height='12' rx='3' fill='${color}' stroke='%23fff' stroke-width='1'/>
+            <polygon points='10,-5 16,0 10,5' fill='${color}' />
             <circle cx='-6' cy='6' r='3' fill='%23000' />
             <circle cx='6' cy='6' r='3' fill='%23000' />
         </g>
@@ -100,7 +101,15 @@ const otimizarRota = (pontoPartida, listaPedidos) => {
         let menorDistancia = Infinity;
         let indexMaisProximo = -1;
         pendentes.forEach((pedido, index) => {
-            const dist = Math.sqrt(Math.pow(pedido.lat - atual[0], 2) + Math.pow(pedido.lng - atual[1], 2));
+            // Guard: não calcular se dados inválidos
+            if (!atual || !Array.isArray(atual) || atual.length < 2) {
+                // fornecer defaults seguros para cálculo
+                atual = [0, 0];
+            }
+            if (!pedido || pedido.lat == null || pedido.lng == null) return;
+            const atualLat = atual[0] != null ? Number(atual[0]) : 0;
+            const atualLng = atual[1] != null ? Number(atual[1]) : 0;
+            const dist = Math.sqrt(Math.pow(Number(pedido.lat) - atualLat, 2) + Math.pow(Number(pedido.lng) - atualLng, 2));
             if (dist < menorDistancia) {
                 menorDistancia = dist;
                 maisProximo = pedido;
@@ -164,6 +173,14 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
             const directionsService = new window.google.maps.DirectionsService();
 
             const waypoints = remaining.map(p => ({ location: { lat: Number(p.lat), lng: Number(p.lng) }, stopover: true }));
+
+            // Não chamar Google se não houver waypoints válidos
+            if (!waypoints || waypoints.length === 0) {
+                console.warn('otimizarRotaComGoogle: nenhum waypoint válido para otimizar');
+                resolve(remaining);
+                return;
+            }
+
             const request = {
                 origin: originLatLng,
                 destination: originLatLng,
@@ -174,8 +191,9 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
 
             directionsService.route(request, async (result, status) => {
                 try {
-                    if (status === 'OK' && result && result.routes && result.routes[0]) {
-                        const wpOrder = result.routes[0].waypoint_order;
+                    const hasRoutes = Array.isArray(result?.routes) && result.routes.length > 0;
+                    if (status === 'OK' && hasRoutes) {
+                        const wpOrder = result?.routes?.[0]?.waypoint_order;
                         let ordered = remaining;
                         if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) {
                             ordered = wpOrder.map(i => remaining[i]);
@@ -205,9 +223,14 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
                     }
 
                     // Outros status: fallback conservador para lista original
-                    console.warn('DirectionsService retornou status:', status);
+                    console.warn('DirectionsService retornou status:', status, 'result:', result);
+                    try { alert('Aviso: otimização de rota indisponível no momento. Usando ordem conservadora.'); } catch (e) { }
                     resolve(remaining);
-                } catch (e) { resolve(remaining); }
+                } catch (e) {
+                    console.error('otimizarRotaComGoogle: erro no callback do DirectionsService', e);
+                    try { alert('Erro ao otimizar rota com Google Maps. Mantendo ordem atual.'); } catch (e2) { }
+                    resolve(remaining);
+                }
             });
         } catch (e) {
             reject(e);
@@ -234,6 +257,10 @@ export default function App() {
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
+    const [mensagemGeral, setMensagemGeral] = useState('');
+    const [enviandoGeral, setEnviandoGeral] = useState(false);
+    const [btnPressed, setBtnPressed] = useState(false);
+    const [destinatario, setDestinatario] = useState('all');
     const [nomeCliente, setNomeCliente] = useState('');
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const [recentList, setRecentList] = useState([]);
@@ -265,6 +292,19 @@ export default function App() {
         document.head.appendChild(s);
         return () => { s.removeEventListener('load', onLoad); };
     }, []);
+
+    // If Supabase credentials are not present, show a clear error screen and avoid loading fake data
+    if (!HAS_SUPABASE_CREDENTIALS) {
+        return (
+            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#111827', color: '#fff' }}>
+                <div style={{ textAlign: 'center', maxWidth: '720px', padding: '24px' }}>
+                    <h1 style={{ fontSize: '28px', marginBottom: '12px' }}>ERRO DE CONEXÃO: Chaves de API ausentes</h1>
+                    <p style={{ opacity: 0.85, marginBottom: '8px' }}>Defina as variáveis de ambiente <strong>VITE_SUPABASE_URL</strong> e <strong>VITE_SUPABASE_ANON_KEY</strong> (ou habilite o fallback de desenvolvimento em <strong>src/supabaseClient.js</strong>).</p>
+                    <p style={{ opacity: 0.7 }}>O sistema exige uma conexão real com o Supabase — sem chaves não é possível iniciar.</p>
+                </div>
+            </div>
+        );
+    }
 
     useEffect(() => {
         // Primeiro carrega configs e dados, depois tenta definir a posição do gestor
@@ -300,55 +340,98 @@ export default function App() {
         // Geolocalização automática removida para evitar timeouts/permits bloqueados
     }, []);
 
+    // Log de ambiente (REAL vs MOCK) para diagnóstico
+    useEffect(() => {
+        try { console.log('Supabase credentials present:', HAS_SUPABASE_CREDENTIALS ? 'YES' : 'NO'); } catch (e) { }
+    }, []);
+
     // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
     const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
 
-    // Center should prefer gestorPosicao (MY_LOCATION). If not available, fallback to motoristaLeandro, then a safe default.
+    // Center should prefer gestorPosicao (MY_LOCATION). If not available, fallback to a safe base default.
     const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
-    const mapCenter = (gestorPosicao && Array.isArray(gestorPosicao) && gestorPosicao.length >= 2)
+    // Garantir que nunca retornamos NaN: usar coordenadas da base como fallback
+    const mapCenter = (gestorPosicao?.[0] != null)
         ? { lat: Number(gestorPosicao[0]), lng: Number(gestorPosicao[1]) }
-        : (motoristaLeandro && motoristaLeandro.lat != null && motoristaLeandro.lng != null)
-            ? { lat: motoristaLeandro.lat, lng: motoristaLeandro.lng }
-            : { lat: 0, lng: 0 };
+        : { lat: -27.66, lng: -48.70 };
+
+    // Helpers para cores por tipo de carga
+    const getColorForType = (tipo) => {
+        const t = String(tipo || '').trim().toLowerCase();
+        if (t === 'entrega') return '#2563eb'; // azul
+        if (t === 'recolha') return '#f59e0b'; // laranja
+        if (t === 'outros' || t === 'outro') return '#a855f7'; // lilás
+        return '#10b981'; // verde livre / padrão
+    };
+
+    const getDriverServiceType = (motoristaId) => {
+        try {
+            const found = (rotaAtiva || []).find(r => Number(r.motorista_id) === Number(motoristaId) && String(r.status || '').trim().toLowerCase() === 'em_rota');
+            return found ? (found.tipo || null) : null;
+        } catch (e) { return null; }
+    };
+
+    const getDriverColor = (motoristaId) => {
+        const tipo = getDriverServiceType(motoristaId);
+        return tipo ? getColorForType(tipo) : '#10b981';
+    };
+
+    // Combina pedidos em espera e rota ativa para analisar status por motorista
+    const pedidosAtivos = [...(pedidosEmEspera || []), ...(rotaAtiva || [])];
 
     async function carregarDados() {
+        if (!HAS_SUPABASE_CREDENTIALS) {
+            console.error('carregarDados: Supabase keys missing — aborting data load');
+            return;
+        }
         // motoristas reais
         try {
-            const { data: motoristas } = await supabase.from('motoristas').select('*');
-            if (motoristas) setFrota(motoristas);
-        } catch (e) { console.warn('Erro carregando motoristas:', e); }
+            let q = supabase.from('motoristas').select('*');
+            if (q && typeof q.order === 'function') q = q.order('id');
+            const { data: motoristas, error: motorErr } = await q;
+            if (motorErr) { console.warn('carregarDados: erro ao buscar motoristas', motorErr); setFrota([]); } else setFrota(motoristas || []);
+        } catch (e) { console.warn('Erro carregando motoristas:', e); setFrota([]); }
 
         // entregas: novas cargas — filtro rigoroso pela string exata definida em NEW_LOAD_STATUS
         try {
-            // Buscar somente registros cujo status, quando normalizado, corresponda ao nosso padrão
-            const { data: entregasPend, error: entregasErr } = await supabase.from('entregas').select('*').eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
-            if (entregasErr) {
-                console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
-            } else if (entregasPend) setPedidosEmEspera(entregasPend);
-        } catch (e) { console.warn('Erro carregando entregas (filtro de status):', e); }
+            let q = supabase.from('entregas').select('*');
+            if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
+            const { data: entregasPend, error: entregasErr } = await q;
+            if (entregasErr) { console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr); setPedidosEmEspera([]); } else setPedidosEmEspera(entregasPend || []);
+        } catch (e) { console.warn('Erro carregando entregas (filtro de status):', e); setPedidosEmEspera([]); }
 
         // total de entregas
         try {
-            const { data: todas } = await supabase.from('entregas').select('*');
-            if (todas) setTotalEntregas(todas.length);
-        } catch (e) { console.warn('Erro contando entregas:', e); }
+            let q2 = supabase.from('entregas').select('*');
+            const { data: todas } = await q2;
+            setTotalEntregas((todas || []).length);
+        } catch (e) { console.warn('Erro contando entregas:', e); setTotalEntregas(0); }
 
         // avisos do gestor
         try {
-            const { data: avisosData } = await supabase.from('avisos_gestor').select('titulo, mensagem, created_at').order('created_at', { ascending: false }).limit(10);
-            if (avisosData) setAvisos(avisosData);
-        } catch (e) { console.warn('Erro carregando avisos:', e); }
+            let q3 = supabase.from('avisos_gestor').select('titulo, mensagem, created_at');
+            if (q3 && typeof q3.order === 'function') q3 = q3.order('created_at', { ascending: false });
+            if (q3 && typeof q3.limit === 'function') q3 = q3.limit(10);
+            const { data: avisosData, error: avisosErr } = await q3;
+            if (avisosErr) { console.warn('carregarDados: erro ao buscar avisos', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
+        } catch (e) { console.warn('Erro carregando avisos:', e); setAvisos([]); }
 
         // configuracoes (gestor_phone)
         try {
-            const { data: cfg } = await supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone').limit(1);
-            if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor);
-        } catch (e) { /* ignore */ }
+            let q4 = supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone');
+            if (q4 && typeof q4.limit === 'function') q4 = q4.limit(1);
+            const { data: cfg } = await q4;
+            if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
+        } catch (e) { console.warn('Erro carregando configuracoes:', e); setGestorPhone(null); }
 
         // Histórico recente (clientes únicos) para preencher atalho na Nova Carga
         try {
-            const { data: recent } = await supabase.from('entregas').select('cliente,endereco,created_at').order('id', { ascending: false }).limit(200);
-            if (recent) {
+            let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
+            if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
+            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(200);
+            const { data: recent, error: recentErr } = await q5;
+            if (recentErr) { console.warn('carregarDados: erro ao buscar histórico', recentErr); setRecentList([]); }
+            else if (recent) {
                 const seen = new Set();
                 const unique = [];
                 for (const r of recent) {
@@ -359,105 +442,115 @@ export default function App() {
                     unique.push({ cliente: r.cliente, endereco: r.endereco });
                 }
                 setRecentList(unique);
+            } else {
+                setRecentList([]);
             }
-        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); }
+        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); }
     }
 
     // Realtime: escuta alterações em 'entregas', 'motoristas' e 'avisos_gestor'
     useEffect(() => {
-        // If real Supabase client is available, use a single channel named 'custom-filter-channel'
-        if (!isMock && supabase && supabase.channel) {
-            const channel = supabase.channel('custom-filter-channel');
-
-            channel.on('postgres_changes', { event: '*', schema: 'public', table: 'motoristas' }, (payload) => {
-                // update local state directly if record present, parsing lat/lng to numbers
-                const rec = payload.record;
-                try {
-                    if (rec && rec.id) {
-                        const parsed = { ...rec };
-                        if (parsed.lat != null) {
-                            const v = parseFloat(parsed.lat);
-                            parsed.lat = isNaN(v) ? null : v;
-                        }
-                        if (parsed.lng != null) {
-                            const v2 = parseFloat(parsed.lng);
-                            parsed.lng = isNaN(v2) ? null : v2;
-                        }
-                        setFrota(prev => {
-                            const exists = prev.find(p => p.id === parsed.id);
-                            if (exists) return prev.map(p => p.id === parsed.id ? { ...p, ...parsed } : p);
-                            return [...prev.filter(p => p.id !== parsed.id), parsed];
-                        });
-                    }
-                } catch (e) {
-                    console.warn('Erro processando payload motoristas:', e);
-                }
-            });
-
-            channel.on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
-                try {
-                    const rec = payload.record;
-                    if (rec && rec.id) {
-                        const id = rec.id;
-                        // Update local pending deliveries list conservatively without refetching
-                        setPedidosEmEspera(prev => {
-                            try {
-                                if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
-                                // Normalize incoming status and compare to our canonical value
-                                const recStatusNorm = String(rec.status || '').trim().toLowerCase();
-                                if (recStatusNorm === String(NEW_LOAD_STATUS).trim().toLowerCase()) {
-                                    const exists = prev.find(p => p.id === id);
-                                    if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
-                                    return [...prev, rec];
-                                } else {
-                                    return prev.filter(p => p.id !== id);
-                                }
-                            } catch (e) { console.warn('Erro atualizando pedidosEmEspera do payload:', e); return prev; }
-                        });
-
-                        // Update rotaAtiva if present
-                        setRotaAtiva(prev => {
-                            try {
-                                const exists = prev.find(p => p.id === id);
-                                if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
-                                if (rec.ordem || rec.status === 'em_rota') {
-                                    if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
-                                    return [...prev, rec];
-                                }
-                                return prev;
-                            } catch (e) { console.warn('Erro atualizando rotaAtiva do payload:', e); return prev; }
-                        });
-
-                        return; // handled via local updates
-                    }
-                } catch (e) {
-                    console.warn('Erro processando payload entregas:', e);
-                }
-                // Fallback: se payload inválido, re-carrega dados completos
-                carregarDados();
-            });
-
-            channel.on('postgres_changes', { event: '*', schema: 'public', table: 'avisos_gestor' }, (payload) => {
-                carregarDados();
-            });
-
-            channel.subscribe();
-
-            return () => {
-                try { supabase.removeChannel(channel); } catch (e) { channel.unsubscribe && channel.unsubscribe(); }
-            };
+        // If Supabase credentials are missing, disable realtime subscriptions
+        if (!HAS_SUPABASE_CREDENTIALS) {
+            console.error('Realtime disabled: Supabase credentials missing');
+            return;
         }
+        // If real Supabase client is available, use a single channel named 'custom-filter-channel'
+        if (supabase && supabase.channel) {
+            try {
+                if (!supabase) return;
+                const channel = supabase.channel('custom-filter-channel');
 
-        // Fallback: mock polling via helper
-        const unsubPedidos = subscribeToTable('entregas', (payload) => { carregarDados(); }, { event: '*', schema: 'public' });
-        const unsubFrota = subscribeToTable('motoristas', (payload) => { carregarDados(); }, { event: '*', schema: 'public' });
-        const unsubAvisos = subscribeToTable('avisos_gestor', (payload) => { carregarDados(); }, { event: '*', schema: 'public' });
+                channel.on('postgres_changes', { event: '*', schema: 'public', table: 'motoristas' }, (payload) => {
+                    // update local state directly if record present, parsing lat/lng to numbers
+                    const rec = payload.record;
+                    try {
+                        if (rec && rec.id) {
+                            const parsed = { ...rec };
+                            if (parsed.lat != null) {
+                                const v = parseFloat(parsed.lat);
+                                parsed.lat = isNaN(v) ? null : v;
+                            }
+                            if (parsed.lng != null) {
+                                const v2 = parseFloat(parsed.lng);
+                                parsed.lng = isNaN(v2) ? null : v2;
+                            }
+                            setFrota(prev => {
+                                const exists = prev.find(p => p.id === parsed.id);
+                                if (exists) return prev.map(p => p.id === parsed.id ? { ...p, ...parsed } : p);
+                                return [...prev.filter(p => p.id !== parsed.id), parsed];
+                            });
+                        }
+                    } catch (e) {
+                        console.warn('Erro processando payload motoristas:', e);
+                    }
+                });
 
-        return () => {
-            try { unsubPedidos && unsubPedidos(); } catch (e) { /* ignore */ }
-            try { unsubFrota && unsubFrota(); } catch (e) { /* ignore */ }
-            try { unsubAvisos && unsubAvisos(); } catch (e) { /* ignore */ }
-        };
+                channel.on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
+                    try {
+                        const rec = payload.record;
+                        if (rec && rec.id) {
+                            const id = rec.id;
+                            // Update local pending deliveries list conservatively without refetching
+                            setPedidosEmEspera(prev => {
+                                try {
+                                    if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
+                                    // Normalize incoming status and compare to our canonical value
+                                    const recStatusNorm = String(rec.status || '').trim().toLowerCase();
+                                    if (recStatusNorm === String(NEW_LOAD_STATUS).trim().toLowerCase()) {
+                                        const exists = prev.find(p => p.id === id);
+                                        if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
+                                        return [...prev, rec];
+                                    } else {
+                                        return prev.filter(p => p.id !== id);
+                                    }
+                                } catch (e) { console.warn('Erro atualizando pedidosEmEspera do payload:', e); return prev; }
+                            });
+
+                            // Update rotaAtiva if present
+                            setRotaAtiva(prev => {
+                                try {
+                                    const exists = prev.find(p => p.id === id);
+                                    if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
+                                    if (rec.ordem || rec.status === 'em_rota') {
+                                        if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
+                                        return [...prev, rec];
+                                    }
+                                    return prev;
+                                } catch (e) { console.warn('Erro atualizando rotaAtiva do payload:', e); return prev; }
+                            });
+
+                            return; // handled via local updates
+                        }
+                    } catch (e) {
+                        console.warn('Erro processando payload entregas:', e);
+                    }
+                    // Fallback: se payload inválido, re-carrega dados completos
+                    carregarDados();
+                });
+
+                channel.on('postgres_changes', { event: '*', schema: 'public', table: 'avisos_gestor' }, (payload) => {
+                    carregarDados();
+                });
+
+                const trySubscribe = () => {
+                    try {
+                        channel.subscribe();
+                    } catch (err) {
+                        console.error('Supabase channel subscribe failed, retrying in 5s', err);
+                        setTimeout(trySubscribe, 5000);
+                    }
+                };
+                trySubscribe();
+
+                return () => {
+                    try { supabase.removeChannel(channel); } catch (e) { channel.unsubscribe && channel.unsubscribe(); }
+                };
+            } catch (err) {
+                console.error('Falha ao criar canal Supabase (Realtime):', err);
+            }
+        }
+        return () => { /* nothing to cleanup if no channel created */ };
     }, []);
 
     // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
@@ -479,8 +572,10 @@ export default function App() {
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        const lat = gestorPosicao[0] + (Math.random() - 0.5) * 0.04;
-        const lng = gestorPosicao[1] + (Math.random() - 0.5) * 0.04;
+        const baseLat = (gestorPosicao && Array.isArray(gestorPosicao) && gestorPosicao.length >= 2) ? Number(gestorPosicao[0]) : 0;
+        const baseLng = (gestorPosicao && Array.isArray(gestorPosicao) && gestorPosicao.length >= 2) ? Number(gestorPosicao[1]) : 0;
+        const lat = baseLat + (Math.random() - 0.5) * 0.04;
+        const lng = baseLng + (Math.random() - 0.5) * 0.04;
         // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
@@ -517,6 +612,12 @@ export default function App() {
     // Assign a selected driver: optimize route and update each entrega to 'em_rota' with motorista_id e ordem
     const assignDriver = async (driver) => {
         if (!driver || !driver.id) return;
+        const motoristaIdNum = Number(driver.id);
+        // Validação estrita de tipagem antes de enviar ao banco
+        if (isNaN(motoristaIdNum)) {
+            console.error('assignDriver: ID do motorista inválido', driver);
+            return;
+        }
         setDispatchLoading(true);
         try {
             try { audioRef.current.play().catch(() => { }); } catch (e) { }
@@ -528,9 +629,6 @@ export default function App() {
                 // fallback para algoritmo local em caso de erro com Google API
                 rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
             }
-            const motoristaIdNum = Number(driver.id);
-            // Validação estrita de tipagem antes de enviar ao banco
-            if (isNaN(Number(motoristaIdNum))) throw new Error('ID do motorista inválido');
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => Number(m.id) === motoristaIdNum) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdNum);
@@ -546,18 +644,27 @@ export default function App() {
             } else {
                 let updErr = null;
                 try {
-                    // Bulk update: set motorista_id and status for all selected pedidos
-                    const { data: updData, error } = await supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue }).in('id', assignedIds);
-                    updErr = error;
-                    if (updErr) {
-                        console.error('Erro bulk updating entregas:', updErr && updErr.message, updErr && updErr.hint, updErr && updErr.details, updErr && updErr.code);
+                    // Try bulk update; if .in is not available (mock), fallback to per-item updates
+                    let q = supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue });
+                    if (q && typeof q.in === 'function') {
+                        const { data: updData, error } = await q.in('id', assignedIds);
+                        updErr = error;
+                        if (!updErr) {
+                            setPedidosEmEspera(prev => prev.filter(p => !assignedIds.includes(Number(p.id))));
+                        }
                     } else {
-                        // Only remove the updated pedidos from local state if the DB update succeeded
-                        setPedidosEmEspera(prev => prev.filter(p => !assignedIds.includes(Number(p.id))));
+                        // Fallback: update one by one
+                        for (const id of assignedIds) {
+                            try {
+                                const { error } = await supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue }).eq('id', Number(id));
+                                if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
+                            } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
+                        }
+                        if (!updErr) setPedidosEmEspera(prev => prev.filter(p => !assignedIds.includes(Number(p.id))));
                     }
                 } catch (err) {
                     updErr = err;
-                    console.error('Erro na requisição bulk update:', err && err.message, err && err.hint);
+                    console.error('Erro ao tentar atualizar entregas (bulk ou individual):', err && err.message ? err.message : err);
                 }
 
                 // Update local rotaOtimizada objects with ordem for UI only
@@ -656,6 +763,7 @@ export default function App() {
             {/* 2. ÁREA DE CONTEÚDO */}
             <main style={{ maxWidth: '1200px', margin: '40px auto', padding: '0 20px' }}>
 
+
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
                     <CardKPI titulo="TOTAL DE ENTREGAS" valor={totalEntregas} cor={theme.accent} />
@@ -684,15 +792,12 @@ export default function App() {
                                             return (
                                                 <>
                                                     {/* Base / gestor (validação de coordenadas) */}
-                                                    {(() => {
-                                                        const lat = parseFloat(gestorPosicao[0]);
-                                                        const lng = parseFloat(gestorPosicao[1]);
-                                                        if (!isNaN(lat) && !isNaN(lng)) return <AdvancedMarker map={map} position={{ lat, lng }} iconUrl={numberedIconUrl('G')} />;
-                                                        return null;
-                                                    })()}
+                                                    {Array.isArray(gestorPosicao) && gestorPosicao.length >= 2 && !isNaN(parseFloat(gestorPosicao[0])) && (
+                                                        <AdvancedMarker map={map} position={{ lat: parseFloat(gestorPosicao[0]), lng: parseFloat(gestorPosicao[1]) }} iconUrl={numberedIconUrl('G')} />
+                                                    )}
 
                                                     {/* Entregas (rota) com validação de lat/lng e marcadores avançados */}
-                                                    {orderedRota.map((p, i) => {
+                                                    {orderedRota?.map((p, i) => {
                                                         const lat = parseFloat(p.lat);
                                                         const lng = parseFloat(p.lng);
                                                         if (isNaN(lat) || isNaN(lng)) return null;
@@ -702,14 +807,15 @@ export default function App() {
                                                     {/* Polylines removed — mapa exibe somente marcadores */}
 
                                                     {/* Motoristas (markers) - validação e AdvancedMarker */}
-                                                    {frota && frota.map(m => {
+                                                    {frota?.map(m => {
                                                         const lat = parseFloat(m.lat);
                                                         const lng = parseFloat(m.lng);
                                                         if (!m || isNaN(lat) || isNaN(lng)) return null;
-                                                        return <AdvancedMarker key={`m-${m.id}`} map={map} position={{ lat, lng }} iconUrl={motoristaIconUrlFor(m.heading || 0)} onClick={() => setSelectedMotorista(m)} />;
+                                                        const color = getDriverColor(m.id);
+                                                        return <AdvancedMarker key={`m-${m.id}`} map={map} position={{ lat, lng }} iconUrl={motoristaIconUrlFor(m.heading || 0, color)} onClick={() => setSelectedMotorista(m)} />;
                                                     })}
 
-                                                    {selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null && (
+                                                    {selectedMotorista?.lat != null && selectedMotorista?.lng != null && (
                                                         <InfoWindow position={{ lat: selectedMotorista.lat, lng: selectedMotorista.lng }} onCloseClick={() => setSelectedMotorista(null)}>
                                                             <div style={{ minWidth: '160px' }}>
                                                                 {selectedMotorista.avatar_path ? (
@@ -731,7 +837,7 @@ export default function App() {
                         </div>
 
                         {/* INFO LATERAL */}
-                        <div style={{ background: theme.card, borderRadius: '16px', padding: '25px', boxShadow: theme.shadow }}>
+                        <div style={{ background: theme.card, borderRadius: '16px', padding: '25px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column' }}>
                             <h3 style={{ marginTop: 0, color: theme.textMain }}>Status da Operação</h3>
                             {motoristaDaRota ? (
                                 <div>
@@ -741,27 +847,25 @@ export default function App() {
                                         {motoristaDaRota.lat && motoristaDaRota.lng && (<div><strong>📍</strong> {motoristaDaRota.lat.toFixed ? `${motoristaDaRota.lat.toFixed(4)}, ${motoristaDaRota.lng.toFixed(4)}` : `${motoristaDaRota.lat}, ${motoristaDaRota.lng}`}</div>)}
                                     </div>
                                     <h4 style={{ margin: '10px 0' }}>Próximas Entregas:</h4>
-                                    <ul style={{ paddingLeft: '20px', fontSize: '14px', color: theme.textMain }}>
-                                        {rotaAtiva.map((p, i) => <li key={p.id} style={{ marginBottom: '8px' }}><strong>{i + 1}.</strong> {p.cliente}</li>)}
-                                    </ul>
+                                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                                        <ul style={{ paddingLeft: '20px', fontSize: '14px', color: theme.textMain, margin: 0 }}>
+                                            {rotaAtiva?.map((p, i) => {
+                                                const tipo = String(p.tipo || '').trim().toLowerCase();
+                                                const color = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#60a5fa');
+                                                return (
+                                                    <li key={p.id} style={{ marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                                                        <strong style={{ marginRight: '6px', color: theme.textLight }}>{i + 1}.</strong>
+                                                        <span style={{ color, fontWeight: 600 }}>{p.cliente}</span>
+                                                    </li>
+                                                );
+                                            })}
+                                        </ul>
+                                    </div>
                                 </div>
                             ) : (
                                 <p style={{ color: theme.textLight }}>Nenhuma rota despachada no momento.</p>
                             )}
-                            {/* Avisos do gestor */}
-                            <div style={{ marginTop: '20px' }}>
-                                <h4 style={{ marginBottom: '8px' }}>Avisos</h4>
-                                {avisos.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum aviso.</div> : (
-                                    <ul style={{ paddingLeft: '18px', margin: 0 }}>
-                                        {avisos.map((a, i) => (
-                                            <li key={i} style={{ marginBottom: '10px', fontSize: '13px' }}>
-                                                <div style={{ fontWeight: '700' }}>{a.titulo}</div>
-                                                <div style={{ color: theme.textLight }}>{a.mensagem}</div>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
+                            {/* Avisos removidos da Visão Geral — comunicação centralizada em 'Equipe' */}
                         </div>
                     </div>
                 )}
@@ -793,10 +897,10 @@ export default function App() {
                             <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
                             <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
                             <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
-                                {recentList.length === 0 ? (
+                                {(!recentList || recentList.length === 0) ? (
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
-                                    recentList.map((it, idx) => (
+                                    recentList?.map((it, idx) => (
                                         <div key={idx} onClick={() => { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
                                             <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
                                             <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
@@ -815,9 +919,9 @@ export default function App() {
                             <h2>Fila de Preparação</h2>
                             <button onClick={dispararRota} style={{ ...btnStyle(theme.success), width: 'auto' }}>🚀 DISPARAR ROTA (WHATSAPP)</button>
                         </div>
-                        {pedidosEmEspera.length === 0 ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
+                        {(!pedidosEmEspera || pedidosEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-                                {pedidosEmEspera.map(p => (
+                                {pedidosEmEspera?.map(p => (
                                     <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
@@ -837,6 +941,56 @@ export default function App() {
                 {abaAtiva === 'Equipe' && (
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
                         <h2 style={{ marginTop: 0 }}>Motoristas Cadastrados</h2>
+
+                        {/* Central de Comunicados (seletivo) */}
+                        <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
+                                    <option value="all">📢 Enviar para Todos</option>
+                                    {frota && frota.map(m => (
+                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                    ))}
+                                </select>
+                                <div style={{ flex: 1 }}>
+                                    <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <button
+                                    onMouseDown={() => setBtnPressed(true)}
+                                    onMouseUp={() => setBtnPressed(false)}
+                                    onMouseLeave={() => setBtnPressed(false)}
+                                    onClick={async () => {
+                                        const texto = String(mensagemGeral || '').trim();
+                                        if (!texto) return alert('Digite a mensagem antes de enviar.');
+                                        if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível enviar.');
+                                        let motorista_id = null;
+                                        if (destinatario !== 'all') {
+                                            const mid = Number(destinatario);
+                                            if (!Number.isFinite(mid)) return alert('Seleção de motorista inválida.');
+                                            motorista_id = mid;
+                                        }
+                                        try {
+                                            setEnviandoGeral(true);
+                                            const payload = { titulo: 'Comunicado', mensagem: texto, lida: false, motorista_id };
+                                            const { data, error } = await supabase.from('avisos_gestor').insert([payload]);
+                                            if (error) throw error;
+                                            setMensagemGeral('');
+                                            setDestinatario('all');
+                                            try { alert('Mensagem enviada com sucesso.'); } catch (e) { }
+                                            try { carregarDados(); } catch (e) { }
+                                        } catch (e) {
+                                            console.error('Erro enviando comunicado:', e);
+                                            try { alert('Falha ao enviar mensagem: ' + (e && e.message ? e.message : String(e))); } catch (e2) { }
+                                        } finally { setEnviandoGeral(false); setBtnPressed(false); }
+                                    }}
+                                    style={{ padding: '10px 16px', background: '#0ea5e9', border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', opacity: btnPressed ? 0.7 : 1, transition: 'opacity 120ms ease-in-out', boxShadow: '0 6px 14px rgba(14,165,233,0.18)' }}
+                                >
+                                    {enviandoGeral ? 'ENVIANDO...' : 'ENVIAR MENSAGEM'}
+                                </button>
+                            </div>
+                        </div>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ textAlign: 'left', borderBottom: '2px solid #f1f5f9', color: theme.textLight }}>
@@ -844,17 +998,58 @@ export default function App() {
                                     <th>STATUS</th>
                                     <th>VEÍCULO</th>
                                     <th>PLACA</th>
+                                    <th>PROGRESSO</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {frota.map(m => (
-                                    <tr key={m.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                        <td style={{ padding: '15px 10px', fontWeight: 'bold' }}>{m.nome}</td>
-                                        <td><span style={{ padding: '5px 10px', borderRadius: '15px', background: m.status === 'Online' ? '#dcfce7' : '#fee2e2', color: m.status === 'Online' ? '#166534' : '#991b1b', fontSize: '12px', fontWeight: 'bold' }}>{m.status}</span></td>
-                                        <td>{m.veiculo}</td>
-                                        <td style={{ fontFamily: 'monospace' }}>{m.placa}</td>
-                                    </tr>
-                                ))}
+                                {frota.map(m => {
+                                    const isOnline = Boolean(m.esta_online);
+                                    const dotColor = isOnline ? '#10b981' : '#ef4444';
+                                    const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
+                                    const nameStyle = isOnline ? { color: '#10b981', fontWeight: 700, textShadow: '0 1px 6px rgba(16,185,129,0.25)' } : { color: '#9ca3af', fontWeight: 400, opacity: 0.9 };
+                                    const statusText = isOnline ? 'Disponível' : 'Offline';
+                                    const statusColor = isOnline ? '#10b981' : 'rgba(239,68,68,0.6)';
+
+                                    // Progresso de carga: contar entregas vinculadas ao motorista a partir de pedidosAtivos
+                                    const entregasMot = (pedidosAtivos || []).filter(e => Number(e.motorista_id) === Number(m.id));
+                                    const total = entregasMot.length;
+                                    const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
+                                    // Tipo principal (para rótulo dinâmico) — preferir o primeiro tipo conhecido
+                                    const tipoPrincipal = (entregasMot.find(e => e.tipo && String(e.tipo).trim().length > 0) || {}).tipo || null;
+                                    const tipoColor = tipoPrincipal ? getColorForType(tipoPrincipal) : null;
+                                    const verbByTipo = (t) => {
+                                        const tt = String(t || '').trim().toLowerCase();
+                                        if (tt === 'entrega') return 'Entregando';
+                                        if (tt === 'recolha') return 'Recolhendo';
+                                        if (tt === 'outros' || tt === 'outro') return 'Ativo';
+                                        return 'Em serviço';
+                                    };
+
+                                    return (
+                                        <tr key={m.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                            <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
+                                                <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
+                                            </td>
+                                            <td>
+                                                {/* Texto dinâmico: se tiver carga, mostrar verbo + contador; senão Disponível/Offline */}
+                                                <span style={{ padding: '6px 10px', borderRadius: '12px', background: 'transparent', color: (total > 0 ? (tipoColor || statusColor) : statusColor), fontSize: '12px', fontWeight: 700, textShadow: isOnline ? '0 1px 6px rgba(16,185,129,0.35)' : 'none', opacity: isOnline ? 1 : 0.6 }}>
+                                                    {total > 0 ? `${verbByTipo(tipoPrincipal)} ${feitas}/${total}` : statusText}
+                                                </span>
+                                            </td>
+                                            <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
+                                            <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
+                                            <td style={{ padding: '10px' }}>
+                                                {/* Mostrar contador sempre (0/0 quando vazio) */}
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0f172a', color: '#fff', padding: '6px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: 700 }}>
+                                                    <span style={{ color: '#10b981' }}>{feitas}</span>
+                                                    <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
+                                                    <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -914,7 +1109,7 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
             <div style={{ width: '480px', maxWidth: '94%', background: theme.card, color: theme.textMain, borderRadius: '10px', padding: '16px', boxShadow: theme.shadow }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <h3 style={{ margin: 0 }}>Escolha um motorista</h3>
-                    <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+                    <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#ffffff', opacity: 1 }}>✕</button>
                 </div>
                 <div style={{ maxHeight: '58vh', overflow: 'auto' }}>
                     {online.length === 0 ? (
@@ -924,7 +1119,7 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
                             <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 8px', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                                 <div style={{ flex: 1 }}>
                                     <button disabled={loading} onClick={() => handleSelect(m)} style={{ background: 'transparent', border: 'none', textAlign: 'left', cursor: loading ? 'wait' : 'pointer', padding: 0 }}>
-                                        <div style={{ fontWeight: 700 }}>{m.nome}</div>
+                                        <div style={{ fontWeight: 700, color: '#ffffff' }}>{m.nome}</div>
                                         <div style={{ fontSize: '12px', color: theme.textLight }}>{m.veiculo || ''}</div>
                                     </button>
                                 </div>

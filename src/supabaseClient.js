@@ -1,177 +1,58 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Detect env vars (safe for both browser Vite and Node)
+// Detect env vars (works in Vite browser and Node)
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : process.env;
-// Defaults (for local development) — sobrescreva com VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY em produção
-const SUPABASE_URL = env.VITE_SUPABASE_URL || env.SUPABASE_URL || 'https://uqxoadxqcwidxqsfayem.supabase.co';
-// Chave anônima fornecida pelo usuário (usada se nenhuma variável de ambiente estiver definida)
-const SUPABASE_KEY = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxeG9hZHhxY3dpZHhxc2ZheWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxODksImV4cCI6MjA4NDAyMTE4OX0.q9_RqSx4YfJxlblPS9fwrocx3HDH91ff1zJvPbVGI8w';
 
-let isMock = false;
-let supabase;
+// Primary sources for credentials
+let SUPABASE_URL = env.VITE_SUPABASE_URL || env.SUPABASE_URL || '';
+let SUPABASE_ANON_KEY = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || '';
 
-// --- Mock implementation (fallback) ---
-function storageKey(table) {
-    return `mock_${table}`;
-}
+// Optional hardcoded fallback for local development ONLY.
+// If you want to enable it, replace the empty strings below with your local dev Supabase values.
+// Leave blank in production/repos to avoid leaking keys.
+const DEV_FALLBACK_URL = '';
+const DEV_FALLBACK_ANON_KEY = '';
 
-function readTable(table) {
-    try {
-        const raw = localStorage.getItem(storageKey(table));
-        if (!raw) return [];
-        return JSON.parse(raw);
-    } catch (e) {
-        return [];
+// If running in development *and* env vars are missing, allow an explicit fallback.
+if ((!SUPABASE_URL || !SUPABASE_ANON_KEY) && (process.env.NODE_ENV === 'development' || env.NODE_ENV === 'development')) {
+    if (DEV_FALLBACK_URL && DEV_FALLBACK_ANON_KEY) {
+        SUPABASE_URL = SUPABASE_URL || DEV_FALLBACK_URL;
+        SUPABASE_ANON_KEY = SUPABASE_ANON_KEY || DEV_FALLBACK_ANON_KEY;
+        console.warn('Using DEV_FALLBACK Supabase credentials. Consider setting env vars instead.');
     }
 }
 
-function writeTable(table, data) {
-    localStorage.setItem(storageKey(table), JSON.stringify(data));
-}
+export const HAS_SUPABASE_CREDENTIALS = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
-function applyFilters(items, filters) {
-    if (!filters || filters.length === 0) return items;
-    return items.filter(item => {
-        return filters.every(([field, value]) => String(item[field]) === String(value));
-    });
-}
+let supabase = null;
 
-function createQuery(table) {
-    let op = null;
-    let updateObj = null;
-    const filters = [];
-
-    let selectCols = null;
-    return {
-        select(cols) {
-            selectCols = cols;
-            return this; // defer execution until awaited (then)
-        },
-        insert: async (rows) => {
-            const all = readTable(table);
-            const toInsert = rows.map(r => ({ id: Date.now() + Math.floor(Math.random() * 1000), ...r }));
-            const next = all.concat(toInsert);
-            writeTable(table, next);
-            return { data: toInsert, error: null };
-        },
-        delete() {
-            op = 'delete';
-            return this;
-        },
-        update(obj) {
-            op = 'update';
-            updateObj = obj;
-            return this;
-        },
-        eq(field, value) {
-            filters.push([field, value]);
-            return this;
-        },
-        async _exec() {
-            const all = readTable(table);
-            const matched = applyFilters(all, filters);
-            // If select was not called, default to returning all
-            const data = matched;
-            if (op === 'delete') {
-                const remaining = all.filter(i => !matched.includes(i));
-                writeTable(table, remaining);
-                return { data: matched, error: null };
-            }
-            if (op === 'update') {
-                const updated = all.map(i => matched.includes(i) ? { ...i, ...updateObj } : i);
-                writeTable(table, updated);
-                const returned = updated.filter(i => matched.some(m => m.id === i.id));
-                return { data: returned, error: null };
-            }
-            return { data, error: null };
-        },
-        then(resolve, reject) {
-            this._exec().then(resolve, reject);
-        }
-    };
-}
-
-// initialize sample data if missing — align mock with real table names used by the app
-if (!localStorage.getItem(storageKey('motoristas'))) {
-    writeTable('motoristas', [
-        { id: 1, nome: 'Leandro', esta_online: true, lat: -23.5505, lng: -46.6333 },
-        { id: 2, nome: 'Ana Souza', esta_online: false, lat: -23.558, lng: -46.640 }
-    ]);
-}
-
-if (!localStorage.getItem(storageKey('entregas'))) {
-    writeTable('entregas', []);
-}
-
-// If env vars are present, validate SUPABASE_URL and use the real Supabase client; otherwise fallback to mock
-function isValidUrl(u) {
+if (HAS_SUPABASE_CREDENTIALS) {
     try {
-        const parsed = new URL(u);
-        // Basic checks: protocol should be http or https, and hostname should contain 'supabase'
-        return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.hostname && parsed.hostname.includes('supabase');
+        supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { realtime: { params: { eventsPerSecond: 10 } } });
+        console.log('✅ CONEXÃO REAL ESTABELECIDA COM SUPABASE');
     } catch (e) {
-        return false;
-    }
-}
-
-if (SUPABASE_URL && SUPABASE_KEY && isValidUrl(SUPABASE_URL)) {
-    try {
-        supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    } catch (e) {
-        console.error('Failed to initialize Supabase client:', e, { SUPABASE_URL, SUPABASE_KEY: !!SUPABASE_KEY });
-        isMock = true;
-        supabase = {
-            from(table) {
-                return createQuery(table);
-            }
-        };
+        console.error('Falha ao inicializar Supabase client:', e);
+        supabase = null;
     }
 } else {
-    if (SUPABASE_URL || SUPABASE_KEY) {
-        console.warn('Supabase env vars present but invalid. Falling back to mock. Supabase URL:', SUPABASE_URL);
-    }
-    isMock = true;
-    supabase = {
-        from(table) {
-            return createQuery(table);
-        }
-    };
+    console.error('Supabase credentials missing. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your environment.');
 }
 
-// Helper: subscribe to a table's postgres_changes (works with real Supabase)
-// Returns an unsubscribe function. If mock, it falls back to a polling mechanism.
-export function subscribeToTable(table, handler, opts = { event: '*', schema: 'public', pollMs: 2000 }) {
-    if (isMock) {
-        // Simple polling for mock: call handler with latest data periodically
-        let stopped = false;
-        const poll = async () => {
-            if (stopped) return;
-            try {
-                const { data } = await supabase.from(table).select('*');
-                handler({ type: 'poll', table, data });
-            } catch (e) { /* ignore */ }
-            setTimeout(poll, opts.pollMs || 2000);
-        };
-        poll();
-        return () => { stopped = true; };
+// Helper: subscribe to realtime changes for a table — returns an unsubscribe function.
+// If Supabase is not available, returns a noop unsub and logs an error.
+export function subscribeToTable(table, handler, opts = { event: '*', schema: 'public' }) {
+    if (!supabase || !supabase.channel) {
+        console.error('subscribeToTable: Supabase client not initialized. Cannot subscribe to realtime.');
+        return () => { /* noop */ };
     }
-
     const channel = supabase
         .channel(`public:${table}`)
-        .on('postgres_changes', { event: opts.event, schema: opts.schema, table }, (payload) => {
-            handler(payload);
-        })
+        .on('postgres_changes', { event: opts.event, schema: opts.schema, table }, (payload) => handler(payload))
         .subscribe();
 
     return () => {
-        try {
-            supabase.removeChannel(channel);
-        } catch (e) {
-            // fallback
-            channel.unsubscribe && channel.unsubscribe();
-        }
+        try { supabase.removeChannel(channel); } catch (e) { channel.unsubscribe && channel.unsubscribe(); }
     };
 }
 
-export { isMock };
 export default supabase;
