@@ -179,6 +179,9 @@ export default function App() {
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
+    const [nomeCliente, setNomeCliente] = useState('');
+    const [enderecoEntrega, setEnderecoEntrega] = useState('');
+    const [recentList, setRecentList] = useState([]);
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
 
     const mapRef = useRef(null);
@@ -253,6 +256,23 @@ export default function App() {
             const { data: cfg } = await supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone').limit(1);
             if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor);
         } catch (e) { /* ignore */ }
+
+        // Histórico recente (clientes únicos) para preencher atalho na Nova Carga
+        try {
+            const { data: recent } = await supabase.from('entregas').select('cliente,endereco,created_at').order('id', { ascending: false }).limit(200);
+            if (recent) {
+                const seen = new Set();
+                const unique = [];
+                for (const r of recent) {
+                    const key = (r.cliente || '').trim().toLowerCase();
+                    if (!key) continue;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    unique.push({ cliente: r.cliente, endereco: r.endereco });
+                }
+                setRecentList(unique);
+            }
+        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); }
     }
 
     // Realtime: escuta alterações em 'entregas', 'motoristas' e 'avisos_gestor'
@@ -364,15 +384,23 @@ export default function App() {
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        const fd = new FormData(e.target);
         const lat = gestorPosicao[0] + (Math.random() - 0.5) * 0.04;
         const lng = gestorPosicao[1] + (Math.random() - 0.5) * 0.04;
         // Preparar observações: enviar null quando vazio para evitar erros de coluna/valores
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : null;
+        const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
+        const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
+        if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
         const { error } = await supabase.from('entregas').insert([{
-            cliente: fd.get('cliente'), endereco: fd.get('endereco'), tipo: fd.get('tipo') || 'Entrega', lat: lat, lng: lng, status: 'pendente', observacoes: obsValue
+            cliente: clienteVal,
+            endereco: enderecoVal,
+            tipo: 'Entrega',
+            lat: lat,
+            lng: lng,
+            status: 'pendente',
+            observacoes: obsValue
         }]);
-        if (!error) { alert("✅ Salvo com sucesso!"); e.target.reset(); setObservacoesGestor(''); carregarDados(); }
+        if (!error) { alert("✅ Salvo com sucesso!"); setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); carregarDados(); }
     };
 
     const excluirPedido = async (id) => {
@@ -396,7 +424,7 @@ export default function App() {
         if (!driver || !driver.id) return;
         setDispatchLoading(true);
         try {
-            try { audioRef.current.play().catch(() => {}); } catch (e) {}
+            try { audioRef.current.play().catch(() => { }); } catch (e) { }
             let rotaOtimizada = [];
             try {
                 rotaOtimizada = await otimizarRotaComGoogle(gestorPosicao, pedidosEmEspera);
@@ -636,22 +664,42 @@ export default function App() {
 
                 {/* NOVA CARGA */}
                 {abaAtiva === 'Nova Carga' && (
-                    <div style={{ maxWidth: '600px', margin: '0 auto', background: theme.card, padding: '40px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                        <h2 style={{ textAlign: 'center', color: theme.primary, marginTop: 0 }}>Registrar Encomenda</h2>
-                        <form onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                                <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
-                                <select name="tipo" defaultValue="Entrega" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                                    <option>Entrega</option>
-                                    <option>Recolha</option>
-                                </select>
-                            </label>
-                            <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required />
-                            <input name="endereco" placeholder="Endereço de Entrega" style={inputStyle} required />
-                            {/* Observações do Gestor: campo de UI (não enviado ao DB para evitar coluna inexistente) */}
-                            <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
-                            <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
-                        </form>
+                    <div style={{ display: 'flex', gap: '24px', background: 'transparent' }}>
+                        {/* Coluna Esquerda: Formulário */}
+                        <div style={{ flex: '0 0 48%', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow }}>
+                            <h2 style={{ marginTop: 0, color: theme.primary }}>Registrar Encomenda</h2>
+                            <form onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
+                                    <select name="tipo" defaultValue="Entrega" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                                        <option>Entrega</option>
+                                        <option>Recolha</option>
+                                    </select>
+                                </label>
+                                <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
+                                <input name="endereco" placeholder="Endereço de Entrega" style={inputStyle} required value={enderecoEntrega} onChange={(e) => setEnderecoEntrega(e.target.value)} />
+                                <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
+                                <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
+                            </form>
+                        </div>
+
+                        {/* Coluna Direita: Histórico (scroll) */}
+                        <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
+                            <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
+                            <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
+                            <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
+                                {recentList.length === 0 ? (
+                                    <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
+                                ) : (
+                                    recentList.map((it, idx) => (
+                                        <div key={idx} onClick={() => { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
+                                            <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
+                                            <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
                     </div>
                 )}
 
