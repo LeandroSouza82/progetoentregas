@@ -177,6 +177,7 @@ export default function App() {
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
+    const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
 
@@ -366,11 +367,12 @@ export default function App() {
         const fd = new FormData(e.target);
         const lat = gestorPosicao[0] + (Math.random() - 0.5) * 0.04;
         const lng = gestorPosicao[1] + (Math.random() - 0.5) * 0.04;
-        // Não inserir campo 'msg' — coluna não existe no schema real
+        // Preparar observações: enviar null quando vazio para evitar erros de coluna/valores
+        const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : null;
         const { error } = await supabase.from('entregas').insert([{
-            cliente: fd.get('cliente'), endereco: fd.get('endereco'), tipo: fd.get('tipo') || 'Entrega', lat: lat, lng: lng, status: 'pendente'
+            cliente: fd.get('cliente'), endereco: fd.get('endereco'), tipo: fd.get('tipo') || 'Entrega', lat: lat, lng: lng, status: 'pendente', observacoes: obsValue
         }]);
-        if (!error) { alert("✅ Salvo com sucesso!"); e.target.reset(); carregarDados(); }
+        if (!error) { alert("✅ Salvo com sucesso!"); e.target.reset(); setObservacoesGestor(''); carregarDados(); }
     };
 
     const excluirPedido = async (id) => {
@@ -646,7 +648,8 @@ export default function App() {
                             </label>
                             <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required />
                             <input name="endereco" placeholder="Endereço de Entrega" style={inputStyle} required />
-                            {/* Observações removidas: campo 'msg' não existe no schema real */}
+                            {/* Observações do Gestor: campo de UI (não enviado ao DB para evitar coluna inexistente) */}
+                            <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                             <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                         </form>
                     </div>
