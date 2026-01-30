@@ -86,6 +86,7 @@ const darkTheme = {
 };
 
 // theme state will be set inside the App component
+const NEW_LOAD_STATUS = 'Aguardando';
 
 // --- LÓGICA (NÃO MEXEMOS EM NADA AQUI) ---
 
@@ -231,13 +232,13 @@ export default function App() {
             if (motoristas) setFrota(motoristas);
         } catch (e) { console.warn('Erro carregando motoristas:', e); }
 
-        // entregas: pendentes
+        // entregas: novas cargas — filtro rigoroso pela string exata definida em NEW_LOAD_STATUS
         try {
-            const { data: entregasPend, error: entregasErr } = await supabase.from('entregas').select('*').eq('status', 'pendente');
+            const { data: entregasPend, error: entregasErr } = await supabase.from('entregas').select('*').eq('status', NEW_LOAD_STATUS);
             if (entregasErr) {
-                console.warn('carregarDados: erro ao buscar entregas pendentes', entregasErr);
+                console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
             } else if (entregasPend) setPedidosEmEspera(entregasPend);
-        } catch (e) { console.warn('Erro carregando entregas pendentes:', e); }
+        } catch (e) { console.warn('Erro carregando entregas (filtro de status):', e); }
 
         // total de entregas
         try {
@@ -315,8 +316,8 @@ export default function App() {
                         setPedidosEmEspera(prev => {
                             try {
                                 if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
-                                // If the record is in 'pendente' include/update it, otherwise remove
-                                if (rec.status === 'pendente') {
+                                // If the record matches our NEW_LOAD_STATUS include/update it, otherwise remove
+                                if (rec.status === NEW_LOAD_STATUS) {
                                     const exists = prev.find(p => p.id === id);
                                     if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
                                     return [...prev, rec];
@@ -397,7 +398,7 @@ export default function App() {
             tipo: 'Entrega',
             lat: lat,
             lng: lng,
-            status: 'pendente',
+            status: NEW_LOAD_STATUS,
             observacoes: obsValue
         }]);
         if (!error) { alert("✅ Salvo com sucesso!"); setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); carregarDados(); }
@@ -437,7 +438,7 @@ export default function App() {
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => Number(m.id) === motoristaIdNum) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdNum);
-            const statusValue = String('pendente').trim().toLowerCase();
+            const statusValue = 'em_rota';
 
             // Determine pedidos to dispatch and ensure IDs are numbers
             const pedidosParaDespachar = rotaOtimizada; // use rota otimizada as the set to dispatch
@@ -446,15 +447,19 @@ export default function App() {
             if (assignedIds.length === 0) {
                 console.warn('assignDriver: nenhum pedido válido para atualizar');
             } else {
+                let updErr = null;
                 try {
                     // Bulk update: set motorista_id and status for all selected pedidos
-                    const { data: updData, error: updErr } = await supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue }).in('id', assignedIds);
+                    const { data: updData, error } = await supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue }).in('id', assignedIds);
+                    updErr = error;
                     if (updErr) {
-                        // log detailed error info for diagnosis (message, hint, details, code)
                         console.error('Erro bulk updating entregas:', updErr && updErr.message, updErr && updErr.hint, updErr && updErr.details, updErr && updErr.code);
+                    } else {
+                        // Only remove the updated pedidos from local state if the DB update succeeded
+                        setPedidosEmEspera(prev => prev.filter(p => !assignedIds.includes(Number(p.id))));
                     }
                 } catch (err) {
-                    // capture promise/network exceptions
+                    updErr = err;
                     console.error('Erro na requisição bulk update:', err && err.message, err && err.hint);
                 }
 
@@ -465,10 +470,11 @@ export default function App() {
                     rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_entrega: i + 1, motorista_id: Number(driver.id), id: pid };
                 }
 
-                // Clean up local state immediately after await to avoid UI residues
-                setPedidosEmEspera([]);
-                setShowDriverSelect(false);
-                setSelectedMotorista(null);
+                // Only close modal and clear selection if update succeeded
+                if (!updErr) {
+                    setShowDriverSelect(false);
+                    setSelectedMotorista(null);
+                }
             }
             // Persist ordem_entrega per entrega (cada pedido precisa da sua ordem específica)
             try {
