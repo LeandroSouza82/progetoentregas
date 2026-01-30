@@ -1,26 +1,83 @@
 import React, { useState, useEffect } from 'react';
-import io from 'socket.io-client';
-
-const socket = io('http://192.168.2.127:3000');
+import supabase from './supabaseClient';
 
 export default function AppMotorista() {
   const [entregas, setEntregas] = useState([]);
-  const [status, setStatus] = useState("Localizando...");
+  const [status, setStatus] = useState('Conectando...');
+
+  // Determine motorista id: prefer localStorage, fallback to 1
+  const motoristaId = parseInt((typeof window !== 'undefined' && window.localStorage && localStorage.getItem('motorista_id')) || '1', 10);
 
   useEffect(() => {
-    socket.on('NOVA_ROTA', (d) => { setEntregas(d.entregas); alert("🔔 Nova rota recebida!"); });
-    socket.on('ENTREGA_CONCLUIDA', (d) => setEntregas(p => p.filter(e => e.id !== d.id)));
-    
-    navigator.geolocation.watchPosition(
-      (p) => {
-        socket.emit('posicao_motorista', { lat: p.coords.latitude, lng: p.coords.longitude });
-        setStatus("GPS Ativo ✅");
-      },
-      () => setStatus("Erro no GPS ❌"),
-      { enableHighAccuracy: true }
-    );
-    return () => socket.off();
-  }, []);
+    let channel = null;
+    let isMounted = true;
+
+    async function marcarOnline() {
+      try {
+        await supabase.from('motoristas').update({ esta_online: true }).eq('id', motoristaId);
+        if (isMounted) setStatus('Online');
+      } catch (e) {
+        console.warn('Erro marcando motorista online:', e);
+      }
+    }
+
+    async function carregarEntregas() {
+      try {
+        const { data, error } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).eq('status', 'em_rota');
+        if (!error && isMounted) setEntregas(data || []);
+      } catch (e) { console.warn('Erro carregando entregas:', e); }
+    }
+
+    marcarOnline();
+    carregarEntregas();
+
+    if (supabase && supabase.channel) {
+      try {
+        channel = supabase.channel(`motorista-${motoristaId}-entregas`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas', filter: `motorista_id=eq.${motoristaId}` }, (payload) => {
+            try {
+              const rec = payload.record;
+              if (!rec) return;
+              if (payload.event === 'DELETE') {
+                setEntregas(prev => prev.filter(e => e.id !== rec.id));
+                return;
+              }
+              // Only keep deliveries with status 'em_rota'
+              if (rec.status === 'em_rota') {
+                setEntregas(prev => {
+                  const exists = prev.find(p => p.id === rec.id);
+                  if (exists) return prev.map(p => p.id === rec.id ? { ...p, ...rec } : p);
+                  return [...prev, rec];
+                });
+              } else {
+                setEntregas(prev => prev.filter(e => e.id !== rec.id));
+              }
+            } catch (e) { console.warn('Erro no handler realtime:', e); }
+          })
+          .subscribe();
+      } catch (e) {
+        console.warn('Erro criando canal Supabase:', e);
+      }
+    }
+
+    return () => {
+      isMounted = false;
+      try { if (channel) supabase.removeChannel(channel); } catch (e) { /* ignore */ }
+      // marcar offline (best-effort)
+      (async () => {
+        try { await supabase.from('motoristas').update({ esta_online: false }).eq('id', motoristaId); } catch (e) { }
+      })();
+    };
+  }, [motoristaId]);
+
+  const concluirEntrega = async (id) => {
+    try {
+      const parsed = typeof id === 'string' ? parseInt(id, 10) : id;
+      if (!parsed || isNaN(parsed)) return;
+      const { error } = await supabase.from('entregas').update({ status: 'concluido' }).eq('id', parsed);
+      if (!error) setEntregas(prev => prev.filter(e => e.id !== parsed));
+    } catch (e) { console.warn('Erro concluindo entrega:', e); }
+  };
 
   return (
     <div style={{ padding: '20px', background: '#121212', color: '#fff', minHeight: '100vh', fontFamily: 'sans-serif' }}>
@@ -37,10 +94,10 @@ export default function AppMotorista() {
       ) : (
         entregas.map((e, i) => (
           <div key={e.id} style={mCard}>
-            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {i+1}</div>
+            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {i + 1}</div>
             <div style={{ fontSize: '20px', margin: '5px 0' }}>{e.cliente}</div>
             <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>📍 {e.endereco}</div>
-            <button onClick={() => { socket.emit('entrega_feita', e.id); setEntregas(p => p.filter(x => x.id !== e.id)); }} style={mBtn}>
+            <button onClick={() => { concluirEntrega(e.id); }} style={mBtn}>
               CONCLUIR ENTREGA
             </button>
           </div>

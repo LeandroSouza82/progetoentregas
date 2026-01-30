@@ -1,9 +1,15 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import DriverApp from './DriverApp';
-import { supabase } from './supabaseClient'; // Certifique-se que o arquivo existe
-import 'leaflet/dist/leaflet.css';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
-import L from 'leaflet';
+import supabase from './supabaseClient'; // Certifique-se que o arquivo existe
+import { GoogleMap, LoadScript } from '@react-google-maps/api';
+
+const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
+
+function numberedIconUrl(number) {
+    const n = number || '';
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='30' height='30'><circle cx='15' cy='15' r='15' fill='%232563eb' stroke='%23fff' stroke-width='2'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='12' fill='%23fff' font-family='Arial' font-weight='700'>${n}</text></svg>`;
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
 
 // --- ESTILOS MOBILE (CSS-in-JS) ---
 const themes = {
@@ -29,15 +35,7 @@ const themes = {
     }
 };
 
-// Cria DivIcon numerado para o motorista (badge pequena)
-function numberedIcon(number) {
-    const n = number || '';
-    const html = `
-        <div style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#2563eb;color:#fff;font-weight:700;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.2);font-size:14px;">
-            ${n}
-        </div>`;
-    return L.divIcon({ html, className: '', iconSize: [30, 30], iconAnchor: [15, 30], popupAnchor: [0, -30] });
-}
+// numberedIcon replaced by numberedIconUrl (SVG data URL) for Google Maps
 
 function InternalMobileApp() {
     // Estado da bateria (simulado)
@@ -97,8 +95,9 @@ function InternalMobileApp() {
     // Marca o motorista como Online no backend (mock ou real)
     async function markOnline() {
         try {
-            const { error } = await supabase.from('frota').update({ status: 'Online' }).eq('id', motorista.id);
-            if (error) console.error('[motorista] markOnline: erro ao atualizar frota', error);
+            // mark driver as online using `motoristas.esta_online`
+            const { error } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motorista.id);
+            if (error) console.error('[motorista] markOnline: erro ao atualizar motoristas', error);
             else console.log('[motorista] markOnline: motorista marcado como Online');
         } catch (err) {
             console.error('[motorista] markOnline: exceção', err);
@@ -112,7 +111,7 @@ function InternalMobileApp() {
             // Pega apenas pedidos com status 'Em Rota'
             // Na vida real, filtraria pelo ID do motorista também
             const res = await supabase
-                .from('pedidos')
+                .from('entregas')
                 .select('*')
                 .eq('status', 'Em Rota')
                 .order('ordem', { ascending: true }); // Ordena pela sequência definida pelo dispatcher (ordem TSP)
@@ -162,7 +161,7 @@ function InternalMobileApp() {
 
         // Atualiza no banco
         const { error } = await supabase
-            .from('pedidos')
+            .from('entregas')
             .update({ status: 'Entregue' })
             .eq('id', id);
 
@@ -175,11 +174,11 @@ function InternalMobileApp() {
             // Se não houver mais entregas em rota, marca o motorista como disponível
             if (remaining.length === 0) {
                 try {
-                    const { error: e2 } = await supabase.from('frota').update({ status: 'Online' }).eq('id', motorista.id);
-                    if (e2) console.error('[motorista] finalizarEntrega: falha ao atualizar frota', e2);
+                    const { error: e2 } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motorista.id);
+                    if (e2) console.error('[motorista] finalizarEntrega: falha ao atualizar motoristas', e2);
                     else console.log('[motorista] finalizarEntrega: motorista marcado como Online');
                 } catch (err) {
-                    console.error('[motorista] finalizarEntrega: exceção atualizando frota', err);
+                    console.error('[motorista] finalizarEntrega: exceção atualizando motoristas', err);
                 }
             }
         }
@@ -198,7 +197,7 @@ function InternalMobileApp() {
                 lat: -23.55052,
                 lng: -46.633308,
                 status: 'Em Rota',
-                msg: 'Entrega de teste (seed)'
+                // campo 'msg' removido — não faz parte do schema real
             };
             arr.push(novo);
             localStorage.setItem(key, JSON.stringify(arr));
@@ -239,6 +238,33 @@ function InternalMobileApp() {
 
     // Ordena entregas pela propriedade 'ordem' se presente, senão por id
     const orderedRota = entregas && entregas.slice ? entregas.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
+    const mapRefMobile = useRef(null);
+    // SmartLoadScript para evitar múltiplos carregamentos do mesmo script Google Maps
+    function SmartLoadScript({ apiKey, children }) {
+        if (typeof window !== 'undefined' && window.google && window.google.maps) return <>{children}</>;
+        return <LoadScript googleMapsApiKey={apiKey}>{children}</LoadScript>;
+    }
+
+    // AdvancedMarker helper (mobile): cria AdvancedMarkerElement com validação de coordenadas
+    function AdvancedMarkerMobile({ map, position, iconUrl, onClick }) {
+        const ref = useRef(null);
+        useEffect(() => {
+            if (!map || !window.google || !window.google.maps || !window.google.maps.marker) return;
+            const el = document.createElement('div');
+            el.style.transform = 'translate(-50%, -50%)';
+            const img = document.createElement('img');
+            img.src = iconUrl;
+            img.style.width = '30px';
+            img.style.height = '30px';
+            img.draggable = false;
+            el.appendChild(img);
+            const adv = new window.google.maps.marker.AdvancedMarkerElement({ map, position, element: el });
+            if (onClick) adv.addListener('click', onClick);
+            ref.current = adv;
+            return () => { try { if (ref.current) { ref.current.map = null; ref.current.element && ref.current.element.remove(); } } catch (e) { } };
+        }, [map, position && position.lat, position && position.lng, iconUrl]);
+        return null;
+    }
 
     return (
         <div style={{
@@ -391,12 +417,7 @@ function InternalMobileApp() {
                                 <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 {tarefaAtual.endereco}</p>
                             </div>
 
-                            {/* Recado/Obs */}
-                            {tarefaAtual.msg && (
-                                <div style={{ background: '#fffbeb', padding: '15px', borderRadius: '12px', borderLeft: '4px solid #f59e0b', color: '#92400e', fontSize: '14px' }}>
-                                    ⚠️ <strong>Obs:</strong> {tarefaAtual.msg}
-                                </div>
-                            )}
+                            {/* Recado/Obs removido (campo 'msg' não existe) */}
 
                             {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
@@ -445,18 +466,17 @@ function InternalMobileApp() {
                     <div style={{ background: '#fff', borderRadius: '12px', padding: '10px', boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
                         <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
                         <div style={{ height: '220px', borderRadius: '8px', overflow: 'hidden' }}>
-                            <MapContainer center={[orderedRota[0].lat, orderedRota[0].lng]} zoom={13} style={{ width: '100%', height: '100%' }}>
-                                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                                {orderedRota.map((p, i) => (
-                                    <Marker key={p.id} position={[p.lat, p.lng]} icon={numberedIcon(p.ordem || (i + 1))}>
-                                        <Popup>
-                                            <div style={{ fontWeight: 'bold' }}>{p.ordem || (i + 1)}: {p.cliente}</div>
-                                            <div>{p.endereco}</div>
-                                        </Popup>
-                                    </Marker>
-                                ))}
-                                {orderedRota.length > 0 && <Polyline positions={orderedRota.map(p => [p.lat, p.lng])} color={theme.primary} weight={4} />}
-                            </MapContainer>
+                            <SmartLoadScript apiKey={GOOGLE_MAPS_API_KEY}>
+                                <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={{ lat: parseFloat(orderedRota[0].lat), lng: parseFloat(orderedRota[0].lng) }} zoom={13} onLoad={m => { if (!mapRefMobile.current) mapRefMobile.current = m; }}>
+                                    {orderedRota.map((p, i) => {
+                                        if (!mapRefMobile.current || !window.google || !window.google.maps) return null;
+                                        const lat = parseFloat(p.lat);
+                                        const lng = parseFloat(p.lng);
+                                        if (isNaN(lat) || isNaN(lng)) return null;
+                                        return <AdvancedMarkerMobile key={p.id} map={mapRefMobile.current} position={{ lat, lng }} iconUrl={numberedIconUrl(p.ordem || (i + 1))} />;
+                                    })}
+                                </GoogleMap>
+                            </SmartLoadScript>
                             <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
                         </div>
                     </div>

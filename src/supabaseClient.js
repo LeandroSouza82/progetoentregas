@@ -2,8 +2,10 @@ import { createClient } from '@supabase/supabase-js';
 
 // Detect env vars (safe for both browser Vite and Node)
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : process.env;
-const SUPABASE_URL = env.VITE_SUPABASE_URL || env.SUPABASE_URL;
-const SUPABASE_KEY = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY;
+// Defaults (for local development) — sobrescreva com VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY em produção
+const SUPABASE_URL = env.VITE_SUPABASE_URL || env.SUPABASE_URL || 'https://uqxoadxqcwidxqsfayem.supabase.co';
+// Chave anônima fornecida pelo usuário (usada se nenhuma variável de ambiente estiver definida)
+const SUPABASE_KEY = env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxeG9hZHhxY3dpZHhxc2ZheWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxODksImV4cCI6MjA4NDAyMTE4OX0.q9_RqSx4YfJxlblPS9fwrocx3HDH91ff1zJvPbVGI8w';
 
 let isMock = false;
 let supabase;
@@ -89,16 +91,16 @@ function createQuery(table) {
     };
 }
 
-// initialize sample data if missing
-if (!localStorage.getItem(storageKey('frota'))) {
-    writeTable('frota', [
-        { id: 1, nome: 'Carlos Oliveira', status: 'Online', veiculo: 'Fiorino', placa: 'ABC-1234', fone: '5511999990000' },
-        { id: 2, nome: 'Ana Souza', status: 'Ocupado', veiculo: 'Van', placa: 'XYZ-9876', fone: '5511988887777' }
+// initialize sample data if missing — align mock with real table names used by the app
+if (!localStorage.getItem(storageKey('motoristas'))) {
+    writeTable('motoristas', [
+        { id: 1, nome: 'Leandro', esta_online: true, lat: -23.5505, lng: -46.6333 },
+        { id: 2, nome: 'Ana Souza', esta_online: false, lat: -23.558, lng: -46.640 }
     ]);
 }
 
-if (!localStorage.getItem(storageKey('pedidos'))) {
-    writeTable('pedidos', []);
+if (!localStorage.getItem(storageKey('entregas'))) {
+    writeTable('entregas', []);
 }
 
 // If env vars are present, validate SUPABASE_URL and use the real Supabase client; otherwise fallback to mock

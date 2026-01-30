@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from './supabaseClient';
+import supabase from './supabaseClient';
 
 export default function AppMotorista() {
     // Sessão do motorista (persistida)
@@ -37,26 +37,23 @@ export default function AppMotorista() {
         setLoginLoading(true);
         try {
             // procura por placa primeiro
+            // Try to find existing motorista by name
             let existing = null;
-            if (formPlaca.trim()) {
-                const res = await supabase.from('frota').select('*').eq('placa', formPlaca.trim());
+            try {
+                const res = await supabase.from('motoristas').select('*').eq('nome', formNome.trim()).limit(1);
                 existing = res && res.data ? res.data[0] : null;
-            }
-            if (!existing) {
-                const res2 = await supabase.from('frota').select('*').eq('nome', formNome.trim());
-                existing = res2 && res2.data ? res2.data[0] : null;
-            }
+            } catch (err) { existing = null; }
 
             let driver = null;
             if (existing && existing.id) {
-                const upd = await supabase.from('frota').update({ nome: formNome.trim(), veiculo: formPlaca.trim(), foto: formFoto, status: 'Online' }).eq('id', existing.id);
+                const upd = await supabase.from('motoristas').update({ nome: formNome.trim(), avatar_path: formFoto, esta_online: true }).eq('id', existing.id);
                 driver = Array.isArray(upd.data) ? upd.data[0] : upd.data;
             } else {
-                const ins = await supabase.from('frota').insert([{ nome: formNome.trim(), veiculo: formPlaca.trim(), foto: formFoto, status: 'Online' }]);
+                const ins = await supabase.from('motoristas').insert([{ nome: formNome.trim(), avatar_path: formFoto, esta_online: true }]);
                 driver = Array.isArray(ins.data) ? ins.data[0] : ins.data;
             }
 
-            const sess = { id: driver.id, nome: driver.nome, veiculo: driver.veiculo, foto: driver.foto };
+            const sess = { id: driver.id, nome: driver.nome, avatar_path: driver.avatar_path };
             localStorage.setItem('motorista', JSON.stringify(sess));
             setLoggedIn(sess);
             setLoginVisible(false);
@@ -79,8 +76,8 @@ export default function AppMotorista() {
     // Função para buscar os dados (usa mock supabase local)
     const carregarRota = async () => {
         try {
-            console.log("[motorista] carregarRota: iniciando fetch de pedidos (mock supabase)");
-            const res = await supabase.from('pedidos').select('*').eq('status', 'Em Rota').order('ordem', { ascending: true });
+            console.log("[motorista] carregarRota: iniciando fetch de entregas (mock supabase)");
+            const res = await supabase.from('entregas').select('*').eq('status', 'Em Rota').order('ordem', { ascending: true });
             const data = res && res.data ? res.data : [];
             setEntregas(Array.isArray(data) ? data : []);
             console.log("[motorista] carregarRota: resultado", { preview: data.slice ? data.slice(0, 5) : data });
@@ -100,18 +97,10 @@ export default function AppMotorista() {
             Notification.requestPermission().catch(() => { });
         }
 
-        // GPS - Funciona direto no navegador (Vercel)
-        const watchId = navigator.geolocation.watchPosition(
-            (p) => {
-                setStatus("GPS Online 📍");
-                // Em produção você poderia enviar a posição com referência ao motorista
-                console.log("Posição do motorista:", p.coords);
-            },
-            () => setStatus("Erro no GPS ❌"),
-            { enableHighAccuracy: true }
-        );
-
-        return () => navigator.geolocation.clearWatch(watchId);
+        // GPS removido por causar timeouts em alguns navegadores.
+        // Mantemos o app funcional sem captura automática de posição.
+        setStatus('GPS desativado');
+        return () => { /* limpeza não necessária sem watchPosition */ };
     }, [loggedIn]);
 
     return (
