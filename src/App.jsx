@@ -114,6 +114,53 @@ const otimizarRota = (pontoPartida, listaPedidos) => {
     return rotaOrdenada;
 };
 
+// Otimiza rota usando Google Directions API com optimizeWaypoints
+// Retorna a lista de pedidos reordenada conforme waypoint_order
+async function otimizarRotaComGoogle(pontoPartida, listaPedidos) {
+    if (!listaPedidos || listaPedidos.length === 0) return [];
+    if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) {
+        throw new Error('Google Maps API não disponível');
+    }
+    return new Promise((resolve, reject) => {
+        try {
+            const directionsService = new window.google.maps.DirectionsService();
+            const origin = { lat: Number(pontoPartida[0]), lng: Number(pontoPartida[1]) };
+            const waypoints = listaPedidos.map(p => ({ location: { lat: Number(p.lat), lng: Number(p.lng) }, stopover: true }));
+            const request = {
+                origin,
+                destination: origin,
+                travelMode: window.google.maps.TravelMode.DRIVING,
+                waypoints,
+                optimizeWaypoints: true
+            };
+            directionsService.route(request, (result, status) => {
+                try {
+                    if (status === 'OK' && result && result.routes && result.routes[0]) {
+                        const wpOrder = result.routes[0].waypoint_order;
+                        if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) {
+                            const ordered = wpOrder.map(i => listaPedidos[i]);
+                            resolve(ordered);
+                            return;
+                        }
+                        resolve(listaPedidos);
+                        return;
+                    }
+                    if (status === 'ZERO_RESULTS') {
+                        // Sem rota possível, retorna lista original
+                        resolve(listaPedidos);
+                        return;
+                    }
+                    // Outros status: fallback conservador
+                    console.warn('DirectionsService retornou status:', status);
+                    resolve(listaPedidos);
+                } catch (e) { resolve(listaPedidos); }
+            });
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
 export default function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
@@ -348,7 +395,14 @@ export default function App() {
         setDispatchLoading(true);
         try {
             try { audioRef.current.play().catch(() => {}); } catch (e) {}
-            const rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
+            let rotaOtimizada = [];
+            try {
+                rotaOtimizada = await otimizarRotaComGoogle(gestorPosicao, pedidosEmEspera);
+                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
+            } catch (e) {
+                // fallback para algoritmo local em caso de erro com Google API
+                rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
+            }
             const motoristaIdNum = Number(driver.id);
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => Number(m.id) === motoristaIdNum) : null;
@@ -378,7 +432,7 @@ export default function App() {
                 for (let i = 0; i < rotaOtimizada.length; i++) {
                     const pedido = rotaOtimizada[i];
                     const pid = typeof pedido.id === 'string' ? parseInt(pedido.id, 10) : pedido.id;
-                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, motorista_id: Number(driver.id), id: pid };
+                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_entrega: i + 1, motorista_id: Number(driver.id), id: pid };
                 }
 
                 // Clean up local state immediately after await to avoid UI residues
@@ -386,6 +440,19 @@ export default function App() {
                 setShowDriverSelect(false);
                 setSelectedMotorista(null);
             }
+            // Persist ordem_entrega per entrega (cada pedido precisa da sua ordem específica)
+            try {
+                for (let i = 0; i < rotaOtimizada.length; i++) {
+                    const pid = typeof rotaOtimizada[i].id === 'string' ? parseInt(rotaOtimizada[i].id, 10) : rotaOtimizada[i].id;
+                    if (!pid || isNaN(pid)) continue;
+                    try {
+                        const { error: ordErr } = await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+                        if (ordErr) console.error('Erro atualizando ordem_entrega:', ordErr && ordErr.message, ordErr && ordErr.hint);
+                    } catch (e) {
+                        console.error('Erro na requisição ordem_entrega:', e && e.message);
+                    }
+                }
+            } catch (e) { /* non-blocking */ }
             setRotaAtiva(rotaOtimizada);
             setMotoristaDaRota(driver);
             setAbaAtiva('Visão Geral');
