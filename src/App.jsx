@@ -184,6 +184,7 @@ export default function App() {
     const [nomeCliente, setNomeCliente] = useState('');
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const [recentList, setRecentList] = useState([]);
+    const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
 
     const mapRef = useRef(null);
@@ -398,7 +399,7 @@ export default function App() {
         const { error } = await supabase.from('entregas').insert([{
             cliente: clienteVal,
             endereco: enderecoVal,
-            tipo: 'Entrega',
+            tipo: String(tipoEncomenda || '').trim(),
             lat: lat,
             lng: lng,
             status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
@@ -683,9 +684,10 @@ export default function App() {
                             <form onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                                 <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                                     <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
-                                    <select name="tipo" defaultValue="Entrega" style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                                    <select name="tipo" value={tipoEncomenda} onChange={(e) => setTipoEncomenda(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
                                         <option>Entrega</option>
                                         <option>Recolha</option>
+                                        <option>Outros</option>
                                     </select>
                                 </label>
                                 <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
