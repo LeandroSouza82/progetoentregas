@@ -219,7 +219,8 @@ export default function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
-    const [gestorPosicao, setGestorPosicao] = useState([-23.5505, -46.6333]);
+    // Localização do gestor (MY_LOCATION). Inicialmente null para evitar hardcoded.
+    const [gestorPosicao, setGestorPosicao] = useState(null);
 
     // Estados do Supabase
     const [pedidosEmEspera, setPedidosEmEspera] = useState([]); // agora vem de `entregas`
@@ -266,18 +267,49 @@ export default function App() {
     }, []);
 
     useEffect(() => {
-        carregarDados();
+        // Primeiro carrega configs e dados, depois tenta definir a posição do gestor
+        const init = async () => {
+            await carregarDados();
+            // Tentar obter coordenadas base via tabela `configuracoes` (chaves: base_lat, base_lng)
+            try {
+                const { data: baseCfg } = await supabase.from('configuracoes').select('chave,valor');
+                if (baseCfg && baseCfg.length > 0) {
+                    const latItem = baseCfg.find(c => String(c.chave).trim() === 'base_lat');
+                    const lngItem = baseCfg.find(c => String(c.chave).trim() === 'base_lng');
+                    if (latItem && lngItem) {
+                        const lat = parseFloat(latItem.valor);
+                        const lng = parseFloat(lngItem.valor);
+                        if (!isNaN(lat) && !isNaN(lng)) {
+                            setGestorPosicao([lat, lng]);
+                            return;
+                        }
+                    }
+                }
+            } catch (e) { /* continue to geolocation fallback */ }
+
+            // Fallback: tentar geolocalização do navegador
+            if (typeof navigator !== 'undefined' && navigator.geolocation && navigator.geolocation.getCurrentPosition) {
+                try {
+                    navigator.geolocation.getCurrentPosition((pos) => {
+                        try { setGestorPosicao([pos.coords.latitude, pos.coords.longitude]); } catch (e) { }
+                    }, () => { /* ignore permission denied */ });
+                } catch (e) { /* ignore */ }
+            }
+        };
+        init();
         // Geolocalização automática removida para evitar timeouts/permits bloqueados
     }, []);
 
     // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
     const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
 
-    // center map on motorista Leandro (id 1) when available, otherwise gestorPosicao
+    // Center should prefer gestorPosicao (MY_LOCATION). If not available, fallback to motoristaLeandro, then a safe default.
     const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
-    const mapCenter = (motoristaLeandro && motoristaLeandro.lat != null && motoristaLeandro.lng != null)
-        ? { lat: motoristaLeandro.lat, lng: motoristaLeandro.lng }
-        : { lat: gestorPosicao[0], lng: gestorPosicao[1] };
+    const mapCenter = (gestorPosicao && Array.isArray(gestorPosicao) && gestorPosicao.length >= 2)
+        ? { lat: Number(gestorPosicao[0]), lng: Number(gestorPosicao[1]) }
+        : (motoristaLeandro && motoristaLeandro.lat != null && motoristaLeandro.lng != null)
+            ? { lat: motoristaLeandro.lat, lng: motoristaLeandro.lng }
+            : { lat: 0, lng: 0 };
 
     async function carregarDados() {
         // motoristas reais
@@ -430,13 +462,19 @@ export default function App() {
 
     // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
     useEffect(() => {
-        if (!mapRef.current) return;
+        if (!mapRef.current || !gestorPosicao) return;
         const map = mapRef.current;
-        const pontos = [gestorPosicao, ...orderedRota.map(p => [p.lat, p.lng])];
+        const pontos = [gestorPosicao, ...orderedRota.map(p => [p.lat, p.lng])].filter(Boolean);
         if (!pontos || pontos.length === 0) return;
         const bounds = new window.google.maps.LatLngBounds();
-        pontos.forEach(pt => bounds.extend({ lat: pt[0], lng: pt[1] }));
-        try { map.fitBounds(bounds, 60); } catch (e) { /* ignore */ }
+        pontos.forEach(pt => { if (pt && pt.length >= 2) bounds.extend({ lat: Number(pt[0]), lng: Number(pt[1]) }); });
+        try {
+            map.fitBounds(bounds, 80);
+            // ensure zoom isn't too close/far; clamp between 13 and 15
+            const currentZoom = map.getZoom && map.getZoom();
+            if (currentZoom && currentZoom < 13) map.setZoom(13);
+            if (currentZoom && currentZoom > 15) map.setZoom(15);
+        } catch (e) { /* ignore */ }
     }, [orderedRota, gestorPosicao]);
 
     const adicionarAosPendentes = async (e) => {
@@ -636,7 +674,8 @@ export default function App() {
                                     <GoogleMap
                                         mapContainerStyle={{ width: '100%', height: '100%' }}
                                         center={mapCenter}
-                                        zoom={13}
+                                        zoom={14}
+                                        options={{ zoomControl: true, mapTypeControl: false, streetViewControl: true, fullscreenControl: true }}
                                         onLoad={(map) => { mapRef.current = map; setGoogleLoaded(true); }}
                                     >
                                         {(() => {
