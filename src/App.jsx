@@ -86,7 +86,8 @@ const darkTheme = {
 };
 
 // theme state will be set inside the App component
-const NEW_LOAD_STATUS = 'Aguardando';
+// Status padrão para novas cargas — sempre em minúsculas
+const NEW_LOAD_STATUS = 'aguardando';
 
 // --- LÓGICA (NÃO MEXEMOS EM NADA AQUI) ---
 
@@ -234,7 +235,8 @@ export default function App() {
 
         // entregas: novas cargas — filtro rigoroso pela string exata definida em NEW_LOAD_STATUS
         try {
-            const { data: entregasPend, error: entregasErr } = await supabase.from('entregas').select('*').eq('status', NEW_LOAD_STATUS);
+            // Buscar somente registros cujo status, quando normalizado, corresponda ao nosso padrão
+            const { data: entregasPend, error: entregasErr } = await supabase.from('entregas').select('*').eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
             if (entregasErr) {
                 console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
             } else if (entregasPend) setPedidosEmEspera(entregasPend);
@@ -316,8 +318,9 @@ export default function App() {
                         setPedidosEmEspera(prev => {
                             try {
                                 if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
-                                // If the record matches our NEW_LOAD_STATUS include/update it, otherwise remove
-                                if (rec.status === NEW_LOAD_STATUS) {
+                                // Normalize incoming status and compare to our canonical value
+                                const recStatusNorm = String(rec.status || '').trim().toLowerCase();
+                                if (recStatusNorm === String(NEW_LOAD_STATUS).trim().toLowerCase()) {
                                     const exists = prev.find(p => p.id === id);
                                     if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
                                     return [...prev, rec];
@@ -387,8 +390,8 @@ export default function App() {
         e.preventDefault();
         const lat = gestorPosicao[0] + (Math.random() - 0.5) * 0.04;
         const lng = gestorPosicao[1] + (Math.random() - 0.5) * 0.04;
-        // Preparar observações: enviar null quando vazio para evitar erros de coluna/valores
-        const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : null;
+        // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
+        const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
         const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
         if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
@@ -398,7 +401,7 @@ export default function App() {
             tipo: 'Entrega',
             lat: lat,
             lng: lng,
-            status: NEW_LOAD_STATUS,
+            status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
             observacoes: obsValue
         }]);
         if (!error) { alert("✅ Salvo com sucesso!"); setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); carregarDados(); }
@@ -435,10 +438,13 @@ export default function App() {
                 rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
             }
             const motoristaIdNum = Number(driver.id);
+            // Validação estrita de tipagem antes de enviar ao banco
+            if (isNaN(Number(motoristaIdNum))) throw new Error('ID do motorista inválido');
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => Number(m.id) === motoristaIdNum) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdNum);
-            const statusValue = 'em_rota';
+            // status para despacho: sempre normalizado (lowercase + trim)
+            const statusValue = String('em_rota').trim().toLowerCase();
 
             // Determine pedidos to dispatch and ensure IDs are numbers
             const pedidosParaDespachar = rotaOtimizada; // use rota otimizada as the set to dispatch
