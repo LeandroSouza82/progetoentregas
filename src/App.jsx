@@ -118,44 +118,96 @@ const otimizarRota = (pontoPartida, listaPedidos) => {
 
 // Otimiza rota usando Google Directions API com optimizeWaypoints
 // Retorna a lista de pedidos reordenada conforme waypoint_order
-async function otimizarRotaComGoogle(pontoPartida, listaPedidos) {
-    if (!listaPedidos || listaPedidos.length === 0) return [];
-    if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) {
-        throw new Error('Google Maps API não disponível');
+async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = null) {
+    // Filtrar apenas pedidos ativos com status 'pendente' (sanitizado)
+    const remaining = (listaPedidos || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente');
+    if (!remaining || remaining.length === 0) return [];
+    // Determinar origem dinâmica: se houver motoristaId, buscar última entrega concluída
+    let originLatLng;
+    try {
+        if (motoristaId != null) {
+            const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false }).limit(1);
+            if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) {
+                originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
+            }
+        }
+    } catch (e) {
+        console.warn('otimizarRotaComGoogle: falha ao buscar última entrega concluída', e);
     }
+    // Se não determinamos origin a partir do motorista, derive de pontoPartida (empresa)
+    if (!originLatLng) {
+        if (pontoPartida && typeof pontoPartida === 'object' && 'lat' in pontoPartida && 'lng' in pontoPartida) {
+            originLatLng = { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) };
+        } else if (Array.isArray(pontoPartida) && pontoPartida.length >= 2) {
+            originLatLng = { lat: Number(pontoPartida[0]), lng: Number(pontoPartida[1]) };
+        } else {
+            originLatLng = { lat: 0, lng: 0 };
+        }
+    }
+
+    if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) {
+        // fallback para algoritmo local quando Google não disponível
+        const local = otimizarRota(pontoPartida, remaining);
+        // Persistir ordem_entrega localmente também
+        try {
+            for (let i = 0; i < local.length; i++) {
+                const pid = typeof local[i].id === 'string' ? parseInt(local[i].id, 10) : local[i].id;
+                if (!pid) continue;
+                await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+            }
+        } catch (e) { /* non-blocking */ }
+        return local;
+    }
+
     return new Promise((resolve, reject) => {
         try {
             const directionsService = new window.google.maps.DirectionsService();
-            const origin = { lat: Number(pontoPartida[0]), lng: Number(pontoPartida[1]) };
-            const waypoints = listaPedidos.map(p => ({ location: { lat: Number(p.lat), lng: Number(p.lng) }, stopover: true }));
+
+            const waypoints = remaining.map(p => ({ location: { lat: Number(p.lat), lng: Number(p.lng) }, stopover: true }));
             const request = {
-                origin,
-                destination: origin,
+                origin: originLatLng,
+                destination: originLatLng,
                 travelMode: window.google.maps.TravelMode.DRIVING,
                 waypoints,
                 optimizeWaypoints: true
             };
-            directionsService.route(request, (result, status) => {
+
+            directionsService.route(request, async (result, status) => {
                 try {
                     if (status === 'OK' && result && result.routes && result.routes[0]) {
                         const wpOrder = result.routes[0].waypoint_order;
+                        let ordered = remaining;
                         if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) {
-                            const ordered = wpOrder.map(i => listaPedidos[i]);
-                            resolve(ordered);
-                            return;
+                            ordered = wpOrder.map(i => remaining[i]);
                         }
-                        resolve(listaPedidos);
+
+                        // Atualizar ordem_entrega no Supabase para os pedidos restantes
+                        try {
+                            for (let i = 0; i < ordered.length; i++) {
+                                const pedido = ordered[i];
+                                const pid = typeof pedido.id === 'string' ? parseInt(pedido.id, 10) : pedido.id;
+                                if (!pid || isNaN(pid)) continue;
+                                const { error: ordErr } = await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+                                if (ordErr) console.error('otimizarRotaComGoogle: erro atualizando ordem_entrega', ordErr.message || ordErr);
+                            }
+                        } catch (e) {
+                            console.error('otimizarRotaComGoogle: falha ao persistir ordem_entrega', e && e.message ? e.message : e);
+                        }
+
+                        resolve(ordered);
                         return;
                     }
+
                     if (status === 'ZERO_RESULTS') {
                         // Sem rota possível, retorna lista original
-                        resolve(listaPedidos);
+                        resolve(remaining);
                         return;
                     }
-                    // Outros status: fallback conservador
+
+                    // Outros status: fallback conservador para lista original
                     console.warn('DirectionsService retornou status:', status);
-                    resolve(listaPedidos);
-                } catch (e) { resolve(listaPedidos); }
+                    resolve(remaining);
+                } catch (e) { resolve(remaining); }
             });
         } catch (e) {
             reject(e);
@@ -432,7 +484,7 @@ export default function App() {
             try { audioRef.current.play().catch(() => { }); } catch (e) { }
             let rotaOtimizada = [];
             try {
-                rotaOtimizada = await otimizarRotaComGoogle(gestorPosicao, pedidosEmEspera);
+                rotaOtimizada = await otimizarRotaComGoogle(gestorPosicao, pedidosEmEspera, motoristaIdNum);
                 if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
             } catch (e) {
                 // fallback para algoritmo local em caso de erro com Google API
