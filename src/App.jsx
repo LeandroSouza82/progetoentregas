@@ -797,34 +797,52 @@ function App() {
 
                         {/* MAPA EM CARD (DIMINUÍDO E ELEGANTE) */}
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px' }}>
-                            <div style={{ height: '500px', width: '100%', position: 'relative' }}>
-                                <APIProvider apiKey={'SUA_CHAVE_AQUI'}>
+                            <div style={{ height: '600px', width: '100%', position: 'relative' }}>
+                                <APIProvider apiKey="AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM">
                                     <Map
                                         mapId="546bd17ef4a30773714756d8"
-                                        defaultCenter={{ lat: -27.6607, lng: -48.7087 }}
+                                        defaultCenter={{ lat: -27.6607733, lng: -48.7087217 }}
                                         defaultZoom={15}
                                         gestureHandling="greedy"
                                         style={{ width: '100%', height: '100%' }}
                                     >
-                                        {motoristas?.map((m) => {
-                                            const lat = parseFloat(m.lat);
-                                            const lng = parseFloat(m.lng);
-                                            if (isNaN(lat) || isNaN(lng)) return null;
-                                            return (
+                                        {/* Renderização da Frota de Motoristas */}
+                                        {(() => {
+                                            const motoristas = frota || [];
+                                            return motoristas?.filter(m => m.lat && m.lng).map((m) => (
                                                 <AdvancedMarker
                                                     key={m.id}
-                                                    position={{ lat, lng }}
+                                                    position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
                                                     collisionBehavior="REQUIRED"
+                                                    zIndex={1000}
                                                 >
-                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                                        <div style={{ backgroundColor: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', color: 'black', marginBottom: '5px', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-50%)' }}>
+                                                        {/* Balão com o Nome */}
+                                                        <div style={{ 
+                                                            backgroundColor: 'white', color: 'black', padding: '2px 8px', 
+                                                            borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', 
+                                                            boxShadow: '0 2px 4px rgba(0,0,0,0.3)', marginBottom: '5px',
+                                                            whiteSpace: 'nowrap'
+                                                        }}>
                                                             {m.nome?.split('\n')[0]}
                                                         </div>
-                                                        <img src="/vermelha.svg" style={{ width: '45px', height: '45px', transform: `rotate(${m.heading || 0}deg)` }} />
+                                                        
+                                                        {/* A Moto com Rotação em Tempo Real */}
+                                                        <img 
+                                                            src="/vermelha.svg" 
+                                                            style={{ 
+                                                                width: '50px', 
+                                                                height: '50px', 
+                                                                transform: `rotate(${m.heading || 0}deg)`, 
+                                                                transition: 'transform 0.4s ease',
+                                                                objectFit: 'contain'
+                                                            }} 
+                                                            onError={(e) => { e.target.src = '/moto.png'; }}
+                                                        />
                                                     </div>
                                                 </AdvancedMarker>
-                                            );
-                                        })}
+                                            ));
+                                        })()}
                                     </Map>
                                 </APIProvider>
                             </div>
