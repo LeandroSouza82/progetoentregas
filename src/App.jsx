@@ -275,6 +275,7 @@ function App() {
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
     const [googleLoaded, setGoogleLoaded] = useState(typeof window !== 'undefined' && window.google && window.google.maps ? true : false);
+    const [zoomLevel, setZoomLevel] = useState(13);
 
     // Remover definição interna do ícone (usamos `motoIcon` definida no topo)
 
@@ -817,6 +818,7 @@ function App() {
                                             defaultZoom={13}
                                             mapId="546bd17ef4a30773714756d8"
                                             style={{ width: '100%', height: '100%' }}
+                                            onZoomChanged={(ev) => setZoomLevel(ev?.detail?.zoom)}
                                         >
                                             {(() => {
                                                 const motoristas = frota || [];
@@ -824,27 +826,29 @@ function App() {
                                                     const la = parseFloat(m.lat);
                                                     const lo = parseFloat(m.lng);
                                                     return !isNaN(la) && !isNaN(lo) && la !== 0;
-                                                }).map((m) => (
-                                                    <AdvancedMarker
-                                                        key={m.id}
-                                                        position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
-                                                    >
-                                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
-                                                            {/* Nome do Motorista */}
-                                                            <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                                                                {m.nome?.split(' ')[0] || 'Entregador'}
-                                                            </div>
+                                                }).map((m) => {
+                                                    const iconSize = zoomLevel > 15 ? 48 : 32;
+                                                    return (
+                                                        <AdvancedMarker
+                                                            key={m.id}
+                                                            position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
+                                                        >
+                                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
+                                                                {/* Nome do Motorista */}
+                                                                <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
+                                                                    {m.nome?.split(' ')[0] || 'Entregador'}
+                                                                </div>
 
-                                                            {/* Sua Imagem Profissional */}
-                                                                                                    {/* Ícone da Entrega (Tamanho Ajustado) */}
-                                                                                                    <img
-                                                                                                        src="/bicicleta-de-entrega.png"
-                                                                                                        alt="Entregador"
-                                                                                                        style={{ width: '40px', height: '40px', objectFit: 'contain' }}
-                                                                                                    />
-                                                        </div>
-                                                    </AdvancedMarker>
-                                                ));
+                                                                {/* Ícone da Entrega (Tamanho Dinâmico) */}
+                                                                <img
+                                                                    src="/bicicleta-de-entrega.png"
+                                                                    alt="Entregador"
+                                                                    style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }}
+                                                                />
+                                                            </div>
+                                                        </AdvancedMarker>
+                                                    );
+                                                });
                                             })()}
                                         </Map>
                                     </APIProvider>
