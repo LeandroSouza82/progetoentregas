@@ -1,6 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { GoogleMap, InfoWindow } from '@react-google-maps/api';
-import supabase, { HAS_SUPABASE_CREDENTIALS } from './supabaseClient';
+import React from 'react';
+import { useRef, useState, useEffect } from 'react';
+import { APIProvider, Map, AdvancedMarker } from '@vis.gl/react-google-maps';
+import { supabase } from './supabaseClient';
+const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
+
+// Ícone em Data URL SVG (moto verde) definido logo no topo com fallback seguro
+const _motoSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="#27ae60" d="M416 352c-44.1 0-80 35.9-80 80s35.9 80 80 80 80-35.9 80-80-35.9-80-80-35.9zm-256 0c-44.1 0-80 35.9-80 80s35.9 80 80 80 80-35.9 80-80-35.9-80-80-80zM496 256h-16.1l-64.7-129.4c-7-14.1-21.5-22.6-37.1-22.6H288v-48c0-17.7-14.3-32-32-32H160c-17.7 0-32 14.3-32 32v48H32c-17.7 0-32 14.3-32 32v160c0 17.7 14.3 32 32 32h32c0-53 43-96 96-96s96 43 96 96h64c0-53 43-96 96-96s96 43 96 96h32c17.7 0 32-14.3 32-32V288c0-17.7-14.3-32-32-32z"/></svg>';
+// Símbolo SVG como Path (configuração do Google Maps Symbol) para evitar qualquer fundo
 
 // --- CONFIGURAÇÃO VISUAL ---
 // Google Maps helpers
@@ -28,31 +34,30 @@ function motoristaIconUrlFor(heading = 0, color = '#2563eb') {
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-// AdvancedMarker helper: uses google.maps.marker.AdvancedMarkerElement to avoid deprecation warnings
-function AdvancedMarker({ map, position, iconUrl, onClick }) {
-    const localRef = useRef(null);
-    useEffect(() => {
-        // Guard: ensure map instance and Google Maps API are ready before creating AdvancedMarker
-        if (!map || !window.google || !window.google.maps || !map.getDiv || !window.google.maps.marker) return;
-        const container = document.createElement('div');
-        container.style.display = 'inline-block';
-        container.style.transform = 'translate(-50%, -50%)';
-        const img = document.createElement('img');
-        img.src = iconUrl;
-        img.style.width = '40px';
-        img.style.height = '40px';
-        img.style.pointerEvents = 'auto';
-        img.draggable = false;
-        container.appendChild(img);
-        const adv = new window.google.maps.marker.AdvancedMarkerElement({ map, position, element: container });
-        if (onClick) adv.addListener('click', onClick);
-        localRef.current = adv;
-        return () => {
-            try { if (localRef.current) { localRef.current.map = null; localRef.current.element && localRef.current.element.remove(); } } catch (e) { }
+function motorcycleIconWithName(name = '') {
+    const label = String(name || '').trim();
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='40' viewBox='0 0 160 40'>
+        <style>text{font:700 12px/1.2 sans-serif; fill:#fff}</style>
+        <rect x='0' y='0' width='160' height='40' rx='8' fill='#111827' opacity='0.95'/>
+        <g transform='translate(8,6)'>
+            <svg x='0' y='0' width='28' height='28' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'>
+                <path fill='%23ff6b6b' d='M5 16a1 1 0 100 2 1 1 0 000-2zm11 0a1 1 0 100 2 1 1 0 000-2zM3 6h2l1.5 4h9l1-2h-6l-1-2H6' />
+            </svg>
+        </g>
+        <text x='48' y='22'>${label}</text>
+    </svg>`;
+    const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+    if (typeof window !== 'undefined' && window.google && window.google.maps) {
+        return {
+            url,
+            scaledSize: new window.google.maps.Size(50, 50),
+            anchor: new window.google.maps.Point(25, 25)
         };
-    }, [map, position && position.lat, position && position.lng, iconUrl]);
-    return null;
+    }
+    return { url };
 }
+
+// AdvancedMarker removed: using legacy Marker for stability
 
 // Smart loader: only uses LoadScript if Google API not already present
 // SmartLoadScript removed. We'll inject the Google Maps script once via useEffect in the App component.
@@ -238,7 +243,7 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
     });
 }
 
-export default function App() {
+function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
@@ -270,6 +275,8 @@ export default function App() {
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
     const [googleLoaded, setGoogleLoaded] = useState(typeof window !== 'undefined' && window.google && window.google.maps ? true : false);
+
+    // Remover definição interna do ícone (usamos `motoIcon` definida no topo)
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -342,18 +349,16 @@ export default function App() {
 
     // Log de ambiente (REAL vs MOCK) para diagnóstico
     useEffect(() => {
-        try { console.log('Supabase credentials present:', HAS_SUPABASE_CREDENTIALS ? 'YES' : 'NO'); } catch (e) { }
+        // diagnostic log removed for performance in render path
     }, []);
 
     // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
     const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
 
-    // Center should prefer gestorPosicao (MY_LOCATION). If not available, fallback to a safe base default.
+    // Center for map: force Santa Catarina as requested
     const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
-    // Garantir que nunca retornamos NaN: usar coordenadas da base como fallback
-    const mapCenter = (gestorPosicao?.[0] != null)
-        ? { lat: Number(gestorPosicao[0]), lng: Number(gestorPosicao[1]) }
-        : { lat: -27.66, lng: -48.70 };
+    // Forçar centro em Santa Catarina (coordenadas do Leandro, ID 1)
+    const mapCenter = { lat: -27.660773, lng: -48.708722 };
 
     // Helpers para cores por tipo de carga
     const getColorForType = (tipo) => {
@@ -384,12 +389,27 @@ export default function App() {
             console.error('carregarDados: Supabase keys missing — aborting data load');
             return;
         }
+        if (!supabase) {
+            console.error('carregarDados: supabase client not initialized — aborting');
+            return;
+        }
         // motoristas reais
         try {
             let q = supabase.from('motoristas').select('*');
             if (q && typeof q.order === 'function') q = q.order('id');
             const { data: motoristas, error: motorErr } = await q;
-            if (motorErr) { console.warn('carregarDados: erro ao buscar motoristas', motorErr); setFrota([]); } else setFrota(motoristas || []);
+            if (motorErr) {
+                console.warn('carregarDados: erro ao buscar motoristas', motorErr);
+                setFrota([]);
+            } else {
+                // Normalizar lat/lng para Number (trim prior) antes de salvar no estado
+                const normalized = (motoristas || []).map(m => ({
+                    ...m,
+                    lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
+                    lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
+                }));
+                setFrota(normalized);
+            }
         } catch (e) { console.warn('Erro carregando motoristas:', e); setFrota([]); }
 
         // entregas: novas cargas — filtro rigoroso pela string exata definida em NEW_LOAD_STATUS
@@ -468,12 +488,12 @@ export default function App() {
                         if (rec && rec.id) {
                             const parsed = { ...rec };
                             if (parsed.lat != null) {
-                                const v = parseFloat(parsed.lat);
-                                parsed.lat = isNaN(v) ? null : v;
+                                const v = Number(String(parsed.lat).trim());
+                                parsed.lat = Number.isFinite(v) ? v : null;
                             }
                             if (parsed.lng != null) {
-                                const v2 = parseFloat(parsed.lng);
-                                parsed.lng = isNaN(v2) ? null : v2;
+                                const v2 = Number(String(parsed.lng).trim());
+                                parsed.lng = Number.isFinite(v2) ? v2 : null;
                             }
                             setFrota(prev => {
                                 const exists = prev.find(p => p.id === parsed.id);
@@ -779,57 +799,103 @@ export default function App() {
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px' }}>
                             <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden' }}>
                                 {googleLoaded ? (
-                                    <GoogleMap
-                                        mapContainerStyle={{ width: '100%', height: '100%' }}
-                                        center={mapCenter}
-                                        zoom={14}
-                                        options={{ zoomControl: true, mapTypeControl: false, streetViewControl: true, fullscreenControl: true }}
-                                        onLoad={(map) => { mapRef.current = map; setGoogleLoaded(true); }}
-                                    >
-                                        {(() => {
-                                            const map = mapRef.current;
-                                            if (!map || !window.google || !window.google.maps) return null;
-                                            return (
-                                                <>
-                                                    {/* Base / gestor (validação de coordenadas) */}
-                                                    {Array.isArray(gestorPosicao) && gestorPosicao.length >= 2 && !isNaN(parseFloat(gestorPosicao[0])) && (
-                                                        <AdvancedMarker map={map} position={{ lat: parseFloat(gestorPosicao[0]), lng: parseFloat(gestorPosicao[1]) }} iconUrl={numberedIconUrl('G')} />
-                                                    )}
+                                    <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
+                                        <Map
+                                            mapId="546bd17ef4a30773714756d8"
+                                            defaultCenter={{ lat: -27.6607, lng: -48.7087 }}
+                                            defaultZoom={15}
+                                            gestureHandling="greedy"
+                                            style={{ width: '100%', height: '100%' }}
+                                            renderingType={'VECTOR'}
+                                            tilt={45}
+                                            disableDefaultUI={false}
+                                            options={{ zoomControl: true, mapTypeControl: false, streetViewControl: true, fullscreenControl: true }}
+                                            onLoad={(map) => { mapRef.current = map; setGoogleLoaded(true); }}
+                                        >
+                                            {(() => {
+                                                const map = mapRef.current;
+                                                const latSel = selectedMotorista ? parseFloat(selectedMotorista.lat) : NaN;
+                                                const lngSel = selectedMotorista ? parseFloat(selectedMotorista.lng) : NaN;
+                                                const motoristas = frota; // alias seguro para seguir a nomenclatura solicitada
+                                                if (!map || !window.google || !window.google.maps) return null;
+                                                return (
+                                                    <>
+                                                        {/* Base / gestor (validação de coordenadas) */}
+                                                        {Array.isArray(gestorPosicao) && gestorPosicao.length >= 2 && !isNaN(parseFloat(gestorPosicao[0])) && (
+                                                            (() => {
+                                                                const lat = parseFloat(gestorPosicao[0]);
+                                                                const lng = parseFloat(gestorPosicao[1]);
+                                                                const url = numberedIconUrl('G');
+                                                                return (
+                                                                    <AdvancedMarker key="gestor" position={{ lat, lng }}>
+                                                                        <div style={{ transform: 'translate(-50%,-100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                                            <img src={url} alt="G" style={{ width: '36px', height: '36px' }} />
+                                                                        </div>
+                                                                    </AdvancedMarker>
+                                                                );
+                                                            })()
+                                                        )}
 
-                                                    {/* Entregas (rota) com validação de lat/lng e marcadores avançados */}
-                                                    {orderedRota?.map((p, i) => {
-                                                        const lat = parseFloat(p.lat);
-                                                        const lng = parseFloat(p.lng);
-                                                        if (isNaN(lat) || isNaN(lng)) return null;
-                                                        return <AdvancedMarker key={p.id} map={map} position={{ lat, lng }} iconUrl={numberedIconUrl(p.ordem || (i + 1))} />;
-                                                    })}
+                                                        {/* Entregas (rota) com validação de lat/lng e marcadores avançados */}
+                                                        {orderedRota?.map((p, i) => {
+                                                            const lat = Number(p.lat);
+                                                            const lng = Number(p.lng);
+                                                            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+                                                            const url = numberedIconUrl(p.ordem || (i + 1));
+                                                            return (
+                                                                <AdvancedMarker key={p.id} position={{ lat, lng }}>
+                                                                    <div style={{ transform: 'translate(-50%,-100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                                        <img src={url} alt={`#${p.ordem || (i + 1)}`} style={{ width: '36px', height: '36px' }} />
+                                                                    </div>
+                                                                </AdvancedMarker>
+                                                            );
+                                                        })}
 
-                                                    {/* Polylines removed — mapa exibe somente marcadores */}
+                                                        {/* Polylines removed — mapa exibe somente marcadores */}
 
-                                                    {/* Motoristas (markers) - validação e AdvancedMarker */}
-                                                    {frota?.map(m => {
-                                                        const lat = parseFloat(m.lat);
-                                                        const lng = parseFloat(m.lng);
-                                                        if (!m || isNaN(lat) || isNaN(lng)) return null;
-                                                        const color = getDriverColor(m.id);
-                                                        return <AdvancedMarker key={`m-${m.id}`} map={map} position={{ lat, lng }} iconUrl={motoristaIconUrlFor(m.heading || 0, color)} onClick={() => setSelectedMotorista(m)} />;
-                                                    })}
+                                                        {motoristas?.filter(m => m.lat && m.lng).map((m) => (
+                                                            <AdvancedMarker
+                                                                key={m.id}
+                                                                position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
+                                                                collisionBehavior="REQUIRED"
+                                                                zIndex={1000}
+                                                            >
+                                                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
+                                                                    <div style={{
+                                                                        backgroundColor: 'white', color: 'black', padding: '2px 8px',
+                                                                        borderRadius: '10px', fontSize: '11px', fontWeight: 'bold',
+                                                                        boxShadow: '0 2px 4px rgba(0,0,0,0.3)', marginBottom: '5px'
+                                                                    }}>
+                                                                        {m.nome?.split('\n')[0]}
+                                                                    </div>
+                                                                    <img
+                                                                        src="/vermelha.svg"
+                                                                        style={{ width: '45px', height: '45px', transform: `rotate(${m.heading || 0}deg)` }}
+                                                                    />
+                                                                </div>
+                                                            </AdvancedMarker>
+                                                        ))}
 
-                                                    {selectedMotorista?.lat != null && selectedMotorista?.lng != null && (
-                                                        <InfoWindow position={{ lat: selectedMotorista.lat, lng: selectedMotorista.lng }} onCloseClick={() => setSelectedMotorista(null)}>
-                                                            <div style={{ minWidth: '160px' }}>
-                                                                {selectedMotorista.avatar_path ? (
-                                                                    <img src={selectedMotorista.avatar_path} alt={selectedMotorista.nome} style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover', marginRight: '8px', float: 'left' }} />
-                                                                ) : null}
-                                                                <div style={{ fontWeight: '700' }}>{selectedMotorista.nome}</div>
-                                                                <div style={{ fontSize: '12px', color: selectedMotorista.esta_online ? theme.success : theme.danger }}>{selectedMotorista.esta_online ? 'Online' : 'Offline'}</div>
-                                                            </div>
-                                                        </InfoWindow>
-                                                    )}
-                                                </>
-                                            );
-                                        })()}
-                                    </GoogleMap>
+                                                        {!isNaN(latSel) && !isNaN(lngSel) && (
+                                                            <AdvancedMarker position={{ lat: latSel, lng: lngSel }} onClick={() => setSelectedMotorista(null)}>
+                                                                <div style={{ transform: 'translateY(-60px)', minWidth: '160px', background: 'white', padding: '8px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                        {selectedMotorista.avatar_path ? (
+                                                                            <img src={selectedMotorista.avatar_path} alt={selectedMotorista.nome} style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover' }} />
+                                                                        ) : null}
+                                                                        <div>
+                                                                            <div style={{ fontWeight: '700' }}>{selectedMotorista.nome}</div>
+                                                                            <div style={{ fontSize: '12px', color: selectedMotorista.esta_online ? theme.success : theme.danger }}>{selectedMotorista.esta_online ? 'Online' : 'Offline'}</div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </AdvancedMarker>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()}
+                                        </Map>
+                                    </APIProvider>
                                 ) : (
                                     <div style={{ width: '100%', height: '100%' }} />
                                 )}
@@ -1134,3 +1200,5 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
         </div>
     );
 }
+
+export default App;

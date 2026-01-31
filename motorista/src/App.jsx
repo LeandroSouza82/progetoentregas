@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import DriverApp from './DriverApp';
 import supabase from './supabaseClient'; // Certifique-se que o arquivo existe
-import { GoogleMap, LoadScript } from '@react-google-maps/api';
+import { GoogleMap } from '@vis.gl/react-google-maps';
+import { AdvancedMarker } from '@vis.gl/react-google-maps';
 
 const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
 
@@ -245,26 +246,7 @@ function InternalMobileApp() {
         return <LoadScript googleMapsApiKey={apiKey}>{children}</LoadScript>;
     }
 
-    // AdvancedMarker helper (mobile): cria AdvancedMarkerElement com validação de coordenadas
-    function AdvancedMarkerMobile({ map, position, iconUrl, onClick }) {
-        const ref = useRef(null);
-        useEffect(() => {
-            if (!map || !window.google || !window.google.maps || !window.google.maps.marker) return;
-            const el = document.createElement('div');
-            el.style.transform = 'translate(-50%, -50%)';
-            const img = document.createElement('img');
-            img.src = iconUrl;
-            img.style.width = '30px';
-            img.style.height = '30px';
-            img.draggable = false;
-            el.appendChild(img);
-            const adv = new window.google.maps.marker.AdvancedMarkerElement({ map, position, element: el });
-            if (onClick) adv.addListener('click', onClick);
-            ref.current = adv;
-            return () => { try { if (ref.current) { ref.current.map = null; ref.current.element && ref.current.element.remove(); } } catch (e) { } };
-        }, [map, position && position.lat, position && position.lng, iconUrl]);
-        return null;
-    }
+    // AdvancedMarker removed: use legacy Marker for mobile map rendering
 
     return (
         <div style={{
@@ -473,7 +455,14 @@ function InternalMobileApp() {
                                         const lat = parseFloat(p.lat);
                                         const lng = parseFloat(p.lng);
                                         if (isNaN(lat) || isNaN(lng)) return null;
-                                        return <AdvancedMarkerMobile key={p.id} map={mapRefMobile.current} position={{ lat, lng }} iconUrl={numberedIconUrl(p.ordem || (i + 1))} />;
+                                        const url = numberedIconUrl(p.ordem || (i + 1));
+                                        return (
+                                            <AdvancedMarker key={p.id} position={{ lat, lng }}>
+                                                <div style={{ transform: 'translate(-50%,-100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <img src={url} alt={`#${p.ordem || (i + 1)}`} style={{ width: '30px', height: '30px' }} />
+                                                </div>
+                                            </AdvancedMarker>
+                                        );
                                     })}
                                 </GoogleMap>
                             </SmartLoadScript>

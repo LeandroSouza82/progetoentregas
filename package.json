@@ -10,8 +10,8 @@
     "test:realtime": "node scripts/test-realtime.mjs"
   },
   "dependencies": {
-    "@react-google-maps/api": "^2.20.8",
     "@supabase/supabase-js": "^2.89.0",
+    "@vis.gl/react-google-maps": "^1.7.1",
     "firebase": "^11.0.0",
     "jspdf": "^3.0.4",
     "jspdf-autotable": "^5.0.2",
