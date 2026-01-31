@@ -829,7 +829,7 @@ function App() {
                                                         
                                                         {/* A Ciclista (bike) com Rotação em Tempo Real — cache-bust via query param */}
                                                         <img
-                                                            src={`/bike.png?v=${new Date().getTime()}`}
+                                                            src={`/bike.png?t=${new Date().getTime()}`}
                                                             style={{
                                                                 width: '60px',
                                                                 height: '60px',
@@ -838,7 +838,7 @@ function App() {
                                                                 filter: 'drop-shadow(0 2px 5px rgba(0,0,0,0.5))'
                                                             }}
                                                             onError={(e) => {
-                                                                console.log('Bike não encontrada, tentando fallback...');
+                                                                console.warn('Bike não encontrada, usando fallback');
                                                                 e.target.src = '/vermelha.svg';
                                                             }}
                                                         />
