@@ -827,17 +827,17 @@ function App() {
                                                             {m.nome?.split('\n')[0]}
                                                         </div>
                                                         
-                                                        {/* A Moto com Rotação em Tempo Real */}
-                                                        <img 
-                                                            src="/vermelha.svg" 
-                                                            style={{ 
-                                                                width: '50px', 
-                                                                height: '50px', 
-                                                                transform: `rotate(${m.heading || 0}deg)`, 
-                                                                transition: 'transform 0.4s ease',
-                                                                objectFit: 'contain'
-                                                            }} 
-                                                            onError={(e) => { e.target.src = '/moto.png'; }}
+                                                        {/* A Ciclista (bike) com Rotação em Tempo Real */}
+                                                        <img
+                                                            src="/bike.png"
+                                                            style={{
+                                                                width: '55px',
+                                                                height: '55px',
+                                                                transform: `rotate(${m.heading || 0}deg)`,
+                                                                objectFit: 'contain',
+                                                                filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.4))'
+                                                            }}
+                                                            onError={(e) => { e.target.src = '/vermelha.svg'; }}
                                                         />
                                                     </div>
                                                 </AdvancedMarker>
