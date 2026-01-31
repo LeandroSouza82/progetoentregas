@@ -836,11 +836,12 @@ function App() {
                                                             </div>
 
                                                             {/* Sua Imagem Profissional */}
-                                                            <img
-                                                                src="/bicicleta-de-entrega.png"
-                                                                alt="Entregador"
-                                                                style={{ width: '55px', height: '55px', objectFit: 'contain' }}
-                                                            />
+                                                                                                    {/* Ícone da Entrega (Tamanho Ajustado) */}
+                                                                                                    <img
+                                                                                                        src="/bicicleta-de-entrega.png"
+                                                                                                        alt="Entregador"
+                                                                                                        style={{ width: '40px', height: '40px', objectFit: 'contain' }}
+                                                                                                    />
                                                         </div>
                                                     </AdvancedMarker>
                                                 ));
