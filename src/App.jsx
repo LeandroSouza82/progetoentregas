@@ -827,9 +827,9 @@ function App() {
                                                             {m.nome?.split('\n')[0]}
                                                         </div>
                                                         
-                                                        {/* A Ciclista (bike) com Rotação em Tempo Real */}
+                                                        {/* A Ciclista (bike) com Rotação em Tempo Real — cache-bust via query param */}
                                                         <img
-                                                            src="/bike.png"
+                                                            src={`/bike.png?v=${new Date().getTime()}`}
                                                             style={{
                                                                 width: '55px',
                                                                 height: '55px',
