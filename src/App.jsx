@@ -829,12 +829,13 @@ function App() {
                                                         
                                                         {/* A Ciclista (bike) com Rotação em Tempo Real — cache-bust via query param */}
                                                         <img
-                                                            src="/vermelha.svg"
+                                                            src={`/bike.png?v=${new Date().getTime()}`}
                                                             style={{
-                                                                width: '50px',
-                                                                height: '50px',
+                                                                width: '55px',
+                                                                height: '55px',
                                                                 objectFit: 'contain'
                                                             }}
+                                                            onError={(e) => { e.target.src = 'https://cdn-icons-png.flaticon.com/512/3198/3198332.png'; }}
                                                         />
                                                     </div>
                                                 </AdvancedMarker>
