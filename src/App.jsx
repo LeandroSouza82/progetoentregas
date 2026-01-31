@@ -831,13 +831,16 @@ function App() {
                                                         <img
                                                             src={`/bike.png?v=${new Date().getTime()}`}
                                                             style={{
-                                                                width: '55px',
-                                                                height: '55px',
+                                                                width: '60px',
+                                                                height: '60px',
                                                                 transform: `rotate(${m.heading || 0}deg)`,
                                                                 objectFit: 'contain',
-                                                                filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.4))'
+                                                                filter: 'drop-shadow(0 2px 5px rgba(0,0,0,0.5))'
                                                             }}
-                                                            onError={(e) => { e.target.src = '/vermelha.svg'; }}
+                                                            onError={(e) => {
+                                                                console.log('Bike não encontrada, tentando fallback...');
+                                                                e.target.src = '/vermelha.svg';
+                                                            }}
                                                         />
                                                     </div>
                                                 </AdvancedMarker>
