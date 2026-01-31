@@ -54,61 +54,45 @@ function motorcycleIconWithName(name = '') {
             anchor: new window.google.maps.Point(25, 25)
         };
     }
-                                        {(() => {
-                                            const motoristas = frota || [];
-                                            return motoristas?.filter(m => m.lat && m.lng).map((m) => (
-                                                <AdvancedMarker
-                                                    key={m.id}
-                                                    position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
-                                                >
-                                                    <div style={{ 
-                                                        display: 'flex', 
-                                                        flexDirection: 'column', 
-                                                        alignItems: 'center', 
-                                                        transform: 'translateY(-50%)', // Centraliza o ícone no ponto exato
-                                                        background: 'transparent' 
-                                                    }}>
-                                                        {/* Balão de Nome Profissional */}
-                                                        <div style={{ 
-                                                            backgroundColor: 'white', 
-                                                            color: '#1f2937', 
-                                                            padding: '3px 10px', 
-                                                            borderRadius: '12px', 
-                                                            fontSize: '12px', 
-                                                            fontWeight: '800', 
-                                                            boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)', 
-                                                            border: '1px solid #e5e7eb',
-                                                            marginBottom: '4px',
-                                                            whiteSpace: 'nowrap',
-                                                            zIndex: 1
-                                                        }}>
-                                                            {m.nome?.split(' ')[0]}
-                                                        </div>
-                                                        
-                                                        {/* Moto SVG Colorida com Piloto */}
-                                                        <svg width="75" height="75" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
-                                                            {/* Rodas */}
-                                                            <circle cx="25" cy="75" r="10" fill="#374151" stroke="#111827" strokeWidth="2"/>
-                                                            <circle cx="75" cy="75" r="10" fill="#374151" stroke="#111827" strokeWidth="2"/>
-                                                            
-                                                            {/* Baú */}
-                                                            <rect x="5" y="35" width="25" height="25" rx="2" fill="#9CA3AF" stroke="#374151" strokeWidth="2"/>
-                                                            
-                                                            {/* Corpo da Moto */}
-                                                            <path d="M30 65H70L80 40H40L30 65Z" fill="#4B5563" stroke="#1F2937" strokeWidth="2"/>
-                                                            
-                                                            {/* Piloto */}
-                                                            <path d="M45 40L52 25C52 20 62 20 62 25L68 40" stroke="#1E40AF" strokeWidth="6" strokeLinecap="round"/> {/* Tronco/Braço */}
-                                                            <circle cx="62" cy="18" r="8" fill="#EF4444"/> {/* Capacete */}
-                                                            <rect x="62" y="16" width="8" height="3" fill="#1F2937"/> {/* Viseira */}
-                                                            
-                                                            {/* Guidão e Detalhes */}
-                                                            <path d="M68 40L75 75M25 75L30 65" stroke="#1F2937" strokeWidth="2"/>
-                                                        </svg>
-                                                    </div>
-                                                </AdvancedMarker>
-                                            ));
-                                        })()}
+    return { url };
+}
+
+// AdvancedMarker removed: using legacy Marker for stability
+
+// Smart loader: only uses LoadScript if Google API not already present
+// SmartLoadScript removed. We'll inject the Google Maps script once via useEffect in the App component.
+
+// Paletas de cores
+const lightTheme = {
+    headerBg: '#0f172a',
+    headerText: '#f8fafc',
+    bg: '#f1f5f9',
+    card: '#ffffff',
+    primary: '#4f46e5',
+    accent: '#0ea5e9',
+    success: '#10b981',
+    danger: '#ef4444',
+    textMain: '#334155',
+    textLight: '#94a3b8',
+    shadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+};
+
+const darkTheme = {
+    headerBg: '#071028',
+    headerText: '#e6eef8',
+    bg: '#071228',
+    card: '#0b1220',
+    primary: '#60a5fa',
+    accent: '#38bdf8',
+    success: '#34d399',
+    danger: '#f87171',
+    textMain: '#cbd5e1',
+    textLight: '#94a3b8',
+    shadow: '0 6px 18px rgba(0,0,0,0.6)'
+};
+
+// theme state will be set inside the App component
+// Status padrão para novas cargas — sempre em minúsculas
 const NEW_LOAD_STATUS = 'aguardando';
 
 // --- LÓGICA (NÃO MEXEMOS EM NADA AQUI) ---
@@ -316,6 +300,16 @@ function App() {
         return () => { s.removeEventListener('load', onLoad); };
     }, []);
 
+    // Debug: log do estado dos motoristas sempre que `frota` mudar
+    useEffect(() => {
+        try {
+            console.log('Estado atual dos motoristas:', frota);
+            if (frota && frota.length > 0) {
+                frota.forEach(m => console.log(`Motorista: ${m.nome || '<sem-nome>'}, Lat: ${m.lat}, Lng: ${m.lng}`));
+            }
+        } catch (e) { /* ignore */ }
+    }, [frota]);
+
     // If Supabase credentials are not present, show a clear error screen and avoid loading fake data
     if (!HAS_SUPABASE_CREDENTIALS) {
         return (
@@ -425,6 +419,8 @@ function App() {
                     lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
                 }));
                 setFrota(normalized);
+                // Debug: registrar dados brutos vindos do Supabase (normalizados)
+                try { console.log('Dados do Supabase:', normalized); } catch (e) { /* ignore */ }
             }
         } catch (e) { console.warn('Erro carregando motoristas:', e); setFrota([]); }
 
@@ -813,52 +809,47 @@ function App() {
 
                         {/* MAPA EM CARD (DIMINUÍDO E ELEGANTE) */}
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px' }}>
-                            <div style={{ height: '600px', width: '100%', position: 'relative' }}>
-                                <APIProvider apiKey="AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM">
-                                    <Map
-                                        mapId="546bd17ef4a30773714756d8"
-                                        defaultCenter={{ lat: -27.6607733, lng: -48.7087217 }}
-                                        defaultZoom={15}
-                                        gestureHandling="greedy"
-                                        style={{ width: '100%', height: '100%' }}
-                                    >
-                                        {/* Renderização da Frota de Motoristas */}
-                                        {(() => {
-                                            const motoristas = frota || [];
-                                            return motoristas?.filter(m => m.lat && m.lng).map((m) => (
-                                                <AdvancedMarker
-                                                    key={m.id}
-                                                    position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
-                                                    collisionBehavior="REQUIRED"
-                                                    zIndex={1000}
-                                                >
-                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-50%)' }}>
-                                                        {/* Balão com o Nome */}
-                                                        <div style={{ 
-                                                            backgroundColor: 'white', color: 'black', padding: '2px 8px', 
-                                                            borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', 
-                                                            boxShadow: '0 2px 4px rgba(0,0,0,0.3)', marginBottom: '5px',
-                                                            whiteSpace: 'nowrap'
-                                                        }}>
-                                                            {m.nome?.split('\n')[0]}
+                            <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden' }}>
+                                {googleLoaded ? (
+                                    <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
+                                        <Map
+                                            defaultCenter={{ lat: -27.6485, lng: -48.6672 }}
+                                            defaultZoom={13}
+                                            mapId="546bd17ef4a30773714756d8"
+                                            style={{ width: '100%', height: '100%' }}
+                                        >
+                                            {(() => {
+                                                const motoristas = frota || [];
+                                                return motoristas?.filter(m => {
+                                                    const la = parseFloat(m.lat);
+                                                    const lo = parseFloat(m.lng);
+                                                    return !isNaN(la) && !isNaN(lo) && la !== 0;
+                                                }).map((m) => (
+                                                    <AdvancedMarker
+                                                        key={m.id}
+                                                        position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
+                                                    >
+                                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
+                                                            {/* Nome do Motorista */}
+                                                            <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
+                                                                {m.nome?.split(' ')[0] || 'Entregador'}
+                                                            </div>
+
+                                                            {/* Sua Imagem Profissional */}
+                                                            <img
+                                                                src="/bicicleta-de-entrega.png"
+                                                                alt="Entregador"
+                                                                style={{ width: '55px', height: '55px', objectFit: 'contain' }}
+                                                            />
                                                         </div>
-                                                        
-                                                        {/* A Ciclista (bike) com Rotação em Tempo Real — cache-bust via query param */}
-                                                        <img
-                                                            src={`/bike.png?v=${new Date().getTime()}`}
-                                                            style={{
-                                                                width: '55px',
-                                                                height: '55px',
-                                                                objectFit: 'contain'
-                                                            }}
-                                                            onError={(e) => { e.target.src = 'https://cdn-icons-png.flaticon.com/512/3198/3198332.png'; }}
-                                                        />
-                                                    </div>
-                                                </AdvancedMarker>
-                                            ));
-                                        })()}
-                                    </Map>
-                                </APIProvider>
+                                                    </AdvancedMarker>
+                                                ));
+                                            })()}
+                                        </Map>
+                                    </APIProvider>
+                                ) : (
+                                    <div style={{ width: '100%', height: '100%' }} />
+                                )}
                             </div>
                         </div>
 
