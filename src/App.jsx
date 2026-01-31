@@ -54,45 +54,61 @@ function motorcycleIconWithName(name = '') {
             anchor: new window.google.maps.Point(25, 25)
         };
     }
-    return { url };
-}
-
-// AdvancedMarker removed: using legacy Marker for stability
-
-// Smart loader: only uses LoadScript if Google API not already present
-// SmartLoadScript removed. We'll inject the Google Maps script once via useEffect in the App component.
-
-// Paletas de cores
-const lightTheme = {
-    headerBg: '#0f172a',
-    headerText: '#f8fafc',
-    bg: '#f1f5f9',
-    card: '#ffffff',
-    primary: '#4f46e5',
-    accent: '#0ea5e9',
-    success: '#10b981',
-    danger: '#ef4444',
-    textMain: '#334155',
-    textLight: '#94a3b8',
-    shadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
-};
-
-const darkTheme = {
-    headerBg: '#071028',
-    headerText: '#e6eef8',
-    bg: '#071228',
-    card: '#0b1220',
-    primary: '#60a5fa',
-    accent: '#38bdf8',
-    success: '#34d399',
-    danger: '#f87171',
-    textMain: '#cbd5e1',
-    textLight: '#94a3b8',
-    shadow: '0 6px 18px rgba(0,0,0,0.6)'
-};
-
-// theme state will be set inside the App component
-// Status padrão para novas cargas — sempre em minúsculas
+                                        {(() => {
+                                            const motoristas = frota || [];
+                                            return motoristas?.filter(m => m.lat && m.lng).map((m) => (
+                                                <AdvancedMarker
+                                                    key={m.id}
+                                                    position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
+                                                >
+                                                    <div style={{ 
+                                                        display: 'flex', 
+                                                        flexDirection: 'column', 
+                                                        alignItems: 'center', 
+                                                        transform: 'translateY(-50%)', // Centraliza o ícone no ponto exato
+                                                        background: 'transparent' 
+                                                    }}>
+                                                        {/* Balão de Nome Profissional */}
+                                                        <div style={{ 
+                                                            backgroundColor: 'white', 
+                                                            color: '#1f2937', 
+                                                            padding: '3px 10px', 
+                                                            borderRadius: '12px', 
+                                                            fontSize: '12px', 
+                                                            fontWeight: '800', 
+                                                            boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)', 
+                                                            border: '1px solid #e5e7eb',
+                                                            marginBottom: '4px',
+                                                            whiteSpace: 'nowrap',
+                                                            zIndex: 1
+                                                        }}>
+                                                            {m.nome?.split(' ')[0]}
+                                                        </div>
+                                                        
+                                                        {/* Moto SVG Colorida com Piloto */}
+                                                        <svg width="75" height="75" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
+                                                            {/* Rodas */}
+                                                            <circle cx="25" cy="75" r="10" fill="#374151" stroke="#111827" strokeWidth="2"/>
+                                                            <circle cx="75" cy="75" r="10" fill="#374151" stroke="#111827" strokeWidth="2"/>
+                                                            
+                                                            {/* Baú */}
+                                                            <rect x="5" y="35" width="25" height="25" rx="2" fill="#9CA3AF" stroke="#374151" strokeWidth="2"/>
+                                                            
+                                                            {/* Corpo da Moto */}
+                                                            <path d="M30 65H70L80 40H40L30 65Z" fill="#4B5563" stroke="#1F2937" strokeWidth="2"/>
+                                                            
+                                                            {/* Piloto */}
+                                                            <path d="M45 40L52 25C52 20 62 20 62 25L68 40" stroke="#1E40AF" strokeWidth="6" strokeLinecap="round"/> {/* Tronco/Braço */}
+                                                            <circle cx="62" cy="18" r="8" fill="#EF4444"/> {/* Capacete */}
+                                                            <rect x="62" y="16" width="8" height="3" fill="#1F2937"/> {/* Viseira */}
+                                                            
+                                                            {/* Guidão e Detalhes */}
+                                                            <path d="M68 40L75 75M25 75L30 65" stroke="#1F2937" strokeWidth="2"/>
+                                                        </svg>
+                                                    </div>
+                                                </AdvancedMarker>
+                                            ));
+                                        })()}
 const NEW_LOAD_STATUS = 'aguardando';
 
 // --- LÓGICA (NÃO MEXEMOS EM NADA AQUI) ---
