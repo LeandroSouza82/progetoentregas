@@ -797,108 +797,36 @@ function App() {
 
                         {/* MAPA EM CARD (DIMINUÍDO E ELEGANTE) */}
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px' }}>
-                            <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden' }}>
-                                {googleLoaded ? (
-                                    <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
-                                        <Map
-                                            mapId="546bd17ef4a30773714756d8"
-                                            defaultCenter={{ lat: -27.6607, lng: -48.7087 }}
-                                            defaultZoom={15}
-                                            gestureHandling="greedy"
-                                            style={{ width: '100%', height: '100%' }}
-                                            renderingType={'VECTOR'}
-                                            tilt={45}
-                                            disableDefaultUI={false}
-                                            options={{ zoomControl: true, mapTypeControl: false, streetViewControl: true, fullscreenControl: true }}
-                                            onLoad={(map) => { mapRef.current = map; setGoogleLoaded(true); }}
-                                        >
-                                            {(() => {
-                                                const map = mapRef.current;
-                                                const latSel = selectedMotorista ? parseFloat(selectedMotorista.lat) : NaN;
-                                                const lngSel = selectedMotorista ? parseFloat(selectedMotorista.lng) : NaN;
-                                                const motoristas = frota; // alias seguro para seguir a nomenclatura solicitada
-                                                if (!map || !window.google || !window.google.maps) return null;
-                                                return (
-                                                    <>
-                                                        {/* Base / gestor (validação de coordenadas) */}
-                                                        {Array.isArray(gestorPosicao) && gestorPosicao.length >= 2 && !isNaN(parseFloat(gestorPosicao[0])) && (
-                                                            (() => {
-                                                                const lat = parseFloat(gestorPosicao[0]);
-                                                                const lng = parseFloat(gestorPosicao[1]);
-                                                                const url = numberedIconUrl('G');
-                                                                return (
-                                                                    <AdvancedMarker key="gestor" position={{ lat, lng }}>
-                                                                        <div style={{ transform: 'translate(-50%,-100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                                            <img src={url} alt="G" style={{ width: '36px', height: '36px' }} />
-                                                                        </div>
-                                                                    </AdvancedMarker>
-                                                                );
-                                                            })()
-                                                        )}
-
-                                                        {/* Entregas (rota) com validação de lat/lng e marcadores avançados */}
-                                                        {orderedRota?.map((p, i) => {
-                                                            const lat = Number(p.lat);
-                                                            const lng = Number(p.lng);
-                                                            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-                                                            const url = numberedIconUrl(p.ordem || (i + 1));
-                                                            return (
-                                                                <AdvancedMarker key={p.id} position={{ lat, lng }}>
-                                                                    <div style={{ transform: 'translate(-50%,-100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                                        <img src={url} alt={`#${p.ordem || (i + 1)}`} style={{ width: '36px', height: '36px' }} />
-                                                                    </div>
-                                                                </AdvancedMarker>
-                                                            );
-                                                        })}
-
-                                                        {/* Polylines removed — mapa exibe somente marcadores */}
-
-                                                        {motoristas?.filter(m => m.lat && m.lng).map((m) => (
-                                                            <AdvancedMarker
-                                                                key={m.id}
-                                                                position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
-                                                                collisionBehavior="REQUIRED"
-                                                                zIndex={1000}
-                                                            >
-                                                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
-                                                                    <div style={{
-                                                                        backgroundColor: 'white', color: 'black', padding: '2px 8px',
-                                                                        borderRadius: '10px', fontSize: '11px', fontWeight: 'bold',
-                                                                        boxShadow: '0 2px 4px rgba(0,0,0,0.3)', marginBottom: '5px'
-                                                                    }}>
-                                                                        {m.nome?.split('\n')[0]}
-                                                                    </div>
-                                                                    <img
-                                                                        src="/vermelha.svg"
-                                                                        style={{ width: '45px', height: '45px', transform: `rotate(${m.heading || 0}deg)` }}
-                                                                    />
-                                                                </div>
-                                                            </AdvancedMarker>
-                                                        ))}
-
-                                                        {!isNaN(latSel) && !isNaN(lngSel) && (
-                                                            <AdvancedMarker position={{ lat: latSel, lng: lngSel }} onClick={() => setSelectedMotorista(null)}>
-                                                                <div style={{ transform: 'translateY(-60px)', minWidth: '160px', background: 'white', padding: '8px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                        {selectedMotorista.avatar_path ? (
-                                                                            <img src={selectedMotorista.avatar_path} alt={selectedMotorista.nome} style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover' }} />
-                                                                        ) : null}
-                                                                        <div>
-                                                                            <div style={{ fontWeight: '700' }}>{selectedMotorista.nome}</div>
-                                                                            <div style={{ fontSize: '12px', color: selectedMotorista.esta_online ? theme.success : theme.danger }}>{selectedMotorista.esta_online ? 'Online' : 'Offline'}</div>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </AdvancedMarker>
-                                                        )}
-                                                    </>
-                                                );
-                                            })()}
-                                        </Map>
-                                    </APIProvider>
-                                ) : (
-                                    <div style={{ width: '100%', height: '100%' }} />
-                                )}
+                            <div style={{ height: '500px', width: '100%', position: 'relative' }}>
+                                <APIProvider apiKey={'SUA_CHAVE_AQUI'}>
+                                    <Map
+                                        mapId="546bd17ef4a30773714756d8"
+                                        defaultCenter={{ lat: -27.6607, lng: -48.7087 }}
+                                        defaultZoom={15}
+                                        gestureHandling="greedy"
+                                        style={{ width: '100%', height: '100%' }}
+                                    >
+                                        {motoristas?.map((m) => {
+                                            const lat = parseFloat(m.lat);
+                                            const lng = parseFloat(m.lng);
+                                            if (isNaN(lat) || isNaN(lng)) return null;
+                                            return (
+                                                <AdvancedMarker
+                                                    key={m.id}
+                                                    position={{ lat, lng }}
+                                                    collisionBehavior="REQUIRED"
+                                                >
+                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                                        <div style={{ backgroundColor: 'white', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', color: 'black', marginBottom: '5px', boxShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>
+                                                            {m.nome?.split('\n')[0]}
+                                                        </div>
+                                                        <img src="/vermelha.svg" style={{ width: '45px', height: '45px', transform: `rotate(${m.heading || 0}deg)` }} />
+                                                    </div>
+                                                </AdvancedMarker>
+                                            );
+                                        })}
+                                    </Map>
+                                </APIProvider>
                             </div>
                         </div>
 
