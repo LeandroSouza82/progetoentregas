@@ -371,6 +371,19 @@ function App() {
     // Forçar centro em Santa Catarina (coordenadas do Leandro, ID 1)
     const mapCenter = { lat: -27.660773, lng: -48.708722 };
 
+    // SmoothMarker: mantém posição exibida localmente para permitir transições CSS suaves
+    const SmoothMarker = ({ m }) => {
+        const [displayPos, setDisplayPos] = useState({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
+        useEffect(() => {
+            // Ao receber novas coordenadas do Supabase, atualiza gradualmente o estado exibido
+            setDisplayPos({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
+        }, [m.lat, m.lng]);
+
+        return (
+            <SmoothMarker key={m.id} m={m} />
+        );
+    };
+
     // Helpers para cores por tipo de carga
     const getColorForType = (tipo) => {
         const t = String(tipo || '').trim().toLowerCase();
@@ -378,6 +391,21 @@ function App() {
         if (t === 'recolha') return '#f59e0b'; // laranja
         if (t === 'outros' || t === 'outro') return '#a855f7'; // lilás
         return '#10b981'; // verde livre / padrão
+        const [displayPos, setDisplayPos] = useState({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
+        useEffect(() => {
+            // Ao receber novas coordenadas do Supabase, atualiza gradualmente o estado exibido
+            setDisplayPos({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
+        }, [m.lat, m.lng]);
+        return (
+            <AdvancedMarker key={m.id} position={{ lat: Number(displayPos.lat), lng: Number(displayPos.lng) }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', transition: 'all 1.5s linear', position: 'relative' }}>
+                    <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
+                        {m.nome?.split(' ')[0] || 'Entregador'}
+                    </div>
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${zoomLevel > 15 ? 48 : 32}px`, height: `${zoomLevel > 15 ? 48 : 32}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
+                </div>
+            </AdvancedMarker>
+        );
     };
 
     const getDriverServiceType = (motoristaId) => {
@@ -412,17 +440,33 @@ function App() {
             if (motorErr) {
                 console.warn('carregarDados: erro ao buscar motoristas', motorErr);
                 setFrota([]);
-            } else {
-                // Normalizar lat/lng para Number (trim prior) antes de salvar no estado
-                const normalized = (motoristas || []).map(m => ({
-                    ...m,
-                    lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
-                    lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
-                }));
-                setFrota(normalized);
-                // Debug: registrar dados brutos vindos do Supabase (normalizados)
-                try { console.log('Dados do Supabase:', normalized); } catch (e) { /* ignore */ }
-            }
+                } else {
+                    // Normalizar lat/lng para Number (trim prior) antes de salvar no estado
+                    const normalized = (motoristas || []).map(m => ({
+                        ...m,
+                        lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
+                        lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
+                    }));
+
+                    // Merge conservador: preserve referências dos objetos não alterados para permitir transições suaves
+                    setFrota(prev => {
+                        try {
+                            const byId = new Map((prev || []).map(p => [p.id, p]));
+                            const merged = normalized.map(n => {
+                                const existing = byId.get(n.id);
+                                if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
+                                    return existing; // preserve reference when nada mudou
+                                }
+                                return n;
+                            });
+                            return merged;
+                        } catch (e) {
+                            return normalized;
+                        }
+                    });
+                    // Debug: registrar dados brutos vindos do Supabase (normalizados)
+                    try { console.log('Dados do Supabase:', normalized); } catch (e) { /* ignore */ }
+                }
         } catch (e) { console.warn('Erro carregando motoristas:', e); setFrota([]); }
 
         // entregas: novas cargas — filtro rigoroso pela string exata definida em NEW_LOAD_STATUS
