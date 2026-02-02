@@ -497,6 +497,8 @@ function App() {
     const [estimatedTimeText, setEstimatedTimeText] = useState(null);
     const [distanceCalculating, setDistanceCalculating] = useState(false);
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
+    const [logsHistory, setLogsHistory] = useState([]);
+    const [showLogsPopover, setShowLogsPopover] = useState(false);
 
     // Helpers: Haversine formula (returns km)
     function haversineKm(a, b) {
@@ -1477,6 +1479,8 @@ function App() {
     const recalcRotaForMotorista = React.useCallback(async (motoristaId) => {
         try {
             if (!motoristaId) return;
+            // capture previous distance for audit
+            const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
             // Fetch motorista to ensure online and get current lat/lng
             const { data: mdata, error: merr } = await supabase.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId);
             if (merr) { console.warn('recalcRotaForMotorista: erro ao buscar motorista:', merr); return; }
@@ -1514,18 +1518,20 @@ function App() {
             try { setDistanceCalculating(false); } catch (e) { }
 
             // Persist ordem_logistica per item (índice + 1) — use sequential for..of to guarantee write order and logging
+            let newOrderIds = [];
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
                     for (let i = 0; i < optimized.length; i++) {
                         const item = optimized[i];
                         const pid = item && item.id;
                         if (!pid) continue;
+                        newOrderIds.push(pid);
                         try {
-                            const { error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                            const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
                             if (error) {
                                 console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
                             } else {
-                                console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: Number(i + 1) });
+                                console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: Number(i + 1), returned: updData });
                             }
                         } catch (err) {
                             console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
@@ -1535,6 +1541,22 @@ function App() {
                     try { await carregarDados(); } catch (err) { /* non-blocking */ }
                 }
             } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
+
+            // After persistence, create an audit log entry with previous/new distances and the new order
+            try {
+                if (motoristaId != null) {
+                    try {
+                        const prevDist = Number(previousDistanceKm) || null;
+                        const newDist = Number((drawResult && drawResult.meters ? drawResult.meters / 1000 : (estimatedDistanceKm || null))) || null;
+                        const payload = [{ motorista_id: motoristaId, distancia_antiga: prevDist, distancia_nova: newDist, created_at: (new Date()).toISOString(), nova_ordem: Array.isArray(newOrderIds) ? newOrderIds : [] }];
+                        const { data: logData, error: logErr } = await supabase.from('logs_roteirizacao').insert(payload);
+                        if (logErr) console.error('recalcRotaForMotorista: falha ao gravar log_roteirizacao', logErr);
+                        else console.log('recalcRotaForMotorista: log_roteirizacao gravado', logData);
+                        // refresh local logs preview
+                        try { await fetchLogsForMotorista(String(motoristaId)); } catch (e) { /* ignore */ }
+                    } catch (e) { console.error('recalcRotaForMotorista: exceção ao gravar log_roteirizacao', e); }
+                }
+            } catch (e) { /* ignore */ }
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
@@ -1568,6 +1590,18 @@ function App() {
             console.warn('recalcRotaForMotorista failed:', e);
         }
     }, [pontoPartida, mapCenterState]);
+
+    // Fetch last 3 logs for a given motorista
+    async function fetchLogsForMotorista(motoristaId) {
+        try {
+            if (!motoristaId) { setLogsHistory([]); return; }
+            const { data, error } = await supabase.from('logs_roteirizacao').select('*').eq('motorista_id', motoristaId).order('created_at', { ascending: false }).limit(3);
+            if (error) { console.error('fetchLogsForMotorista: erro', error); setLogsHistory([]); return; }
+            setLogsHistory(Array.isArray(data) ? data : []);
+        } catch (e) { console.error('fetchLogsForMotorista: exceção', e); setLogsHistory([]); }
+    }
+
+    useEffect(() => { try { if (motoristaDaRota && motoristaDaRota.id) fetchLogsForMotorista(String(motoristaDaRota.id)); else setLogsHistory([]); } catch (e) { /* ignore */ } }, [motoristaDaRota]);
 
     // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
     useEffect(() => {
@@ -2084,8 +2118,22 @@ function App() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
                             <h2>Fila de Preparação</h2>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ color: theme.textLight, fontWeight: 700 }}>
-                                    Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null && estimatedTimeText != null) ? `${estimatedDistanceKm} KM | ${estimatedTimeText}` : (distanceCalculating ? 'Calculando...' : 'Calculando...')}</span>
+                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div>Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null && estimatedTimeText != null) ? `${estimatedDistanceKm} KM | ${estimatedTimeText}` : (distanceCalculating ? 'Calculando...' : 'Calculando...')}</span></div>
+                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px' }}>📜</button>
+                                    {showLogsPopover && (
+                                        <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
+                                            <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
+                                            {logsHistory.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
+                                                logsHistory.map((l, i) => (
+                                                    <div key={i} style={{ padding: '6px 0', borderBottom: i < logsHistory.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                                        <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
+                                                        <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>🔄 REORGANIZAR ROTA</button>
