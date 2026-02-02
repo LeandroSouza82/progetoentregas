@@ -491,6 +491,36 @@ function App() {
     const draftPolylineRef = useRef(null);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
+    // Distance and driver-select mode state
+    const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
+    const [distanceCalculating, setDistanceCalculating] = useState(false);
+    const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
+
+    // Helpers: Haversine formula (returns km)
+    function haversineKm(a, b) {
+        const toRad = (deg) => deg * Math.PI / 180;
+        const R = 6371; // Earth radius in km
+        const dLat = toRad(Number(b.lat) - Number(a.lat));
+        const dLon = toRad(Number(b.lng) - Number(a.lng));
+        const lat1 = toRad(Number(a.lat));
+        const lat2 = toRad(Number(b.lat));
+        const sinHalf = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(sinHalf), Math.sqrt(1 - sinHalf));
+        return R * c;
+    }
+
+    function computeRouteDistanceKm(origin, list = [], base = null) {
+        try {
+            const pts = [];
+            if (origin && origin.lat != null && origin.lng != null) pts.push({ lat: Number(origin.lat), lng: Number(origin.lng) });
+            (list || []).forEach(p => { if (p && p.lat != null && p.lng != null) pts.push({ lat: Number(p.lat), lng: Number(p.lng) }); });
+            if (base && base.lat != null && base.lng != null) pts.push({ lat: Number(base.lat), lng: Number(base.lng) });
+            if (pts.length < 2) return 0;
+            let sum = 0;
+            for (let i = 1; i < pts.length; i++) sum += haversineKm(pts[i - 1], pts[i]);
+            return sum; // in km
+        } catch (e) { return 0; }
+    }
     const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
     const [mensagemGeral, setMensagemGeral] = useState('');
@@ -673,6 +703,13 @@ function App() {
                 const optimized = await otimizarRotaComGoogle(origin, list, null);
                 if (!mounted) return;
                 setDraftPreview((optimized && optimized.length > 0) ? optimized : list);
+                // Compute estimated distance for preview (non-persistent)
+                try {
+                    setDistanceCalculating(true);
+                    const pts = (optimized && optimized.length > 0) ? optimized : list;
+                    const dist = computeRouteDistanceKm(origin, pts, pontoPartida || mapCenterState || DEFAULT_MAP_CENTER);
+                    setEstimatedDistanceKm(Number(dist.toFixed(1)));
+                } catch (e) { /* ignore */ } finally { setDistanceCalculating(false); }
             } catch (e) {
                 console.warn('draftPreview: erro ao calcular pré-roteiro', e);
                 if (mounted) setDraftPreview([]);
@@ -1344,6 +1381,12 @@ function App() {
                     if (path && path.length > 0) {
                         const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
                         routePolylineRef.current = poly;
+                        // If legs are available, compute precise distance
+                        try {
+                            const legs = res.routes?.[0]?.legs || [];
+                            const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
+                            if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
+                        } catch (e) { /* ignore */ }
                         return;
                     }
                 } catch (e) {
@@ -1356,6 +1399,14 @@ function App() {
             if (path && path.length > 1 && window.google && window.google.maps) {
                 const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
                 routePolylineRef.current = poly;
+                try {
+                    // compute haversine sum
+                    let meters = 0;
+                    for (let i = 1; i < path.length; i++) {
+                        meters += haversineKm(path[i - 1], path[i]) * 1000;
+                    }
+                    if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
+                } catch (e) { /* ignore */ }
             }
         } catch (e) {
             console.warn('drawRouteOnMap failed:', e);
@@ -1393,7 +1444,9 @@ function App() {
             if (!remainingForDriver || remainingForDriver.length === 0) return;
 
             // Compute optimized order using company HQ as final destination and respecting driver position via motoristaId
+            try { setDistanceCalculating(true); } catch (e) { }
             const optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
+            try { setDistanceCalculating(false); } catch (e) { }
 
             // Draw on map (include HQ if necessary). Always pass company HQ as the destination to keep base as final point
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
@@ -1597,7 +1650,9 @@ function App() {
             try { audioRef.current.play().catch(() => { }); } catch (e) { }
             let rotaOtimizada = [];
             try {
+                try { setDistanceCalculating(true); } catch (e) { }
                 rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, entregasEmEspera, motoristaIdVal);
+                try { setDistanceCalculating(false); } catch (e) { }
                 if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
             } catch (e) {
                 // fallback para algoritmo local em caso de erro com Google API
@@ -1648,6 +1703,13 @@ function App() {
                     const pid = pedido.id;
                     rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_logistica: i + 1, motorista_id: motoristaIdVal, id: pid };
                 }
+
+                // Update estimated distance (after assignment)
+                try {
+                    const originForCalc = mapCenterState || pontoPartida || DEFAULT_MAP_CENTER;
+                    const dist = computeRouteDistanceKm(originForCalc, rotaOtimizada, originForCalc);
+                    setEstimatedDistanceKm(Number(dist.toFixed(1)));
+                } catch (e) { /* ignore */ }
 
                 // Only close modal and clear selection if update succeeded
                 if (!updErr) {
@@ -1908,8 +1970,16 @@ function App() {
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
                             <h2>Fila de Preparação</h2>
-                            <button onClick={dispararRota} style={{ ...btnStyle(theme.success), width: 'auto' }}>🚀 DISPARAR ROTA (WHATSAPP)</button>
-                        </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ color: theme.textLight, fontWeight: 700 }}>
+                                    Distância Estimada: <span style={{ color: theme.primary }}>{(entregasEmEspera && entregasEmEspera.some(p => Number(p.ordem_logistica) > 0) && estimatedDistanceKm != null) ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando distância...' : 'Calculando distância...')}</span>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>🔄 REORGANIZAR ROTA</button>
+                                    <button onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} style={{ ...btnStyle(theme.success), width: 'auto' }}>ENVIAR ROTA</button>
+                                </div>
+                            </div>
+                        </div>"}]}
                         {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
                                 {entregasEmEspera?.map(p => (
@@ -2075,11 +2145,32 @@ function App() {
             </main>
 
             {/* Driver selection modal (componente minimalista) */}
+
+            // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
+            async function handleDriverSelect(m) {
+                if (!m || !m.id) return;
+                if (driverSelectMode === 'dispatch') {
+                    return assignDriver(m);
+                }
+                // reoptimize path for selected driver (no send)
+                setDispatchLoading(true);
+                try {
+                    await recalcRotaForMotorista(String(m.id));
+                    try { alert('✅ Rota re-otimizada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
+                } catch (e) {
+                    console.warn('handleDriverSelect (reopt) failed:', e);
+                    try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+                } finally {
+                    setDispatchLoading(false);
+                }
+            }
+
             <DriverSelectModal
                 visible={showDriverSelect}
                 onClose={() => { setShowDriverSelect(false); setSelectedMotorista(null); }}
                 frota={frota}
-                onSelect={assignDriver}
+                onSelect={handleDriverSelect}
+                driverSelectMode={driverSelectMode}
                 setSelectedMotorista={setSelectedMotorista}
                 theme={theme}
                 loading={dispatchLoading}
@@ -2106,7 +2197,7 @@ const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border
 const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
 
 // Modal minimalista para seleção de motorista online
-function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null }) {
+function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null, driverSelectMode = 'dispatch' }) {
     const [localSelected, setLocalSelected] = useState(null);
     useEffect(() => { if (!visible) setLocalSelected(null); }, [visible]);
     if (!visible) return null;
@@ -2119,13 +2210,15 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
         try {
             await onSelect(m);
         } catch (err) {
-            try { alert('Falha ao enviar rota: ' + (err && err.message ? err.message : String(err))); } catch (e) { /* ignore */ }
+            try { alert('Falha ao executar ação: ' + (err && err.message ? err.message : String(err))); } catch (e) { /* ignore */ }
         } finally {
             // garante limpeza do estado local e fecha modal sem travar a UI
             try { setLocalSelected(null); } catch (e) { }
             try { onClose(); } catch (e) { }
         }
     };
+
+    const actionLabel = driverSelectMode === 'reopt' ? 'REORGANIZAR ROTA' : 'ENVIAR ROTA';
 
     return (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
@@ -2147,7 +2240,7 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
                                     </button>
                                 </div>
                                 <div>
-                                    <button disabled={loading} onClick={() => handleSelect(m)} style={{ ...btnStyle(theme.primary), width: '140px' }}>{loading ? 'Enviando...' : 'Enviar Rota'}</button>
+                                    <button disabled={loading} onClick={() => handleSelect(m)} style={{ ...btnStyle(theme.primary), width: '140px' }}>{loading ? (driverSelectMode === 'reopt' ? 'Processando...' : 'Enviando...') : actionLabel}</button>
                                 </div>
                             </div>
                         ))
