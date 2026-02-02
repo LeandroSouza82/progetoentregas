@@ -19,12 +19,12 @@ import { chromium } from 'playwright';
         await page.click('text=Central de Despacho');
         await page.waitForTimeout(300);
 
-        // Click DISPARAR ROTA
-        await page.click('button:has-text("DISPARAR ROTA")');
+        // Click ENVIAR ROTA (header)
+        await page.click('button:has-text("ENVIAR ROTA")');
         await page.waitForSelector('text=Selecionar Motorista');
 
-        // Click the first 'Enviar Rota' button in modal
-        const sendButtons = await page.$$('button:has-text("Enviar Rota")');
+        // Click the first 'ENVIAR ROTA' button in modal
+        const sendButtons = await page.$$('button:has-text("ENVIAR ROTA")');
         if (sendButtons.length === 0) {
             console.log('ERRO: nenhum motorista online encontrado para enviar rota.');
             await browser.close();
