@@ -2272,6 +2272,13 @@ function App() {
                                                 ))}
                                             </div>
                                         )}
+
+                                        {/* If Places is unavailable, show a small hint and keep the input usable for manual paste */}
+                                        { (googleQuotaExceeded || !predictionServiceRef.current) && (
+                                            <div style={{ marginTop: '8px', color: '#f8e9c2', fontSize: '12px' }}>
+                                                { googleQuotaExceeded ? 'Busca de endereços via Google indisponível hoje — cole o endereço manualmente ou escolha do Histórico.' : 'Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.' }
+                                            </div>
+                                        )}
                                     </div>
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
