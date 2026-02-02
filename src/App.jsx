@@ -480,6 +480,11 @@ function App() {
     const [nomeGestor, setNomeGestor] = useState(null);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
+
+    // Draft preview state: a temporary point selected by gestor and the optimized preview order
+    const [draftPoint, setDraftPoint] = useState(null);
+    const [draftPreview, setDraftPreview] = useState([]);
+    const draftPolylineRef = useRef(null);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     const [observacoesGestor, setObservacoesGestor] = useState('');
@@ -552,6 +557,30 @@ function App() {
         return () => { try { if (ro && typeof ro.disconnect === 'function') ro.disconnect(); } catch (e) { }; clearTimeout(t); };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mapCenterState]);
+
+    // Draft polyline drawing: dashed preview connecting origin + draftPreview points
+    useEffect(() => {
+        try {
+            if (!mapRef.current || !draftPreview || draftPreview.length === 0) {
+                try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { }
+                return;
+            }
+            if (!window.google || !window.google.maps) return;
+            // remove existing
+            try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { }
+            const path = [ (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER ].concat((draftPreview || []).map(pp => ({ lat: Number(pp.lat), lng: Number(pp.lng) })));
+            const poly = new window.google.maps.Polyline({
+                path,
+                strokeColor: '#60a5fa',
+                strokeOpacity: 0.85,
+                strokeWeight: 3,
+                icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 }, offset: '0', repeat: '12px' }],
+                map: mapRef.current
+            });
+            draftPolylineRef.current = poly;
+        } catch (e) { console.warn('Erro desenhando draft polyline', e); }
+        return () => { try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { } };
+    }, [draftPreview, pontoPartida, mapCenterState]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
 
@@ -614,6 +643,39 @@ function App() {
             catch (e) { }
         };
     }, [abaAtiva]);
+
+    // Draft point: set when gestor seleciona um endereço via Autocomplete
+    useEffect(() => {
+        if (!enderecoCoords || !enderecoEntrega) { setDraftPoint(null); return; }
+        try {
+            setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: Number(enderecoCoords.lat), lng: Number(enderecoCoords.lng), tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
+        } catch (e) {
+            setDraftPoint(null);
+        }
+    }, [enderecoCoords, enderecoEntrega, tipoEncomenda, nomeCliente]);
+
+    // Draft preview optimization: compute suggested order for entregasEmEspera + draftPoint (visual only)
+    useEffect(() => {
+        let mounted = true;
+        (async () => {
+            try {
+                const list = Array.isArray(entregasEmEspera) ? entregasEmEspera.slice() : [];
+                if (draftPoint) list.push(draftPoint);
+                if (!list || list.length === 0) {
+                    setDraftPreview([]);
+                    return;
+                }
+                const origin = pontoPartida || mapCenterState || DEFAULT_MAP_CENTER;
+                const optimized = await otimizarRotaComGoogle(origin, list, null);
+                if (!mounted) return;
+                setDraftPreview((optimized && optimized.length > 0) ? optimized : list);
+            } catch (e) {
+                console.warn('draftPreview: erro ao calcular pré-roteiro', e);
+                if (mounted) setDraftPreview([]);
+            }
+        })();
+        return () => { mounted = false; };
+    }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState, gmapsLoaded]);
 
     // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
     const carregarDados = React.useCallback(async () => {
@@ -1434,7 +1496,13 @@ function App() {
             status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
             observacoes: obsValue
         }]);
-        if (!error) { alert("✅ Salvo com sucesso!"); setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); carregarDados(); }
+        if (!error) {
+            alert("✅ Salvo com sucesso!");
+            setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null);
+            // clear draft preview point after persisting
+            setDraftPoint(null);
+            try { carregarDados(); } catch (e) { }
+        }
     };
 
     const excluirPedido = async (id) => {
@@ -1674,6 +1742,10 @@ function App() {
                                                     >
                                                         <BotoesMapa />
                                                         <MarkerList frota={frota} mapsLib={mapsLib} zoomLevel={zoomLevel} onSelect={setSelectedMotorista} />
+                                                        {/* Pending markers (pre-dispatch) */}
+                                                        <DeliveryMarkers list={entregasEmEspera} mapsLib={mapsLib} />
+                                                        {/* Draft preview markers (includes draftPoint) */}
+                                                        <DeliveryMarkers list={draftPreview} mapsLib={mapsLib} isPreview={true} />
                                                         <DeliveryMarkers list={orderedRota} mapsLib={mapsLib} />
                                                     </MapComp>
                                                 </ErrorBoundary>
