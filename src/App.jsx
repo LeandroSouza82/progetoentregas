@@ -343,8 +343,8 @@ function App() {
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
-    // Estado para mostrar mensagens de aprovação via rota (/aprovar?id=...)
-    const [approvalMessage, setApprovalMessage] = useState(null);
+    // Estado para controlar a tela exclusiva de aprovação (/aprovar)
+    const [approvalLanding, setApprovalLanding] = useState(null);
 
     useEffect(() => {
         // Detecta rota de aprovação: /aprovar?id=UUID
@@ -355,21 +355,32 @@ function App() {
             const params = new URLSearchParams(window.location.search);
             const id = params.get('id');
             if (!id) {
-                setApprovalMessage('Link inválido. ID ausente.');
+                setApprovalLanding({ show: true, success: false, message: 'Link inválido. ID ausente.' });
                 return;
             }
             (async () => {
                 try {
-                    const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', id);
+                    // Aprovar o motorista e retornar os dados atualizados (incluindo telefone)
+                    const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', id).select();
                     if (error) {
-                        setApprovalMessage('Falha ao ativar cadastro: ' + (error.message || JSON.stringify(error)));
+                        setApprovalLanding({ show: true, success: false, message: 'Falha ao ativar cadastro: ' + (error.message || JSON.stringify(error)) });
                     } else {
-                        setApprovalMessage('Parabéns! Seu cadastro foi ativado. Abra o App V10 para trabalhar.');
-                        // Remover query para evitar re-execução em refresh
-                        try { window.history.replaceState({}, document.title, '/'); } catch (e) { /* ignore */ }
+                        const motorista = Array.isArray(data) ? data[0] : data;
+                        const telefone = motorista?.telefone || null;
+                        // Enviar/abrir WhatsApp com mensagem final (se existir telefone)
+                        if (telefone) {
+                            const finalMsg = 'Parabéns! Seu cadastro no V10 foi aprovado. Você já pode abrir o seu aplicativo e começar a trabalhar! 🚀';
+                            const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(String(telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(finalMsg)}`;
+                            try { window.open(waUrl, '_blank'); } catch (e) { /* ignore */ }
+                        }
+
+                        // Para evitar re-execução em reload, substitui o histórico para /aprovar?processed=1
+                        try { window.history.replaceState({}, document.title, '/aprovar?processed=1'); } catch (e) { /* ignore */ }
+
+                        setApprovalLanding({ show: true, success: true, message: 'V10 DASHBOARD - CADASTRO ATIVADO! 🎉', telefone });
                     }
                 } catch (e) {
-                    setApprovalMessage('Erro ao processar ativação.');
+                    setApprovalLanding({ show: true, success: false, message: 'Erro ao processar ativação.' });
                 }
             })();
         } catch (e) { /* ignore */ }
@@ -523,7 +534,20 @@ function App() {
                 console.error('aprovarMotorista db error:', error);
                 return { error };
             }
+            // Tenta extrair telefone do registro atualizado
+            const motorista = Array.isArray(data) ? data[0] : data;
+            const telefone = motorista?.telefone || null;
+
+            // Atualiza a lista no dashboard
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
+
+            // Dispara mensagem de parabéns via WhatsApp (abre nova janela para que o gestor confirme envio)
+            if (telefone) {
+                const finalMsg = 'Parabéns! Seu cadastro no V10 foi aprovado. Você já pode abrir o seu aplicativo e começar a trabalhar! 🚀';
+                const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(String(telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(finalMsg)}`;
+                try { window.open(waUrl, '_blank'); } catch (e) { /* ignore */ }
+            }
+
             return { data };
         } catch (e) {
             console.error('aprovarMotorista error:', e);
@@ -1078,6 +1102,22 @@ function App() {
     // Use explicit aprovado boolean to split lists
     const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
     const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
+    // Se estivermos na página de aprovação (/aprovar), renderiza apenas a tela de sucesso para o motorista
+    if (approvalLanding && approvalLanding.show) {
+        return (
+            <div style={{ minHeight: '100vh', width: '100vw', backgroundColor: '#071228', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', boxSizing: 'border-box', fontFamily: "'Inter', sans-serif" }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#e6eef8', marginBottom: '12px' }}>V10 DASHBOARD - CADASTRO ATIVADO! 🎉</div>
+                    <p style={{ color: '#cbd5e1', marginBottom: '18px' }}>{approvalLanding.success ? 'Seu cadastro foi ativado com sucesso.' : (approvalLanding.message || 'Status desconhecido.')}</p>
+                    <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+                        <button onClick={() => { try { window.location.href = '/motorista'; } catch (e) { } }} style={{ padding: '12px 18px', borderRadius: '10px', border: 'none', background: '#10b981', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>ABRIR MEU APLICATIVO</button>
+                        <button onClick={() => { try { window.location.href = '/'; } catch (e) { } }} style={{ padding: '12px 18px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>VOLTAR AO SITE</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
 
@@ -1139,13 +1179,7 @@ function App() {
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
-            {approvalMessage && (
-                <div style={{ position: 'fixed', top: 100, left: 0, right: 0, display: 'flex', justifyContent: 'center', zIndex: 1400 }}>
-                    <div style={{ background: '#06314b', color: '#fff', padding: '16px 20px', borderRadius: '10px', boxShadow: '0 10px 30px rgba(0,0,0,0.6)', maxWidth: '720px', textAlign: 'center' }}>
-                        {approvalMessage}
-                    </div>
-                </div>
-            )}
+
 
             <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
 
