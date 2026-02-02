@@ -279,7 +279,9 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
             if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
             const directionsService = new window.google.maps.DirectionsService();
             const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
-            const request = { origin: originLatLng, destination: originLatLng, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
+            // Destination MUST be the company base (pontoPartida param) or mapCenter fallback
+            const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : (mapCenterState || DEFAULT_MAP_CENTER);
+            const request = { origin: originLatLng, destination: baseCoord, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
             const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
             const wpOrder = res.routes?.[0]?.waypoint_order || null;
             if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) orderedIndices = wpOrder;
@@ -302,28 +304,30 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     if (includeHQ) {
         // Persist ordem_entrega with HQ virtual waypoint inserted after the first chunk
         try {
-            // First chunk
-            for (let i = 0; i < ordered.length; i++) {
-                const pedido = ordered[i];
-                const pid = pedido.id;
-                if (!pid) continue;
-                const ordem = i + 1;
-                await supabase.from('entregas').update({ ordem_entrega: Number(ordem) }).eq('id', pid);
+            if (motoristaId != null) {
+                for (let i = 0; i < ordered.length; i++) {
+                    const pedido = ordered[i];
+                    const pid = pedido.id;
+                    if (!pid) continue;
+                    const ordem = i + 1;
+                    await supabase.from('entregas').update({ ordem_entrega: Number(ordem) }).eq('id', pid);
+                }
             }
         } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_entrega com HQ', e); }
         return ordered; // Map drawing logic will insert HQ waypoint visually
     }
 
-    // Persist ordem_entrega when normal
+    // Persist ordem_entrega when normal (only if motoristaId is provided - preview mode should NOT persist)
     try {
-        for (let i = 0; i < ordered.length; i++) {
-            const pedido = ordered[i];
-            const pid = pedido.id;
-            if (!pid) continue;
-            await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+        if (motoristaId != null) {
+            for (let i = 0; i < ordered.length; i++) {
+                const pedido = ordered[i];
+                const pid = pedido.id;
+                if (!pid) continue;
+                await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+            }
         }
     } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_entrega', e); }
-
     return ordered;
 }
 
@@ -1296,7 +1300,8 @@ function App() {
                 try {
                     const directionsService = new window.google.maps.DirectionsService();
                     const dsWaypoints = waypts.map(w => ({ location: w, stopover: true }));
-                    const request = { origin, destination: origin, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
+                    const baseDest = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
+                    const request = { origin, destination: baseDest, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
                     const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
                     const path = res.routes?.[0]?.overview_path || null;
                     if (path && path.length > 0) {
