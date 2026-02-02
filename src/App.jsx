@@ -764,7 +764,6 @@ function App() {
                     if (!raw) return;
                     if (String(raw).includes('f6a9')) {
                         localStorage.removeItem(k);
-                        console.log('Removed legacy motorista id from localStorage key', k);
                     }
                 } catch (e) { /* ignore */ }
             });
@@ -1053,7 +1052,6 @@ function App() {
             .channel('rastreio-v10')
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas' }, (payload) => {
                 try {
-                    console.log('📡 GPS CHEGOU DO BANCO:', payload.new);
                     const rec = payload.new || payload.record || null;
                     if (!rec || !rec.id) return;
                     const parsed = { ...rec };
@@ -1123,7 +1121,7 @@ function App() {
                 try {
                     const directionsService = new window.google.maps.DirectionsService();
                     const dsWaypoints = waypts.map(w => ({ location: w, stopover: true }));
-                    const request = { origin, destination: origin, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: false };
+                    const request = { origin, destination: origin, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
                     const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
                     const path = res.routes?.[0]?.overview_path || null;
                     if (path && path.length > 0) {
