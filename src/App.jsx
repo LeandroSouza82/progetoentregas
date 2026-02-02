@@ -759,8 +759,18 @@ function App() {
         try {
             let q = supabase.from('entregas').select('*');
             if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
+            // Prefer server-side ordering by ordem_entrega when supported
+            if (q && typeof q.order === 'function') q = q.order('ordem_entrega', { ascending: true });
             const { data: entregasPend, error: entregasErr } = await q;
-            if (entregasErr) { console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr); setEntregasEmEspera([]); } else setEntregasEmEspera(entregasPend || []);
+            if (entregasErr) {
+                console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
+                setEntregasEmEspera([]);
+            } else {
+                const list = entregasPend || [];
+                // fallback local sort if server didn't order
+                const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_entrega) || 0) - (Number(b.ordem_entrega) || 0)) : list;
+                setEntregasEmEspera(sorted);
+            }
         } catch (e) {
             console.warn('Erro carregando entregas (filtro de status):', e);
             // preserve previous entregasEmEspera if available
@@ -1101,7 +1111,7 @@ function App() {
             const lat = Number(p.lat);
             const lng = Number(p.lng);
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-            const num = p.ordem || (idx + 1);
+            const num = (p.ordem_entrega != null && Number.isFinite(Number(p.ordem_entrega))) ? Number(p.ordem_entrega) : (p.ordem || (idx + 1));
             const tipo = String(p.tipo || 'Entrega');
             const color = colorForType(tipo);
             const MarkerComp = mapsLib.AdvancedMarker;
@@ -1277,7 +1287,7 @@ function App() {
     const routePolylineRef = useRef(null);
 
     // Draw route on map: prefer DirectionsService to get a smooth polyline, otherwise connect points
-    async function drawRouteOnMap(origin, orderedList = [], includeHQ = false, pontoPartida = null) {
+    async function drawRouteOnMap(origin, orderedList = [], includeHQ = false, pontoPartida = null, motoristaId = null) {
         try {
             // Clean previous polyline
             try { if (routePolylineRef.current) { routePolylineRef.current.setMap(null); routePolylineRef.current = null; } } catch (e) { }
@@ -1303,6 +1313,33 @@ function App() {
                     const baseDest = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
                     const request = { origin, destination: baseDest, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
                     const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
+                    // Extract waypoint_order from response (source of truth)
+                    const wpOrder = res.routes?.[0]?.waypoint_order || null;
+                    // If we have a waypoint_order, reorder orderedList accordingly
+                    if (Array.isArray(wpOrder) && wpOrder.length === waypts.length && orderedList && orderedList.length === waypts.length) {
+                        try {
+                            const newOrdered = wpOrder.map(i => orderedList[i]);
+                            // Persist ordem_entrega for motorista (if provided)
+                            if (motoristaId != null) {
+                                for (let i = 0; i < newOrdered.length; i++) {
+                                    const pid = newOrdered[i] && newOrdered[i].id ? newOrdered[i].id : null;
+                                    if (!pid) continue;
+                                    try {
+                                        await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+                                    } catch (e) { console.warn('Erro atualizando ordem_entrega via waypoint_order:', e); }
+                                }
+                                // Refresh data so UI and motorista app pick up the new ordem_entrega
+                                try { await carregarDados(); } catch (e) { }
+                                // Update local state
+                                try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_entrega: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
+                            } else {
+                                // preview mode: update local draft preview only
+                                try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_entrega: Number(idx + 1) }))); } catch (e) { }
+                            }
+                            // use overview_path for polyline below
+                        } catch (e) { console.warn('Erro ao aplicar waypoint_order:', e); }
+                    }
+
                     const path = res.routes?.[0]?.overview_path || null;
                     if (path && path.length > 0) {
                         const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
@@ -1360,7 +1397,7 @@ function App() {
 
             // Draw on map (include HQ if necessary)
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            await drawRouteOnMap(origin, optimized, includeHQ, pontoPartida || mapCenterState);
+            await drawRouteOnMap(origin, optimized, includeHQ, pontoPartida || mapCenterState, motoristaId);
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
