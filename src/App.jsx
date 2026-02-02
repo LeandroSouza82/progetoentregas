@@ -287,7 +287,7 @@ const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLev
 }, (prev, next) => prev.frota === next.frota && prev.mapsLib === next.mapsLib && prev.zoomLevel === next.zoomLevel);
 
 // Linha da tabela de motorista memoizada: só re-renderiza quando a referência do objeto mudar
-const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme }) {
+const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme, onApprove, onReject }) {
     const isOnline = Boolean(m.esta_online);
     const dotColor = isOnline ? '#10b981' : '#ef4444';
     const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
@@ -317,6 +317,10 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
                     <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
                     <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
                 </span>
+            </td>
+            <td style={{ padding: '10px', display: 'flex', gap: '8px' }}>
+                <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) {} }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
+                <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) {} }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn red">REPROVAR</button>
             </td>
         </tr>
     );
@@ -466,6 +470,30 @@ function App() {
         } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); }
         setLoadingFrota(false);
     }, []);
+
+    // Approve / Reject handlers for Gestão de Motoristas
+    const approveDriver = async (m) => {
+        try {
+            const id = m && (m.id || m);
+            if (!id) return;
+            await supabase.from('motoristas').update({ status: 'aprovado' }).eq('id', id);
+            try { await carregarDados(); } catch (e) { /* non-blocking */ }
+        } catch (e) {
+            console.error('approveDriver error:', e);
+        }
+    };
+
+    const rejectDriver = async (m) => {
+        try {
+            const id = m && (m.id || m);
+            if (!id) return;
+            // mark as rejected instead of hard delete
+            await supabase.from('motoristas').update({ status: 'rejeitado' }).eq('id', id);
+            try { await carregarDados(); } catch (e) { /* non-blocking */ }
+        } catch (e) {
+            console.error('rejectDriver error:', e);
+        }
+    };
 
     // Limpador de localStorage: remove referências literais ao motorista antigo (ex: 'f6a9...') se existirem
     useEffect(() => {
@@ -988,7 +1016,7 @@ function App() {
     const motoristas = frota || [];
     const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
     const appContent = (
-        <div style={{ minHeight: '100vh', width: '100%', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+        <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
 
             {/* 1. HEADER SUPERIOR (NAVBAR) */}
             <header style={{
@@ -1048,7 +1076,7 @@ function App() {
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
-            <main style={{ maxWidth: '1450px', width: '95%', margin: '0 auto', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
@@ -1331,19 +1359,20 @@ function App() {
                         <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
                         <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
-                        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
                             <thead>
                                 <tr style={{ textAlign: 'left', borderBottom: '2px solid #e6e6e6', color: '#000' }}>
                                     <th style={{ padding: '10px' }}>NOME</th>
                                     <th style={{ padding: '10px' }}>EMAIL</th>
                                     <th style={{ padding: '10px' }}>STATUS</th>
                                     <th style={{ padding: '10px' }}>VEÍCULO</th>
-                                    <th style={{ padding: '10px' }}>PLACA</th>
+                                            <th style={{ padding: '10px' }}>PLACA</th>
+                                            <th style={{ padding: '10px' }}>AÇÕES</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {frota.map(m => (
-                                    <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} />
+                                    <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={approveDriver} onReject={rejectDriver} />
                                 ))}
                             </tbody>
                         </table>

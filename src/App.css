@@ -348,6 +348,12 @@ header p {
   box-shadow: 0 6px 18px rgba(2,6,23,0.3);
 }
 
+.action-btn {
+  transition: filter 120ms ease, transform 120ms ease;
+}
+.action-btn.green:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.action-btn.red:hover { filter: brightness(1.08); transform: translateY(-1px); }
+
 /* Gradient text for DASHBOARD title */
 .dashboard-title {
   background: linear-gradient(90deg, #1E3A8A 0%, #FFFFFF 100%);
