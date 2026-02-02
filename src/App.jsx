@@ -2117,10 +2117,17 @@ function App() {
                                             );
                                         })()
                                     ) : (
-                                        // fallback seguro: evita piscar enquanto frota não carregou
-                                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b1220' }}>
-                                            {loadingFrota ? <div style={{ color: '#9ca3af' }}>Carregando posições...</div> : <div style={{ color: '#9ca3af' }}>{mapsLoadError ? 'Mapa indisponível — visualização desativada' : ''}</div>}
-                                        </div>
+                                        // fallback seguro: mostrar um mapa básico (OSM via Leaflet) com marcadores locais das lat/lng do Supabase
+                                        <FallbackMap
+                                            center={mapCenterState}
+                                            markers={(
+                                                (frota || []).map(m => ({ lat: m.lat, lng: m.lng, title: m.nome }))
+                                                .concat((entregasEmEspera || []).map(p => ({ lat: p.lat, lng: p.lng, title: p.cliente || p.endereco })))
+                                                .concat((draftPreview || []).map(p => ({ lat: p.lat, lng: p.lng, title: p.cliente || p.endereco })))
+                                                .filter(x => x && x.lat != null && x.lng != null)
+                                            )}
+                                            style={{ width: '100%', height: '100%' }}
+                                        />
                                     )
                                 }
 
@@ -2469,6 +2476,52 @@ function App() {
     return APIProviderComp ? (
         <APIProviderComp apiKey={GOOGLE_MAPS_API_KEY}>{appContent}</APIProviderComp>
     ) : appContent;
+}
+
+// Fallback lightweight map (Leaflet) used when Google Maps fails or is blocked
+function FallbackMap({ center = { lat: -27.645, lng: -48.648 }, markers = [], style = { width: '100%', height: '100%' } }) {
+    const ref = useRef(null);
+    const mapRefLocal = useRef(null);
+
+    useEffect(() => {
+        let mounted = true;
+        (async () => {
+            try {
+                const L = (await import('leaflet')).default;
+                // dynamically inject stylesheet if not present
+                if (!document.querySelector('link[data-leaflet-css]')) {
+                    const link = document.createElement('link');
+                    link.setAttribute('data-leaflet-css', '1');
+                    link.rel = 'stylesheet';
+                    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                    document.head.appendChild(link);
+                }
+                if (!mapRefLocal.current && ref.current) {
+                    mapRefLocal.current = L.map(ref.current, { zoomControl: true }).setView([Number(center.lat || 0), Number(center.lng || 0)], 12);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapRefLocal.current);
+                    mapRefLocal.current._v10Markers = L.layerGroup().addTo(mapRefLocal.current);
+                } else if (mapRefLocal.current) {
+                    try { mapRefLocal.current.setView([Number(center.lat || 0), Number(center.lng || 0)], 12); } catch (e) { }
+                }
+                // refresh markers
+                try {
+                    if (mapRefLocal.current && mapRefLocal.current._v10Markers) {
+                        mapRefLocal.current._v10Markers.clearLayers();
+                        (markers || []).forEach((m) => {
+                            if (m && m.lat != null && m.lng != null) {
+                                try { L.marker([Number(m.lat), Number(m.lng)]).bindPopup(String(m.title || m.endereco || m.nome || '')).addTo(mapRefLocal.current._v10Markers); } catch (e) { }
+                            }
+                        });
+                    }
+                } catch (e) { }
+            } catch (e) {
+                // silently ignore leaflet failures
+            }
+        })();
+        return () => { try { if (mapRefLocal.current) { mapRefLocal.current.remove(); mapRefLocal.current = null; } } catch (e) { } };
+    }, [JSON.stringify(markers), center.lat, center.lng]);
+
+    return <div ref={ref} style={style} />;
 }
 
 // Componentes Pequenos
