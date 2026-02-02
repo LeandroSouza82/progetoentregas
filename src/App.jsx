@@ -185,16 +185,9 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
 
     // Use DirectionsService.optimizeWaypoints exclusively (no DistanceMatrix)
-    // If Google is blocked for the day, do not attempt DirectionsService — fall back to local heuristic
-    if (googleQuotaExceededRef.current) {
-        try { /* silent fallback when quota exceeded */ } catch (err) { }
-        const localOrder = otimizarRota(originLatLng, remaining);
-        return localOrder;
-    }
-
     // Avoid calling Google if another routing is in progress — return heuristic fallback
     if (routingInProgressRef.current) {
-        try { /* suppressed routing-in-progress log to avoid noise */ } catch (e) { }
+        try { console.warn('otimizarRotaComGoogle: routing in progress, using local heuristic fallback'); } catch (e) { }
         const localOrder = otimizarRota(originLatLng, remaining);
         return localOrder;
     }
@@ -225,19 +218,10 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
             } catch (e) { /* ignore cache issues */ }
         } catch (e) { /* ignore */ }
     } catch (e) {
-        const es = String(e || '');
-        if (es.includes && es.includes('OVER_QUERY_LIMIT')) {
-            // Google quota reached — mark and fallback silently
-            markGoogleQuotaExceeded('Directions');
-        } else if (es.includes && (es.includes('REQUEST_DENIED') || es.includes('API_NOT_ALLOWED'))) {
-            // API key not authorized for Directions
-            markGoogleQuotaExceeded('Directions', '⚠️ Chave do Google não autorizada para Directions. Verifique as restrições de API no Google Cloud Console. Usando histórico/heurística local.');
-        } else {
-            try { console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e); } catch (err) { }
-        }
+        console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e);
         // last resort: local nearest neighbor by coord distance
         const localOrder = otimizarRota(originLatLng, remaining);
-        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e2) { }
+        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
         return localOrder;
     } finally {
         routingInProgressRef.current = false;
@@ -380,37 +364,6 @@ function App() {
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
-    // Google quota guard: quando o Google retornar OVER_QUERY_LIMIT, bloqueamos chamadas automáticas por 1 dia
-    const [googleQuotaExceeded, setGoogleQuotaExceeded] = useState(false);
-    const googleQuotaExceededRef = useRef(false);
-    const [quotaBannerMessage, setQuotaBannerMessage] = useState('⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.');
-
-    // Inicializa a partir do localStorage (persistência por dia)
-    useEffect(() => {
-        try {
-            const k = localStorage.getItem('googleQuotaExceededAt');
-            const today = new Date().toISOString().slice(0,10);
-            if (k === today) { setGoogleQuotaExceeded(true); googleQuotaExceededRef.current = true; }
-            else { localStorage.removeItem('googleQuotaExceededAt'); }
-        } catch (e) { /* ignore */ }
-    }, []);
-
-    // Marca o bloqueio de quota / autorização de forma idempotente
-    function markGoogleQuotaExceeded(source, customMessage) {
-        try {
-            if (googleQuotaExceededRef.current) return;
-            const today = new Date().toISOString().slice(0,10);
-            localStorage.setItem('googleQuotaExceededAt', today);
-            setGoogleQuotaExceeded(true);
-            googleQuotaExceededRef.current = true;
-            // Allow custom message for different failure modes
-            const defaultMsg = '⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.';
-            const msg = customMessage || defaultMsg;
-            setQuotaBannerMessage(msg);
-            try { console.info('Google blocked:', source); } catch (e) { }
-        } catch (e) { /* ignore */ }
-    }
-
     // Componente isolado para a tela de aprovação do motorista
     function TelaAprovacaoMotorista() {
         const [state, setState] = useState({ status: 'loading', message: 'Processando ativação...' });
@@ -551,15 +504,6 @@ function App() {
     const predictionTimerRef = useRef(null);
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
     const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
-
-    // If loader reports error (e.g., API key not authorized or script blocked), surface a manager-facing banner
-    useEffect(() => {
-        try {
-            if (!gmapsError) return;
-            const msg = (gmapsError && gmapsError.message && (String(gmapsError.message).includes('not authorized') || String(gmapsError.message).includes('API key'))) ? '⚠️ Google Maps não autorizado para o projeto atual. Verifique as restrições de API no Google Cloud Console.' : '⚠️ Falha ao carregar Google Maps: serviço indisponível.';
-            markGoogleQuotaExceeded('Loader', msg);
-        } catch (e) { }
-    }, [gmapsError]);
     const [recentList, setRecentList] = useState([]);
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
@@ -732,13 +676,10 @@ function App() {
     async function fetchPredictions(q) {
         try {
             if (!q || String(q).trim().length < 3) { setPredictions([]); return; }
-            if (googleQuotaExceededRef.current) { setPredictions([]); return []; } // Google bloqueado hoje: usar histórico somente
             if (!predictionServiceRef.current) { setPredictions([]); return; }
             return new Promise((resolve) => {
                 predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
-                            if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
-                    else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setPredictions([]); resolve([]); }
-                    else if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') { markGoogleQuotaExceeded('Places', '⚠️ API do Google não autorizada para Places. Use o histórico e cole o endereço manualmente.'); setPredictions([]); resolve([]); }
+                    if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
                     else { setPredictions([]); resolve([]); }
                 });
             });
@@ -754,21 +695,14 @@ function App() {
             // If we have a place_id, fetch details for coords
             if (pred && pred.place_id && placesServiceRef.current && placesServiceRef.current.getDetails) {
                 try {
-                    if (googleQuotaExceededRef.current) {
-                        // Google bloqueado — não tentar buscar detalhes
-                        setEnderecoCoords(null);
+                    const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry','formatted_address'] }, (res, stat) => resolve({ res, stat })));
+                    if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
+                        const loc = details.res.geometry.location;
+                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
                     } else {
-                        const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry','formatted_address'] }, (res, stat) => resolve({ res, stat })));
-                        if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
-                            const loc = details.res.geometry.location;
-                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                        } else {
-                            if (details && details.stat === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('PlaceDetails');
-                            if (details && (details.stat === 'REQUEST_DENIED' || details.stat === 'API_NOT_ALLOWED')) markGoogleQuotaExceeded('PlaceDetails', '⚠️ API do Google não autorizada para Place Details. Use Histórico ou cole o endereço manualmente.');
-                            setEnderecoCoords(null);
-                        }
+                        setEnderecoCoords(null);
                     }
-                } catch (e) { if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) markGoogleQuotaExceeded('PlaceDetails', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setEnderecoCoords(null); }
+                } catch (e) { setEnderecoCoords(null); }
             }
             // clear suggestions
             try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
@@ -1051,13 +985,8 @@ function App() {
                 if (window.google && window.google.maps && window.google.maps.Geocoder) {
                     const geocoder = new window.google.maps.Geocoder();
                     const results = await new Promise((resolve, reject) => {
-                                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
-                            if (status === 'OK') resolve(res);
-                            else {
-                                if (status === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('Geocoder');
-                                if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') markGoogleQuotaExceeded('Geocoder', '⚠️ Geocoder do Google não autorizado. Use fallback Nominatim.');
-                                reject(status);
-                            }
+                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
+                            if (status === 'OK') resolve(res); else reject(status);
                         });
                     });
                     let city = '';
@@ -1096,8 +1025,7 @@ function App() {
                     // swallow and fallback
                 }
             } catch (e) {
-                if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) { markGoogleQuotaExceeded('Geocoder'); }
-                // swallow and fallback
+                // swallow
             }
             if (mounted) setGestorLocation('São Paulo, BR');
         };
@@ -1114,25 +1042,14 @@ function App() {
         (async () => {
             setLoadingFrota(true);
             try {
-                // Only attempt to import maps library when we have a valid API key
-                const key = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
-                if (!key || String(key).trim().length === 0) {
-                    setMapsLoadError(true);
-                    return;
-                }
                 const lib = await import('@vis.gl/react-google-maps');
                 if (!mounted) return;
                 setMapsLib(lib || null);
             } catch (e) {
-                try { console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e); } catch (err) { }
+                console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e);
                 if (!mounted) return;
                 setFrota([]);
                 setMapsLoadError(true);
-                // If the import fails because the API is not authorized, mark the app as blocked to provide a clear banner to managers
-                try {
-                    const msg = (e && e.message && (String(e.message).includes('Unauthorized') || String(e.message).includes('not authorized'))) ? '⚠️ Google Maps carregado, mas a chave não está autorizada para esta API. Verifique as restrições.' : null;
-                    if (msg) markGoogleQuotaExceeded('Loader', msg);
-                } catch (err) { }
             }
         })();
         return () => { mounted = false; };
@@ -1852,68 +1769,29 @@ function App() {
                 if (enderecoFromHistory) {
                     // History is sovereign — accept the address without forcing Google validation
                     try { console.info('adicionarAosPendentes: address from history accepted without geocode'); } catch (e) { }
-                } else if (typeof window !== 'undefined') {
-                    // Prefer history coords from Supabase before calling Google Geocoder
+                } else if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.Geocoder) {
+                    // Attempt Geocoder fallback for pasted addresses
                     try {
-                        if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
-                            const { data: hist, error: histErr } = await supabase.from('entregas').select('lat,lng').ilike('endereco', `%${enderecoEntrega}%`).limit(1);
-                            if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
-                                setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
-                            } else {
-                                // No coords in history: if Google quota blocked, activate safety mode and inform user
-                                if (googleQuotaExceededRef.current) {
-                                    markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
-                                    try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar o endereço colado porque as APIs do Google estão indisponíveis. Por favor, verifique o endereço ou selecione do Histórico.'); } catch (e) { }
-                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                        try { enderecoRef.current.focus(); } catch (e) { }
-                                    }
-                                    return;
-                                }
-
-                                // Google Geocoder allowed — attempt to geocode
-                                if (window.google && window.google.maps && window.google.maps.Geocoder) {
-                                    try {
-                                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
-                                        const geocoder = new window.google.maps.Geocoder();
-                                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
-                                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
-                                            const loc = geoRes.results[0].geometry.location;
-                                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                                        } else {
-                                            if (geoRes && geoRes.status === 'OVER_QUERY_LIMIT') {
-                                                markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
-                                                try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar — quota excedida.'); } catch (e) { }
-                                                if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                                    try { enderecoRef.current.focus(); } catch (e) { }
-                                                }
-                                                return;
-                                            }
-                                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
-                                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                                try { enderecoRef.current.focus(); } catch (e) { }
-                                            }
-                                            return;
-                                        }
-                                    } catch (err) {
-                                        console.warn('adicionarAosPendentes: geocoder error', err);
-                                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
-                                        return;
-                                    }
-                                } else {
-                                    // Geocoder not available and no history coords
-                                    try { alert('Geocoding não disponível. Selecione um endereço do Histórico ou cole um endereço que já esteja registrado com coordenadas.'); } catch (e) { }
-                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                        try { enderecoRef.current.focus(); } catch (e) { }
-                                    }
-                                    return;
-                                }
+                        // wait briefly for input idle (so we don't geocode on every keystroke)
+                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
+                        const geocoder = new window.google.maps.Geocoder();
+                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
+                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
+                            const loc = geoRes.results[0].geometry.location;
+                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                        } else {
+                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
+                            // Do not clear the field; let the user edit or pick a suggestion
+                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                try { enderecoRef.current.focus(); } catch (e) { }
                             }
+                            return;
                         }
-                    } catch (e) {
-                        // If the Supabase lookup fails, fall back to existing behavior but be conservative
-                        try { console.warn('adicionarAosPendentes: supabase history lookup failed, falling back to geocoder', e); } catch (err) { }
+                    } catch (err) {
+                        console.warn('adicionarAosPendentes: geocoder error', err);
+                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
+                        return;
                     }
-                }
                 } else {
                     // Google Geocoder not available; fall back to randomized coords (existing behavior)
                     console.warn('Geocoder not available; using randomized fallback coordinates');
@@ -2185,18 +2063,12 @@ function App() {
                 </div>
             </header>
 
-            {googleQuotaExceeded && (
-                <div style={{ position: 'fixed', top: 70, left: 0, right: 0, zIndex: 1299, background: '#fbbf24', color: '#0f172a', display: 'flex', justifyContent: 'center', padding: '10px 0', fontWeight: 700 }}>
-                    <div style={{ width: '100%', maxWidth: '1450px', padding: '0 20px', boxSizing: 'border-box' }}>{quotaBannerMessage}</div>
-                </div>
-            )}
-
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
 
 
-            <main style={{ maxWidth: '1450px', width: '95%', margin: googleQuotaExceeded ? '190px auto 0' : '140px auto 0', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
@@ -2218,8 +2090,7 @@ function App() {
                                     (mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
                                         (() => {
                                             const MapComp = mapsLib.Map;
-                                            // Memoize the map view to avoid remounting the Map component on unrelated state updates
-                                            const mapView = React.useMemo(() => (
+                                            return (
                                                 <ErrorBoundary>
                                                     <MapComp
                                                         defaultCenter={mapCenterState}
@@ -2230,8 +2101,7 @@ function App() {
                                                         onLoad={(m) => {
                                                             try {
                                                                 const inst = (m && (m.map || m.__map || m)) || m;
-                                                                // Preserve first instance to avoid re-instantiation (singleton-like behavior)
-                                                                if (!mapRef.current) mapRef.current = inst;
+                                                                mapRef.current = inst;
                                                             } catch (e) { /* ignore */ }
                                                         }}
                                                     >
@@ -2244,9 +2114,7 @@ function App() {
                                                         <DeliveryMarkers list={orderedRota} mapsLib={mapsLib} />
                                                     </MapComp>
                                                 </ErrorBoundary>
-                                            ), [mapsLib, mapCenterState, zoomLevel, entregasEmEspera && entregasEmEspera.length]);
-
-                                            return mapView;
+                                            );
                                         })()
                                     ) : (
                                         // fallback seguro: evita piscar enquanto frota não carregou
@@ -2339,13 +2207,6 @@ function App() {
                                                 ))}
                                             </div>
                                         )}
-
-                                        {/* If Places is unavailable, show a small hint and keep the input usable for manual paste */}
-                                        { (googleQuotaExceeded || !predictionServiceRef.current) && (
-                                            <div style={{ marginTop: '8px', color: '#f8e9c2', fontSize: '12px' }}>
-                                                { googleQuotaExceeded ? 'Busca de endereços via Google indisponível hoje — cole o endereço manualmente ou escolha do Histórico.' : 'Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.' }
-                                            </div>
-                                        )}
                                     </div>
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
@@ -2366,30 +2227,18 @@ function App() {
                                             try {
                                                 if (it && (it.lat != null && it.lng != null)) {
                                                     setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
-                                                } else {
-                                                    // If history entry lacks coords, prefer not to call Google when quota blocked
-                                                    if (it && (it.lat == null || it.lng == null)) {
-                                                        if (googleQuotaExceededRef.current) {
-                                                            // Keep history accepted but without coords
-                                                            setEnderecoCoords(null);
-                                                            try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
-                                                        } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
-                                                            try {
-                                                                const geocoder = new window.google.maps.Geocoder();
-                                                                const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
-                                                                if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
-                                                                    const loc = geo.results[0].geometry.location;
-                                                                    setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                                                                } else {
-                                                                    setEnderecoCoords(null);
-                                                                }
-                                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
-                                                        } else {
-                                                            setEnderecoCoords(null);
-                                                        }
+                                                } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
+                                                    const geocoder = new window.google.maps.Geocoder();
+                                                    const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
+                                                    if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
+                                                        const loc = geo.results[0].geometry.location;
+                                                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
                                                     } else {
+                                                        // allow history even if geocode fails (history is sovereign)
                                                         setEnderecoCoords(null);
                                                     }
+                                                } else {
+                                                    setEnderecoCoords(null);
                                                 }
                                             } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
                                         }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
