@@ -476,7 +476,7 @@ function App() {
         try {
             const id = m && (m.id || m);
             if (!id) return;
-            await supabase.from('motoristas').update({ status: 'aprovado' }).eq('id', id);
+            await supabase.from('motoristas').update({ acesso: 'aprovado', aprovado: true }).eq('id', id);
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
         } catch (e) {
             console.error('approveDriver error:', e);
@@ -488,7 +488,7 @@ function App() {
             const id = m && (m.id || m);
             if (!id) return;
             // mark as rejected instead of hard delete
-            await supabase.from('motoristas').update({ status: 'rejeitado' }).eq('id', id);
+            await supabase.from('motoristas').update({ acesso: 'rejeitado', aprovado: false }).eq('id', id);
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
         } catch (e) {
             console.error('rejectDriver error:', e);
@@ -1015,6 +1015,8 @@ function App() {
     // --- NOVA INTERFACE (AQUI ESTÁ A MUDANÇA VISUAL) ---
     const motoristas = frota || [];
     const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
+    const pendingDrivers = (frota || []).filter(m => String(m.acesso || '').toLowerCase() === 'pendente' || m.aprovado === false);
+    const approvedDrivers = (frota || []).filter(m => String(m.acesso || '').toLowerCase() === 'aprovado');
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
 
@@ -1246,7 +1248,7 @@ function App() {
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
                                     <option value="all">📢 Enviar para Todos</option>
-                                    {frota && frota.map(m => (
+                                    {approvedDrivers && approvedDrivers.map(m => (
                                         <option key={m.id} value={String(m.id)}>{m.nome}</option>
                                     ))}
                                 </select>
@@ -1300,7 +1302,7 @@ function App() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {frota.map(m => {
+                                {approvedDrivers.map(m => {
                                     const isOnline = Boolean(m.esta_online);
                                     const dotColor = isOnline ? '#10b981' : '#ef4444';
                                     const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
@@ -1371,7 +1373,7 @@ function App() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {frota.map(m => (
+                                {pendingDrivers.map(m => (
                                     <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={approveDriver} onReject={rejectDriver} />
                                 ))}
                             </tbody>
