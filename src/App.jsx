@@ -427,6 +427,8 @@ function App() {
     const lastDraftHashRef = useRef(null);
     const inputIdleRef = useRef(true);
     const inputIdleTimerRef = useRef(null);
+    const pendingRecalcRef = useRef(new Set());
+    const [pendingRecalcCount, setPendingRecalcCount] = useState(0);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     // Distance and driver-select mode state
@@ -513,6 +515,8 @@ function App() {
     const retryCountRef = useRef(0); // counts consecutive retry attempts to avoid infinite loops
     const routingInProgressRef = useRef(false); // prevents concurrent heavy route computations
     const lastRouteCacheRef = useRef(new Map()); // cache per motoristaId => { hash, result, timestamp }
+    const lastDirectionsQueryRef = useRef(null); // cache last query hash to avoid duplicate Directions calls
+    const lastDrawResultRef = useRef(null); // store last draw result {meters,secs}
     const motoristaDebounceMapRef = useRef(new Map()); // per-motorista debounce timers for realtime events
     const lastFrotaRef = useRef([]);
 
@@ -676,13 +680,14 @@ function App() {
                     return;
                 }
                 const origin = pontoPartida || mapCenterState || DEFAULT_MAP_CENTER;
+                // Use local heuristic for draft preview to avoid calling Google
                 try { setDistanceCalculating(true); } catch (e) { }
-                const optimized = await otimizarRotaComGoogle(origin, list, null);
+                const optimizedLocal = otimizarRota(origin, list);
                 if (!mounted) return;
-                setDraftPreview((optimized && optimized.length > 0) ? optimized : list);
+                setDraftPreview((optimizedLocal && optimizedLocal.length > 0) ? optimizedLocal : list);
                 // Compute estimated distance for preview (non-persistent)
                 try {
-                    const pts = (optimized && optimized.length > 0) ? optimized : list;
+                    const pts = (optimizedLocal && optimizedLocal.length > 0) ? optimizedLocal : list;
                     const dist = computeRouteDistanceKm(origin, pts, pontoPartida || mapCenterState || DEFAULT_MAP_CENTER);
                     setEstimatedDistanceKm(Number(dist.toFixed(1)));
                 } catch (e) { /* ignore */ } finally { try { setDistanceCalculating(false); } catch (e) { } }
@@ -963,6 +968,20 @@ function App() {
             await carregarDados();
         };
         init();
+
+        // On page load or when opening the dashboard, try to reuse last saved estimated distance from DB to avoid calling Google
+        (async () => {
+            try {
+                if (!HAS_SUPABASE_CREDENTIALS) return;
+                const { data: lastLog, error } = await supabase.from('logs_roteirizacao').select('distancia_nova, created_at').order('created_at', { ascending: false }).limit(1);
+                if (!error && lastLog && lastLog.length > 0 && lastLog[0].distancia_nova != null) {
+                    try {
+                        const val = Number(lastLog[0].distancia_nova);
+                        if (val && (!estimatedDistanceKm || estimatedDistanceKm === null)) setEstimatedDistanceKm(Number(val));
+                    } catch (e) { /* ignore */ }
+                }
+            } catch (e) { /* ignore */ }
+        })();
     }, []);
 
     // Tenta obter localização do gestor via Geolocation + reverse geocoding
@@ -1333,6 +1352,17 @@ function App() {
                 }
             }
 
+            // Prevent duplicate Directions calls: if origin+orderedList+includeHQ same as last query, reuse result
+            try {
+                const qhash = JSON.stringify({ origin: origin, list: (orderedList || []).map(p => p && (p.id || `${p.lat},${p.lng}`)), includeHQ: !!includeHQ, base: pontoPartida });
+                if (lastDirectionsQueryRef.current === qhash && lastDrawResultRef.current) {
+                    const lr = lastDrawResultRef.current;
+                    try { if (lr.meters) setEstimatedDistanceKm(Number((lr.meters / 1000).toFixed(1))); } catch (e) { }
+                    try { if (lr.secs) { setEstimatedTimeSec(lr.secs); setEstimatedTimeText(formatDuration(lr.secs)); } } catch (e) { }
+                    return lr;
+                }
+            } catch (e) { /* ignore hash */ }
+
             // Try DirectionsService to get overview_path
             if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.DirectionsService) {
                 try {
@@ -1662,14 +1692,15 @@ function App() {
                 if (rec.motorista_id) {
                     const st = String(rec.status || '').trim().toLowerCase();
                     if (payload.event === 'INSERT' || (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
-                        // debounce per motorista to avoid flood-triggering recalc repeatedly
+                        // Do NOT auto-trigger recalculation. Mark that driver's route needs manual reoptimization by a manager.
                         try {
                             const mid = String(rec.motorista_id);
-                            const existing = motoristaDebounceMapRef.current.get(mid);
-                            if (existing) clearTimeout(existing);
-                            const t = setTimeout(() => { try { recalcRotaForMotorista(mid); } catch (e) { /* ignore */ } }, 800);
-                            motoristaDebounceMapRef.current.set(mid, t);
-                        } catch (e) { try { recalcRotaForMotorista(String(rec.motorista_id)); } catch (e2) { /* ignore */ } }
+                            if (!pendingRecalcRef.current.has(mid)) {
+                                pendingRecalcRef.current.add(mid);
+                                try { setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
+                                try { setMensagemGeral(`Novas alterações para motorista ${mid}. Clique em REORGANIZAR ROTA para processar.`); } catch (e) { }
+                            }
+                        } catch (e) { /* ignore */ }
                     }
                 }
             } catch (e) { /* ignore */ }
@@ -1970,6 +2001,7 @@ function App() {
             try { setDraftPreview([]); setEstimatedDistanceKm(null); setEstimatedTimeSec(null); setEstimatedTimeText(null); } catch (e) { }
 
             await recalcRotaForMotorista(String(m.id));
+            try { pendingRecalcRef.current.delete(String(m.id)); setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
             // close modal and show success feedback after persistence
             try { setShowDriverSelect(false); } catch (e) { }
             try { alert('✅ Rota re-otimizada e gravada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
@@ -2239,7 +2271,12 @@ function App() {
                                     )}
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>🔄 REORGANIZAR ROTA</button>
+                                    <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>
+                                        🔄 REORGANIZAR ROTA
+                                        {pendingRecalcCount > 0 && (
+                                            <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
+                                        )}
+                                    </button>
                                     <button onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} style={{ ...btnStyle(theme.success), width: 'auto' }}>ENVIAR ROTA</button>
                                 </div>
                             </div>
