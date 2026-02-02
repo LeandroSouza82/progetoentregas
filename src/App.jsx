@@ -185,9 +185,16 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
 
     // Use DirectionsService.optimizeWaypoints exclusively (no DistanceMatrix)
+    // If Google is blocked for the day, do not attempt DirectionsService — fall back to local heuristic
+    if (googleQuotaExceededRef.current) {
+        try { /* silent fallback when quota exceeded */ } catch (err) { }
+        const localOrder = otimizarRota(originLatLng, remaining);
+        return localOrder;
+    }
+
     // Avoid calling Google if another routing is in progress — return heuristic fallback
     if (routingInProgressRef.current) {
-        try { console.warn('otimizarRotaComGoogle: routing in progress, using local heuristic fallback'); } catch (e) { }
+        try { /* suppressed routing-in-progress log to avoid noise */ } catch (e) { }
         const localOrder = otimizarRota(originLatLng, remaining);
         return localOrder;
     }
@@ -218,7 +225,12 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
             } catch (e) { /* ignore cache issues */ }
         } catch (e) { /* ignore */ }
     } catch (e) {
-        console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e);
+        if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) {
+            // Google quota reached — mark and fallback silently
+            markGoogleQuotaExceeded('Directions');
+        } else {
+            console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e);
+        }
         // last resort: local nearest neighbor by coord distance
         const localOrder = otimizarRota(originLatLng, remaining);
         try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
@@ -363,6 +375,34 @@ function App() {
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
+
+    // Google quota guard: quando o Google retornar OVER_QUERY_LIMIT, bloqueamos chamadas automáticas por 1 dia
+    const [googleQuotaExceeded, setGoogleQuotaExceeded] = useState(false);
+    const googleQuotaExceededRef = useRef(false);
+    const [quotaBannerMessage, setQuotaBannerMessage] = useState('⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.');
+
+    // Inicializa a partir do localStorage (persistência por dia)
+    useEffect(() => {
+        try {
+            const k = localStorage.getItem('googleQuotaExceededAt');
+            const today = new Date().toISOString().slice(0,10);
+            if (k === today) { setGoogleQuotaExceeded(true); googleQuotaExceededRef.current = true; }
+            else { localStorage.removeItem('googleQuotaExceededAt'); }
+        } catch (e) { /* ignore */ }
+    }, []);
+
+    // Marca o bloqueio de quota de forma idempotente
+    function markGoogleQuotaExceeded(source) {
+        try {
+            if (googleQuotaExceededRef.current) return;
+            const today = new Date().toISOString().slice(0,10);
+            localStorage.setItem('googleQuotaExceededAt', today);
+            setGoogleQuotaExceeded(true);
+            googleQuotaExceededRef.current = true;
+            setQuotaBannerMessage('⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.');
+            // não spam no console
+        } catch (e) { /* ignore */ }
+    }
 
     // Componente isolado para a tela de aprovação do motorista
     function TelaAprovacaoMotorista() {
@@ -676,10 +716,12 @@ function App() {
     async function fetchPredictions(q) {
         try {
             if (!q || String(q).trim().length < 3) { setPredictions([]); return; }
+            if (googleQuotaExceededRef.current) { setPredictions([]); return []; } // Google bloqueado hoje: usar histórico somente
             if (!predictionServiceRef.current) { setPredictions([]); return; }
             return new Promise((resolve) => {
                 predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
                     if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
+                    else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places'); setPredictions([]); resolve([]); }
                     else { setPredictions([]); resolve([]); }
                 });
             });
@@ -695,14 +737,20 @@ function App() {
             // If we have a place_id, fetch details for coords
             if (pred && pred.place_id && placesServiceRef.current && placesServiceRef.current.getDetails) {
                 try {
-                    const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry','formatted_address'] }, (res, stat) => resolve({ res, stat })));
-                    if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
-                        const loc = details.res.geometry.location;
-                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                    } else {
+                    if (googleQuotaExceededRef.current) {
+                        // Google bloqueado — não tentar buscar detalhes
                         setEnderecoCoords(null);
+                    } else {
+                        const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry','formatted_address'] }, (res, stat) => resolve({ res, stat })));
+                        if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
+                            const loc = details.res.geometry.location;
+                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                        } else {
+                            if (details && details.stat === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('PlaceDetails');
+                            setEnderecoCoords(null);
+                        }
                     }
-                } catch (e) { setEnderecoCoords(null); }
+                } catch (e) { if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) markGoogleQuotaExceeded('PlaceDetails'); setEnderecoCoords(null); }
             }
             // clear suggestions
             try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
@@ -1025,7 +1073,8 @@ function App() {
                     // swallow and fallback
                 }
             } catch (e) {
-                // swallow
+                if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) { markGoogleQuotaExceeded('Geocoder'); }
+                // swallow and fallback
             }
             if (mounted) setGestorLocation('São Paulo, BR');
         };
@@ -2063,12 +2112,18 @@ function App() {
                 </div>
             </header>
 
+            {googleQuotaExceeded && (
+                <div style={{ position: 'fixed', top: 70, left: 0, right: 0, zIndex: 1299, background: '#fbbf24', color: '#0f172a', display: 'flex', justifyContent: 'center', padding: '10px 0', fontWeight: 700 }}>
+                    <div style={{ width: '100%', maxWidth: '1450px', padding: '0 20px', boxSizing: 'border-box' }}>{quotaBannerMessage}</div>
+                </div>
+            )}
+
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
 
 
-            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: googleQuotaExceeded ? '190px auto 0' : '140px auto 0', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
