@@ -459,11 +459,14 @@ function InternalMobileApp() {
                                         const lat = parseFloat(p.lat);
                                         const lng = parseFloat(p.lng);
                                         if (isNaN(lat) || isNaN(lng)) return null;
-                                        const url = numberedIconUrl(p.ordem || (i + 1));
+                                        const num = p.ordem || (i + 1);
+                                        const tipo = String(p.tipo || 'Entrega');
+                                        const color = (tipo === 'recolha') ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#2563eb');
                                         return (
                                             <AdvancedMarker key={p.id} position={{ lat, lng }}>
-                                                <div style={{ transform: 'translate(-50%,-100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                    <img src={url} alt={`#${p.ordem || (i + 1)}`} style={{ width: '30px', height: '30px' }} />
+                                                <div style={{ transform: 'translate(-50%,-110%)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                                    <div style={{ backgroundColor: 'rgba(0,0,0,0.75)', color: '#fff', padding: '4px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700, marginBottom: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>{tipo.charAt(0).toUpperCase()+tipo.slice(1)}</div>
+                                                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 14, boxShadow: '0 4px 10px rgba(0,0,0,0.25)' }}>{String(num)}</div>
                                                 </div>
                                             </AdvancedMarker>
                                         );
