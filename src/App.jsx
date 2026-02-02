@@ -493,6 +493,7 @@ function App() {
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     // Distance and driver-select mode state
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
+    const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
     const [distanceCalculating, setDistanceCalculating] = useState(false);
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
 
@@ -520,6 +521,17 @@ function App() {
             for (let i = 1; i < pts.length; i++) sum += haversineKm(pts[i - 1], pts[i]);
             return sum; // in km
         } catch (e) { return 0; }
+    }
+
+    function formatDuration(sec) {
+        try {
+            if (!sec || sec <= 0) return '';
+            const minutes = Math.round(sec / 60);
+            if (minutes < 60) return `${minutes} min`;
+            const h = Math.floor(minutes / 60);
+            const m = minutes % 60;
+            return `${h}h ${m}m`;
+        } catch (e) { return ''; }
     }
     const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
@@ -1381,11 +1393,22 @@ function App() {
                     if (path && path.length > 0) {
                         const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
                         routePolylineRef.current = poly;
-                        // If legs are available, compute precise distance
+                                // If legs are available, compute precise distance and time
                         try {
                             const legs = res.routes?.[0]?.legs || [];
                             const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
+                            const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
                             if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
+                            if (secs > 0) setEstimatedTimeSec(secs);
+                            // If for some reason legs missing, fallback to haversine on overview_path
+                            if ((!legs || legs.length === 0) && res.routes?.[0]?.overview_path) {
+                                try {
+                                    const ov = res.routes[0].overview_path || [];
+                                    let meters2 = 0;
+                                    for (let i = 1; i < ov.length; i++) meters2 += haversineKm(ov[i-1], ov[i]) * 1000;
+                                    if (meters2 > 0) setEstimatedDistanceKm(Number((meters2 / 1000).toFixed(1)));
+                                } catch (e) { /* ignore */ }
+                            }
                         } catch (e) { /* ignore */ }
                         return;
                     }
@@ -1455,18 +1478,20 @@ function App() {
             // Persist ordem_logistica per item (índice + 1) — cirúrgico, garante que DB reflita exatamente a ordem retornada pelo Google
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
-                    for (let i = 0; i < optimized.length; i++) {
-                        const pid = optimized[i] && optimized[i].id;
-                        if (!pid) continue;
-                        try {
-                            const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                            if (ordErr) console.error('recalcRotaForMotorista: erro atualizando ordem_logistica:', ordErr && ordErr.message ? ordErr.message : ordErr);
-                        } catch (e) {
-                            console.error('recalcRotaForMotorista: erro na requisição ordem_logistica:', e && e.message ? e.message : e);
-                        }
+                    const updates = optimized.map((item, i) => {
+                        const pid = item && item.id;
+                        if (!pid) return null;
+                        return supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                    }).filter(Boolean);
+
+                    if (updates.length > 0) {
+                        // execute in parallel and await completion so we know when the last update finished
+                        const results = await Promise.all(updates.map(p => p.catch ? p.catch(err => ({ error: err })) : p));
+                        const anyErr = results.find(r => r && r.error);
+                        if (anyErr) console.error('recalcRotaForMotorista: alguns updates falharam:', anyErr);
+                        // Best-effort: refresh data so other components see updated ordem_logistica
+                        try { await carregarDados(); } catch (err) { /* non-blocking */ }
                     }
-                    // Best-effort: refresh data so other components see updated ordem_logistica
-                    try { await carregarDados(); } catch (err) { /* non-blocking */ }
                 }
             } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
 
@@ -1476,6 +1501,14 @@ function App() {
                 setRotaAtiva(optimizedWithOrder);
                 const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
                 if (foundDriver) setMotoristaDaRota(foundDriver);
+                // ensure visual feedback: set distance/time if drawRouteOnMap couldn't
+                try {
+                    if (estimatedDistanceKm == null || estimatedTimeSec == null) {
+                        const originForCalc = pontoPartida || mapCenterState || DEFAULT_MAP_CENTER;
+                        const dist = computeRouteDistanceKm(originForCalc, optimizedWithOrder, originForCalc);
+                        if (dist && dist > 0 && (estimatedDistanceKm == null)) setEstimatedDistanceKm(Number(dist.toFixed(1)));
+                    }
+                } catch (e) { /* ignore */ }
             } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
@@ -1764,7 +1797,9 @@ function App() {
         setDispatchLoading(true);
         try {
             await recalcRotaForMotorista(String(m.id));
-            try { alert('✅ Rota re-otimizada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
+            // close modal and show success feedback after persistence
+            try { setShowDriverSelect(false); } catch (e) { }
+            try { alert('✅ Rota re-otimizada e gravada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
         } catch (e) {
             console.warn('handleDriverSelect (reopt) failed:', e);
             try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
@@ -1992,7 +2027,8 @@ function App() {
                             <h2>Fila de Preparação</h2>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <div style={{ color: theme.textLight, fontWeight: 700 }}>
-                                    Distância Estimada: <span style={{ color: theme.primary }}>{(entregasEmEspera && entregasEmEspera.some(p => Number(p.ordem_logistica) > 0) && estimatedDistanceKm != null) ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando distância...' : 'Calculando distância...')}</span>
+                                    Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null) ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando distância...' : 'Calculando distância...')}</span>
+                                    {estimatedTimeSec != null && <span style={{ marginLeft: '10px', color: theme.textLight }}>• {formatDuration(estimatedTimeSec)}</span>}
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>🔄 REORGANIZAR ROTA</button>
