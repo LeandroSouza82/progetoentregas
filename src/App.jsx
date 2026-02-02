@@ -343,50 +343,62 @@ function App() {
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
-    // Estado para controlar a tela exclusiva de aprovação (/aprovar)
-    const [approvalLanding, setApprovalLanding] = useState(null);
+    // Componente isolado para a tela de aprovação do motorista
+    function TelaAprovacaoMotorista() {
+        const [state, setState] = useState({ status: 'loading', message: 'Processando ativação...' });
 
-    useEffect(() => {
-        // Detecta rota de aprovação: /aprovar?id=UUID
-        try {
-            if (typeof window === 'undefined') return;
-            const pathname = window.location.pathname || '';
-            if (!pathname.startsWith('/aprovar')) return;
-            const params = new URLSearchParams(window.location.search);
-            const id = params.get('id');
-            if (!id) {
-                setApprovalLanding({ show: true, success: false, message: 'Link inválido. ID ausente.' });
-                return;
-            }
+        useEffect(() => {
             (async () => {
                 try {
-                    // Aprovar o motorista e retornar os dados atualizados (incluindo telefone)
+                    if (typeof window === 'undefined') return;
+                    const params = new URLSearchParams(window.location.search);
+                    const id = params.get('id');
+                    if (!id) {
+                        setState({ status: 'error', message: 'Link inválido. ID ausente.' });
+                        return;
+                    }
                     const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', id).select();
                     if (error) {
-                        setApprovalLanding({ show: true, success: false, message: 'Falha ao ativar cadastro: ' + (error.message || JSON.stringify(error)) });
-                    } else {
-                        const motorista = Array.isArray(data) ? data[0] : data;
-                        const telefone = motorista?.telefone || null;
-                        // Enviar/abrir WhatsApp com mensagem final (se existir telefone)
-                        if (telefone) {
-                            const finalMsg = 'Parabéns! Seu cadastro no V10 foi aprovado. Você já pode abrir o seu aplicativo e começar a trabalhar! 🚀';
-                            const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(String(telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(finalMsg)}`;
-                            try { window.open(waUrl, '_blank'); } catch (e) { /* ignore */ }
-                        }
-
-                        // Para evitar re-execução em reload, substitui o histórico para /aprovar?processed=1
-                        try { window.history.replaceState({}, document.title, '/aprovar?processed=1'); } catch (e) { /* ignore */ }
-
-                        setApprovalLanding({ show: true, success: true, message: 'V10 DASHBOARD - CADASTRO ATIVADO! 🎉', telefone });
+                        setState({ status: 'error', message: 'Falha ao ativar cadastro.' });
+                        return;
                     }
+                    const motorista = Array.isArray(data) ? data[0] : data;
+                    const telefone = motorista?.telefone || null;
+
+                    // Envia mensagem de parabéns via WhatsApp (abre nova aba para confirmação)
+                    if (telefone) {
+                        const finalMsg = 'Parabéns! Seu cadastro no V10 foi aprovado. Você já pode abrir o seu aplicativo e começar a trabalhar! 🚀';
+                        const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(String(telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(finalMsg)}`;
+                        try { window.open(waUrl, '_blank'); } catch (e) { /* ignore */ }
+                    }
+
+                    // Evitar re-execução no reload
+                    try { window.history.replaceState({}, document.title, '/aprovar?processed=1'); } catch (e) { /* ignore */ }
+
+                    setState({ status: 'success', message: 'PARABÉNS! SEU ACESSO FOI LIBERADO' });
                 } catch (e) {
-                    setApprovalLanding({ show: true, success: false, message: 'Erro ao processar ativação.' });
+                    setState({ status: 'error', message: 'Erro ao processar ativação.' });
                 }
             })();
-        } catch (e) { /* ignore */ }
-        // rodar apenas no mount
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+            // run on mount only
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+
+        return (
+            <div style={{ minHeight: '100vh', width: '100vw', backgroundColor: '#071228', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', boxSizing: 'border-box', fontFamily: "'Inter', sans-serif" }}>
+                <div style={{ textAlign: 'center', maxWidth: '720px' }}>
+                    <div style={{ fontWeight: 900, fontSize: '22px', marginBottom: '10px', background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 DASHBOARD</div>
+                    <div style={{ fontSize: '64px', margin: '18px 0', color: '#10b981' }}>✅</div>
+                    <div style={{ fontSize: '20px', fontWeight: 800, marginBottom: '8px' }}>{state.message}</div>
+                    <p style={{ color: '#cbd5e1', marginBottom: '24px' }}>Seu cadastro foi ativado com sucesso. Já pode entrar no aplicativo e começar suas entregas.</p>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                        <button onClick={() => { try { window.location.href = '/motorista'; } catch (e) {} }} style={{ padding: '14px 20px', borderRadius: '10px', border: 'none', background: '#10b981', color: '#000', cursor: 'pointer', fontWeight: 800 }}>ABRIR APLICATIVO V10</button>
+                        <button onClick={() => { try { window.location.href = '/'; } catch (e) {} }} style={{ padding: '14px 20px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>VOLTAR AO SITE</button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     // Estados do Supabase
     const [entregasEmEspera, setEntregasEmEspera] = useState([]); // agora vem de `entregas`
@@ -1102,21 +1114,12 @@ function App() {
     // Use explicit aprovado boolean to split lists
     const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
     const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
-    // Se estivermos na página de aprovação (/aprovar), renderiza apenas a tela de sucesso para o motorista
-    if (approvalLanding && approvalLanding.show) {
-        return (
-            <div style={{ minHeight: '100vh', width: '100vw', backgroundColor: '#071228', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', boxSizing: 'border-box', fontFamily: "'Inter', sans-serif" }}>
-                <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '20px', fontWeight: 800, color: '#e6eef8', marginBottom: '12px' }}>V10 DASHBOARD - CADASTRO ATIVADO! 🎉</div>
-                    <p style={{ color: '#cbd5e1', marginBottom: '18px' }}>{approvalLanding.success ? 'Seu cadastro foi ativado com sucesso.' : (approvalLanding.message || 'Status desconhecido.')}</p>
-                    <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-                        <button onClick={() => { try { window.location.href = '/motorista'; } catch (e) { } }} style={{ padding: '12px 18px', borderRadius: '10px', border: 'none', background: '#10b981', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>ABRIR MEU APLICATIVO</button>
-                        <button onClick={() => { try { window.location.href = '/'; } catch (e) { } }} style={{ padding: '12px 18px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>VOLTAR AO SITE</button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
+    // Se estivermos na página de aprovação (/aprovar), renderiza a tela exclusiva
+    try {
+        if (typeof window !== 'undefined' && window.location.pathname === '/aprovar') {
+            return <TelaAprovacaoMotorista />;
+        }
+    } catch (e) { /* ignore */ }
 
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
