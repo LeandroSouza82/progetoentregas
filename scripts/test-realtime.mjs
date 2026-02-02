@@ -30,13 +30,13 @@ let supabase, subscribeToTable, HAS_SUPABASE_CREDENTIALS;
 
     let received = [];
 
-    const unsub = subscribeToTable('pedidos', (payload) => {
+    const unsub = subscribeToTable('entregas', (payload) => {
         console.log('handler chamado ->', payload && payload.data ? payload.data.length : payload);
         received.push(payload);
     }, { event: '*', schema: 'public', pollMs: 100 });
 
     console.log('Inserindo pedido de teste via mock...');
-    const { data, error } = await supabase.from('pedidos').insert([{ cliente: 'Teste Node', endereco: 'Rua Node, 1', msg: 'mock insert', tipo: 'Entrega', lat: -23.55, lng: -46.63, status: 'Aguardando' }]);
+    const { data, error } = await supabase.from('entregas').insert([{ cliente: 'Teste Node', endereco: 'Rua Node, 1', msg: 'mock insert', tipo: 'Entrega', lat: -23.55, lng: -46.63, status: 'Aguardando' }]);
     if (error) console.error('insert error', error);
     else console.log('insert data', data && data.length);
 

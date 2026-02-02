@@ -37,7 +37,7 @@ function createQuery(table) {
 if (!localStorage.getItem(storageKey('frota'))) {
     writeTable('frota', [{ id: 1, nome: 'Carlos Oliveira', status: 'Online', veiculo: 'Fiorino', placa: 'ABC-1234', fone: '5511999990000' }]);
 }
-if (!localStorage.getItem(storageKey('pedidos'))) { writeTable('pedidos', []); }
+if (!localStorage.getItem(storageKey('entregas'))) { writeTable('entregas', []); }
 
 export const supabase = { from(table) { return createQuery(table); } };
 export default supabase;

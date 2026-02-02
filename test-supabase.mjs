@@ -13,19 +13,19 @@ async function run() {
     const f = await supabase.from('frota').select()._exec();
     console.log('Initial frota:', f.data);
 
-    const p0 = await supabase.from('pedidos').select()._exec();
-    console.log('Initial pedidos:', p0.data);
+    const p0 = await supabase.from('entregas').select()._exec();
+    console.log('Initial entregas:', p0.data);
 
-    const ins = await supabase.from('pedidos').insert([{ cliente: 'Teste', endereco: 'Rua X', msg: 'OK', lat: -23.55, lng: -46.63, status: 'Aguardando' }]);
+    const ins = await supabase.from('entregas').insert([{ cliente: 'Teste', endereco: 'Rua X', msg: 'OK', lat: -23.55, lng: -46.63, status: 'Aguardando' }]);
     console.log('Inserted:', ins.data);
 
-    const pedidosAguardando = await supabase.from('pedidos').select().eq('status', 'Aguardando')._exec();
-    console.log('Pedidos Aguardando:', pedidosAguardando.data);
+    const entregasAguardando = await supabase.from('entregas').select().eq('status', 'Aguardando')._exec();
+    console.log('Entregas Aguardando:', entregasAguardando.data);
 
-    const upd = await supabase.from('pedidos').update({ status: 'Em Rota' }).eq('id', ins.data[0].id);
+    const upd = await supabase.from('entregas').update({ status: 'Em Rota' }).eq('id', ins.data[0].id);
     console.log('Updated:', upd.data);
 
-    const final = await supabase.from('pedidos').select().eq('status', 'Em Rota')._exec();
+    const final = await supabase.from('entregas').select().eq('status', 'Em Rota')._exec();
     console.log('Final Em Rota:', final.data);
 }
 

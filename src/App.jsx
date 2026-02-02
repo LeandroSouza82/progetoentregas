@@ -1,6 +1,5 @@
 import React from 'react';
 import { useRef, useState, useEffect } from 'react';
-import { APIProvider, Map, AdvancedMarker } from '@vis.gl/react-google-maps';
 import { supabase } from './supabaseClient';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
@@ -97,10 +96,10 @@ const NEW_LOAD_STATUS = 'aguardando';
 
 // --- LÓGICA (NÃO MEXEMOS EM NADA AQUI) ---
 
-const otimizarRota = (pontoPartida, listaPedidos) => {
+const otimizarRota = (pontoPartida, listaEntregas) => {
     let rotaOrdenada = [];
     let atual = pontoPartida;
-    let pendentes = [...listaPedidos];
+    let pendentes = [...listaEntregas];
     while (pendentes.length > 0) {
         let maisProximo = null;
         let menorDistancia = Infinity;
@@ -131,10 +130,10 @@ const otimizarRota = (pontoPartida, listaPedidos) => {
 };
 
 // Otimiza rota usando Google Directions API com optimizeWaypoints
-// Retorna a lista de pedidos reordenada conforme waypoint_order
-async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = null) {
-    // Filtrar apenas pedidos ativos com status 'pendente' (sanitizado)
-    const remaining = (listaPedidos || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente');
+// Retorna a lista de entregas reordenada conforme waypoint_order
+async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = null) {
+    // Filtrar apenas entregas ativas com status 'pendente' (sanitizado)
+    const remaining = (listaEntregas || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente');
     if (!remaining || remaining.length === 0) return [];
     // Determinar origem dinâmica: se houver motoristaId, buscar última entrega concluída
     let originLatLng;
@@ -165,7 +164,7 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
         // Persistir ordem_entrega localmente também
         try {
             for (let i = 0; i < local.length; i++) {
-                const pid = typeof local[i].id === 'string' ? parseInt(local[i].id, 10) : local[i].id;
+                const pid = local[i].id;
                 if (!pid) continue;
                 await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
             }
@@ -204,12 +203,12 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
                             ordered = wpOrder.map(i => remaining[i]);
                         }
 
-                        // Atualizar ordem_entrega no Supabase para os pedidos restantes
+                        // Atualizar ordem_entrega no Supabase para as entregas restantes
                         try {
                             for (let i = 0; i < ordered.length; i++) {
                                 const pedido = ordered[i];
-                                const pid = typeof pedido.id === 'string' ? parseInt(pedido.id, 10) : pedido.id;
-                                if (!pid || isNaN(pid)) continue;
+                                const pid = pedido.id;
+                                if (!pid) continue;
                                 const { error: ordErr } = await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
                                 if (ordErr) console.error('otimizarRotaComGoogle: erro atualizando ordem_entrega', ordErr.message || ordErr);
                             }
@@ -243,19 +242,103 @@ async function otimizarRotaComGoogle(pontoPartida, listaPedidos, motoristaId = n
     });
 }
 
+// ErrorBoundary para evitar que falhas no componente do mapa quebrem o app
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+    }
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+    componentDidCatch(error, info) {
+        console.error('ErrorBoundary capturou erro:', error, info);
+    }
+    render() {
+        if (this.state.hasError) {
+            return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>Erro ao carregar componente de mapa.</div>;
+        }
+        return this.props.children;
+    }
+}
+
+// Nota: badge fixo do gestor removido para evitar duplicidade visual
+
+// Marker list memoizado: re-renderiza somente quando referência da frota mudar ou zoom/mapsLib mudar
+const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLevel, onSelect }) {
+    if (!mapsLib || !mapsLib.Map) return null;
+    const MarkerComp = mapsLib.AdvancedMarker || (({ children }) => <div>{children}</div>);
+    return (frota || []).filter(motorista => motorista.esta_online === true && motorista.lat != null && motorista.lng != null && !isNaN(parseFloat(motorista.lat)) && !isNaN(parseFloat(motorista.lng))).map(motorista => {
+        const iconSize = zoomLevel > 15 ? 48 : 32;
+        return (
+            <MarkerComp
+                key={motorista.id}
+                position={{ lat: parseFloat(motorista.lat), lng: parseFloat(motorista.lng) }}
+            >
+                <div onClick={() => onSelect && onSelect(motorista)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', cursor: 'pointer' }}>
+                    <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
+                        {motorista.nome || 'Entregador'}
+                    </div>
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
+                </div>
+            </MarkerComp>
+        );
+    });
+}, (prev, next) => prev.frota === next.frota && prev.mapsLib === next.mapsLib && prev.zoomLevel === next.zoomLevel);
+
+// Linha da tabela de motorista memoizada: só re-renderiza quando a referência do objeto mudar
+const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme }) {
+    const isOnline = Boolean(m.esta_online);
+    const dotColor = isOnline ? '#10b981' : '#ef4444';
+    const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
+    const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
+    const total = entregasMot.length;
+    const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
+    const tipoPrincipal = (entregasMot.find(e => e.tipo && String(e.tipo).trim().length > 0) || {}).tipo || null;
+    const tipoColor = tipoPrincipal ? (tipoPrincipal === 'recolha' ? '#fb923c' : (tipoPrincipal === 'outros' ? '#c084fc' : '#60a5fa')) : null;
+    const verbByTipo = (t) => { const tt = String(t || '').trim().toLowerCase(); if (tt === 'entrega') return 'Entregando'; if (tt === 'recolha') return 'Recolhendo'; if (tt === 'outros' || tt === 'outro') return 'Ativo'; return 'Em serviço'; };
+
+    return (
+        <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
+            <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
+                <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
+            </td>
+            <td>
+                <span style={{ padding: '6px 10px', borderRadius: '12px', background: 'transparent', color: (total > 0 ? (tipoColor || (isOnline ? '#10b981' : 'rgba(239,68,68,0.6)')) : (isOnline ? '#10b981' : 'rgba(239,68,68,0.6)')), fontSize: '12px', fontWeight: 700, textShadow: isOnline ? '0 1px 6px rgba(16,185,129,0.35)' : 'none', opacity: isOnline ? 1 : 0.6 }}>
+                    {total > 0 ? `${verbByTipo(tipoPrincipal)} ${feitas}/${total}` : (isOnline ? 'Disponível' : 'Offline')}
+                </span>
+            </td>
+            <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
+            <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
+            <td style={{ padding: '10px' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0f172a', color: '#fff', padding: '6px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: 700 }}>
+                    <span style={{ color: '#10b981' }}>{feitas}</span>
+                    <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
+                    <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
+                </span>
+            </td>
+        </tr>
+    );
+}, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme);
+
 function App() {
+    // mapa dinamicamente importado para prevenir que falhas no build do pacote quebrem o app
+    const [mapsLib, setMapsLib] = useState(null);
+    const [mapsLoadError, setMapsLoadError] = useState(false);
+    const [loadingFrota, setLoadingFrota] = useState(false);
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
-    // Localização do gestor (MY_LOCATION). Inicialmente null para evitar hardcoded.
-    const [gestorPosicao, setGestorPosicao] = useState(null);
+    // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
     // Estados do Supabase
-    const [pedidosEmEspera, setPedidosEmEspera] = useState([]); // agora vem de `entregas`
+    const [entregasEmEspera, setEntregasEmEspera] = useState([]); // agora vem de `entregas`
     const [frota, setFrota] = useState([]); // agora vem de `motoristas`
     const [totalEntregas, setTotalEntregas] = useState(0);
     const [avisos, setAvisos] = useState([]);
     const [gestorPhone, setGestorPhone] = useState(null);
+    const [nomeGestor, setNomeGestor] = useState(null);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
@@ -269,161 +352,22 @@ function App() {
     const [nomeCliente, setNomeCliente] = useState('');
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const [recentList, setRecentList] = useState([]);
+    const [user, setUser] = useState(null);
+    const [session, setSession] = useState(null);
     const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
 
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
-    const [googleLoaded, setGoogleLoaded] = useState(typeof window !== 'undefined' && window.google && window.google.maps ? true : false);
+    // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
+    const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
     const [zoomLevel, setZoomLevel] = useState(13);
+    const DEFAULT_MAP_CENTER = { lat: -27.645, lng: -48.648 };
+    const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
+    const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
 
-    // Remover definição interna do ícone (usamos `motoIcon` definida no topo)
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        if (window.google && window.google.maps) { setGoogleLoaded(true); return; }
-        const existing = document.querySelector('script[data-google-maps-api]');
-        if (existing) {
-            const onLoadExisting = () => setGoogleLoaded(true);
-            existing.addEventListener('load', onLoadExisting);
-            return () => existing.removeEventListener('load', onLoadExisting);
-        }
-        const s = document.createElement('script');
-        s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}`;
-        s.async = true;
-        s.defer = true;
-        s.setAttribute('data-google-maps-api', '1');
-        // Add loading attribute to hint async loading (per console recommendation)
-        try { s.setAttribute('loading', 'async'); } catch (e) { /* ignore if unsupported */ }
-        const onLoad = () => setGoogleLoaded(true);
-        s.addEventListener('load', onLoad);
-        document.head.appendChild(s);
-        return () => { s.removeEventListener('load', onLoad); };
-    }, []);
-
-    // Debug: log do estado dos motoristas sempre que `frota` mudar
-    useEffect(() => {
-        try {
-            console.log('Estado atual dos motoristas:', frota);
-            if (frota && frota.length > 0) {
-                frota.forEach(m => console.log(`Motorista: ${m.nome || '<sem-nome>'}, Lat: ${m.lat}, Lng: ${m.lng}`));
-            }
-        } catch (e) { /* ignore */ }
-    }, [frota]);
-
-    // If Supabase credentials are not present, show a clear error screen and avoid loading fake data
-    if (!HAS_SUPABASE_CREDENTIALS) {
-        return (
-            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#111827', color: '#fff' }}>
-                <div style={{ textAlign: 'center', maxWidth: '720px', padding: '24px' }}>
-                    <h1 style={{ fontSize: '28px', marginBottom: '12px' }}>ERRO DE CONEXÃO: Chaves de API ausentes</h1>
-                    <p style={{ opacity: 0.85, marginBottom: '8px' }}>Defina as variáveis de ambiente <strong>VITE_SUPABASE_URL</strong> e <strong>VITE_SUPABASE_ANON_KEY</strong> (ou habilite o fallback de desenvolvimento em <strong>src/supabaseClient.js</strong>).</p>
-                    <p style={{ opacity: 0.7 }}>O sistema exige uma conexão real com o Supabase — sem chaves não é possível iniciar.</p>
-                </div>
-            </div>
-        );
-    }
-
-    useEffect(() => {
-        // Primeiro carrega configs e dados, depois tenta definir a posição do gestor
-        const init = async () => {
-            await carregarDados();
-            // Tentar obter coordenadas base via tabela `configuracoes` (chaves: base_lat, base_lng)
-            try {
-                const { data: baseCfg } = await supabase.from('configuracoes').select('chave,valor');
-                if (baseCfg && baseCfg.length > 0) {
-                    const latItem = baseCfg.find(c => String(c.chave).trim() === 'base_lat');
-                    const lngItem = baseCfg.find(c => String(c.chave).trim() === 'base_lng');
-                    if (latItem && lngItem) {
-                        const lat = parseFloat(latItem.valor);
-                        const lng = parseFloat(lngItem.valor);
-                        if (!isNaN(lat) && !isNaN(lng)) {
-                            setGestorPosicao([lat, lng]);
-                            return;
-                        }
-                    }
-                }
-            } catch (e) { /* continue to geolocation fallback */ }
-
-            // Fallback: tentar geolocalização do navegador
-            if (typeof navigator !== 'undefined' && navigator.geolocation && navigator.geolocation.getCurrentPosition) {
-                try {
-                    navigator.geolocation.getCurrentPosition((pos) => {
-                        try { setGestorPosicao([pos.coords.latitude, pos.coords.longitude]); } catch (e) { }
-                    }, () => { /* ignore permission denied */ });
-                } catch (e) { /* ignore */ }
-            }
-        };
-        init();
-        // Geolocalização automática removida para evitar timeouts/permits bloqueados
-    }, []);
-
-    // Log de ambiente (REAL vs MOCK) para diagnóstico
-    useEffect(() => {
-        // diagnostic log removed for performance in render path
-    }, []);
-
-    // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
-    const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
-
-    // Center for map: force Santa Catarina as requested
-    const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
-    // Forçar centro em Santa Catarina (coordenadas do Leandro, ID 1)
-    const mapCenter = { lat: -27.660773, lng: -48.708722 };
-
-    // SmoothMarker: mantém posição exibida localmente para permitir transições CSS suaves
-    const SmoothMarker = ({ m }) => {
-        const [displayPos, setDisplayPos] = useState({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
-        useEffect(() => {
-            // Ao receber novas coordenadas do Supabase, atualiza gradualmente o estado exibido
-            setDisplayPos({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
-        }, [m.lat, m.lng]);
-
-        return (
-            <SmoothMarker key={m.id} m={m} />
-        );
-    };
-
-    // Helpers para cores por tipo de carga
-    const getColorForType = (tipo) => {
-        const t = String(tipo || '').trim().toLowerCase();
-        if (t === 'entrega') return '#2563eb'; // azul
-        if (t === 'recolha') return '#f59e0b'; // laranja
-        if (t === 'outros' || t === 'outro') return '#a855f7'; // lilás
-        return '#10b981'; // verde livre / padrão
-        const [displayPos, setDisplayPos] = useState({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
-        useEffect(() => {
-            // Ao receber novas coordenadas do Supabase, atualiza gradualmente o estado exibido
-            setDisplayPos({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
-        }, [m.lat, m.lng]);
-        return (
-            <AdvancedMarker key={m.id} position={{ lat: Number(displayPos.lat), lng: Number(displayPos.lng) }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', transition: 'all 1.5s linear', position: 'relative' }}>
-                    <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                        {m.nome?.split(' ')[0] || 'Entregador'}
-                    </div>
-                    <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${zoomLevel > 15 ? 48 : 32}px`, height: `${zoomLevel > 15 ? 48 : 32}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
-                </div>
-            </AdvancedMarker>
-        );
-    };
-
-    const getDriverServiceType = (motoristaId) => {
-        try {
-            const found = (rotaAtiva || []).find(r => Number(r.motorista_id) === Number(motoristaId) && String(r.status || '').trim().toLowerCase() === 'em_rota');
-            return found ? (found.tipo || null) : null;
-        } catch (e) { return null; }
-    };
-
-    const getDriverColor = (motoristaId) => {
-        const tipo = getDriverServiceType(motoristaId);
-        return tipo ? getColorForType(tipo) : '#10b981';
-    };
-
-    // Combina pedidos em espera e rota ativa para analisar status por motorista
-    const pedidosAtivos = [...(pedidosEmEspera || []), ...(rotaAtiva || [])];
-
-    async function carregarDados() {
+    // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
+    const carregarDados = React.useCallback(async () => {
         if (!HAS_SUPABASE_CREDENTIALS) {
             console.error('carregarDados: Supabase keys missing — aborting data load');
             return;
@@ -432,6 +376,7 @@ function App() {
             console.error('carregarDados: supabase client not initialized — aborting');
             return;
         }
+        setLoadingFrota(true);
         // motoristas reais
         try {
             let q = supabase.from('motoristas').select('*');
@@ -440,42 +385,38 @@ function App() {
             if (motorErr) {
                 console.warn('carregarDados: erro ao buscar motoristas', motorErr);
                 setFrota([]);
-                } else {
-                    // Normalizar lat/lng para Number (trim prior) antes de salvar no estado
-                    const normalized = (motoristas || []).map(m => ({
-                        ...m,
-                        lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
-                        lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
-                    }));
+            } else {
+                const normalized = (motoristas || []).map(m => ({
+                    ...m,
+                    lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
+                    lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
+                }));
 
-                    // Merge conservador: preserve referências dos objetos não alterados para permitir transições suaves
-                    setFrota(prev => {
-                        try {
-                            const byId = new Map((prev || []).map(p => [p.id, p]));
-                            const merged = normalized.map(n => {
-                                const existing = byId.get(n.id);
-                                if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
-                                    return existing; // preserve reference when nada mudou
-                                }
-                                return n;
-                            });
-                            return merged;
-                        } catch (e) {
-                            return normalized;
-                        }
-                    });
-                    // Debug: registrar dados brutos vindos do Supabase (normalizados)
-                    try { console.log('Dados do Supabase:', normalized); } catch (e) { /* ignore */ }
-                }
+                setFrota(prev => {
+                    try {
+                        const byId = new Map((prev || []).map(p => [p.id, p]));
+                        const merged = normalized.map(n => {
+                            const existing = byId.get(n.id);
+                            if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
+                                return existing;
+                            }
+                            return n;
+                        });
+                        return merged;
+                    } catch (e) {
+                        return normalized;
+                    }
+                });
+            }
         } catch (e) { console.warn('Erro carregando motoristas:', e); setFrota([]); }
 
-        // entregas: novas cargas — filtro rigoroso pela string exata definida em NEW_LOAD_STATUS
+        // entregas: filtro por NEW_LOAD_STATUS
         try {
             let q = supabase.from('entregas').select('*');
             if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
             const { data: entregasPend, error: entregasErr } = await q;
-            if (entregasErr) { console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr); setPedidosEmEspera([]); } else setPedidosEmEspera(entregasPend || []);
-        } catch (e) { console.warn('Erro carregando entregas (filtro de status):', e); setPedidosEmEspera([]); }
+            if (entregasErr) { console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr); setEntregasEmEspera([]); } else setEntregasEmEspera(entregasPend || []);
+        } catch (e) { console.warn('Erro carregando entregas (filtro de status):', e); setEntregasEmEspera([]); }
 
         // total de entregas
         try {
@@ -501,7 +442,7 @@ function App() {
             if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
         } catch (e) { console.warn('Erro carregando configuracoes:', e); setGestorPhone(null); }
 
-        // Histórico recente (clientes únicos) para preencher atalho na Nova Carga
+        // Histórico recente
         try {
             let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
             if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
@@ -523,121 +464,351 @@ function App() {
                 setRecentList([]);
             }
         } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); }
+        setLoadingFrota(false);
+    }, []);
+
+    // Limpador de localStorage: remove referências literais ao motorista antigo (ex: 'f6a9...') se existirem
+    useEffect(() => {
+        try {
+            if (typeof window === 'undefined' || !window.localStorage) return;
+            const keysToCheck = ['motorista', 'v10_email'];
+            keysToCheck.forEach(k => {
+                try {
+                    const raw = localStorage.getItem(k);
+                    if (!raw) return;
+                    if (String(raw).includes('f6a9')) {
+                        localStorage.removeItem(k);
+                        console.log('Removed legacy motorista id from localStorage key', k);
+                    }
+                } catch (e) { /* ignore */ }
+            });
+        } catch (e) { /* ignore */ }
+    }, []);
+
+    // Remover definição interna do ícone (usamos `motoIcon` definida no topo)
+
+    // NOTE: Google Maps loading is delegated to the maps library's `APIProvider` when available.
+
+    // Debug: log do estado dos motoristas sempre que `frota` mudar
+    useEffect(() => {
+        // debug logs removed for production dashboard
+    }, [frota]);
+
+    // If Supabase credentials are not present, show a clear error screen and avoid loading fake data
+    if (!HAS_SUPABASE_CREDENTIALS) {
+        return (
+            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#111827', color: '#fff' }}>
+                <div style={{ textAlign: 'center', maxWidth: '720px', padding: '24px' }}>
+                    <h1 style={{ fontSize: '28px', marginBottom: '12px' }}>ERRO DE CONEXÃO: Chaves de API ausentes</h1>
+                    <p style={{ opacity: 0.85, marginBottom: '8px' }}>Defina as variáveis de ambiente <strong>VITE_SUPABASE_URL</strong> e <strong>VITE_SUPABASE_ANON_KEY</strong> (ou habilite o fallback de desenvolvimento em <strong>src/supabaseClient.js</strong>).</p>
+                    <p style={{ opacity: 0.7 }}>O sistema exige uma conexão real com o Supabase — sem chaves não é possível iniciar.</p>
+                </div>
+            </div>
+        );
     }
 
-    // Realtime: escuta alterações em 'entregas', 'motoristas' e 'avisos_gestor'
     useEffect(() => {
-        // If Supabase credentials are missing, disable realtime subscriptions
-        if (!HAS_SUPABASE_CREDENTIALS) {
-            console.error('Realtime disabled: Supabase credentials missing');
+        // Carrega dados iniciais (sem solicitar GPS no dashboard)
+        const init = async () => {
+            await carregarDados();
+        };
+        init();
+    }, []);
+
+    // Tenta obter localização do gestor via Geolocation + reverse geocoding
+    useEffect(() => {
+        let mounted = true;
+        if (typeof navigator === 'undefined' || !navigator.geolocation) {
+            setGestorLocation('São Paulo, BR');
             return;
         }
-        // If real Supabase client is available, use a single channel named 'custom-filter-channel'
-        if (supabase && supabase.channel) {
+
+        const success = async (pos) => {
+            if (!mounted) return;
+            const { latitude, longitude } = pos.coords || {};
             try {
-                if (!supabase) return;
-                const channel = supabase.channel('custom-filter-channel');
-
-                channel.on('postgres_changes', { event: '*', schema: 'public', table: 'motoristas' }, (payload) => {
-                    // update local state directly if record present, parsing lat/lng to numbers
-                    const rec = payload.record;
-                    try {
-                        if (rec && rec.id) {
-                            const parsed = { ...rec };
-                            if (parsed.lat != null) {
-                                const v = Number(String(parsed.lat).trim());
-                                parsed.lat = Number.isFinite(v) ? v : null;
-                            }
-                            if (parsed.lng != null) {
-                                const v2 = Number(String(parsed.lng).trim());
-                                parsed.lng = Number.isFinite(v2) ? v2 : null;
-                            }
-                            setFrota(prev => {
-                                const exists = prev.find(p => p.id === parsed.id);
-                                if (exists) return prev.map(p => p.id === parsed.id ? { ...p, ...parsed } : p);
-                                return [...prev.filter(p => p.id !== parsed.id), parsed];
-                            });
+                // Primeiro: tentar Geocoder do Google se carregado
+                if (window.google && window.google.maps && window.google.maps.Geocoder) {
+                    const geocoder = new window.google.maps.Geocoder();
+                    const results = await new Promise((resolve, reject) => {
+                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
+                            if (status === 'OK') resolve(res); else reject(status);
+                        });
+                    });
+                    let city = '';
+                    let state = '';
+                    for (const r of results || []) {
+                        for (const comp of r.address_components || []) {
+                            if ((comp.types || []).includes('locality')) city = comp.long_name || city;
+                            if ((comp.types || []).includes('administrative_area_level_1')) state = comp.short_name || state;
                         }
-                    } catch (e) {
-                        console.warn('Erro processando payload motoristas:', e);
+                        if (city && state) break;
                     }
-                });
-
-                channel.on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
-                    try {
-                        const rec = payload.record;
-                        if (rec && rec.id) {
-                            const id = rec.id;
-                            // Update local pending deliveries list conservatively without refetching
-                            setPedidosEmEspera(prev => {
-                                try {
-                                    if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
-                                    // Normalize incoming status and compare to our canonical value
-                                    const recStatusNorm = String(rec.status || '').trim().toLowerCase();
-                                    if (recStatusNorm === String(NEW_LOAD_STATUS).trim().toLowerCase()) {
-                                        const exists = prev.find(p => p.id === id);
-                                        if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
-                                        return [...prev, rec];
-                                    } else {
-                                        return prev.filter(p => p.id !== id);
-                                    }
-                                } catch (e) { console.warn('Erro atualizando pedidosEmEspera do payload:', e); return prev; }
-                            });
-
-                            // Update rotaAtiva if present
-                            setRotaAtiva(prev => {
-                                try {
-                                    const exists = prev.find(p => p.id === id);
-                                    if (payload.event === 'DELETE') return prev.filter(p => p.id !== id);
-                                    if (rec.ordem || rec.status === 'em_rota') {
-                                        if (exists) return prev.map(p => p.id === id ? { ...p, ...rec } : p);
-                                        return [...prev, rec];
-                                    }
-                                    return prev;
-                                } catch (e) { console.warn('Erro atualizando rotaAtiva do payload:', e); return prev; }
-                            });
-
-                            return; // handled via local updates
+                    if (!city && results && results[0]) {
+                        for (const comp of results[0].address_components || []) {
+                            if (!city && (comp.types || []).includes('locality')) city = comp.long_name || city;
+                            if (!state && (comp.types || []).includes('administrative_area_level_1')) state = comp.short_name || state;
                         }
-                    } catch (e) {
-                        console.warn('Erro processando payload entregas:', e);
                     }
-                    // Fallback: se payload inválido, re-carrega dados completos
-                    carregarDados();
-                });
+                    if (city || state) setGestorLocation(`${city || 'São Paulo'}, ${state || 'BR'}`);
+                    else setGestorLocation('São Paulo, BR');
+                    return;
+                }
 
-                channel.on('postgres_changes', { event: '*', schema: 'public', table: 'avisos_gestor' }, (payload) => {
-                    carregarDados();
-                });
-
-                const trySubscribe = () => {
-                    try {
-                        channel.subscribe();
-                    } catch (err) {
-                        console.error('Supabase channel subscribe failed, retrying in 5s', err);
-                        setTimeout(trySubscribe, 5000);
+                // Fallback: usar Nominatim (OpenStreetMap)
+                try {
+                    const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
+                    if (resp.ok) {
+                        const j = await resp.json();
+                        const addr = j.address || {};
+                        const city = addr.city || addr.town || addr.village || addr.county || '';
+                        const state = addr.state || addr.region || '';
+                        if (city || state) setGestorLocation(`${city || 'São Paulo'}, ${state || 'BR'}`);
+                        else setGestorLocation('São Paulo, BR');
+                        return;
                     }
-                };
-                trySubscribe();
-
-                return () => {
-                    try { supabase.removeChannel(channel); } catch (e) { channel.unsubscribe && channel.unsubscribe(); }
-                };
-            } catch (err) {
-                console.error('Falha ao criar canal Supabase (Realtime):', err);
+                } catch (e) {
+                    // swallow and fallback
+                }
+            } catch (e) {
+                // swallow
             }
-        }
-        return () => { /* nothing to cleanup if no channel created */ };
+            if (mounted) setGestorLocation('São Paulo, BR');
+        };
+
+        const fail = () => { if (mounted) setGestorLocation('São Paulo, BR'); };
+
+        navigator.geolocation.getCurrentPosition(success, fail, { timeout: 10000, maximumAge: 600000 });
+        return () => { mounted = false; };
+    }, []);
+
+    // Import dinâmico do pacote de mapas (evita crash no build/SSR quando o pacote falha)
+    useEffect(() => {
+        let mounted = true;
+        (async () => {
+            setLoadingFrota(true);
+            try {
+                const lib = await import('@vis.gl/react-google-maps');
+                if (!mounted) return;
+                setMapsLib(lib || null);
+            } catch (e) {
+                console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e);
+                if (!mounted) return;
+                setFrota([]);
+                setMapsLoadError(true);
+            }
+        })();
+        return () => { mounted = false; };
+    }, []);
+
+    // Failsafe do Gestor: marcar offline com fetch keepalive no pagehide
+    useEffect(() => {
+        if (!user || !session) return;
+
+        const marcarGestorOffline = () => {
+            try {
+                const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env.VITE_SUPABASE_URL : undefined;
+                const anonKey = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env.VITE_SUPABASE_ANON_KEY : undefined;
+                if (!supabaseUrl || !user?.id) return;
+
+                const url = `${supabaseUrl}/rest/v1/usuarios?id=eq.${user.id}`;
+                const body = JSON.stringify({ esta_online: false, ultima_atividade: new Date().toISOString() });
+
+                try {
+                    fetch(url, {
+                        method: 'PATCH',
+                        keepalive: true,
+                        headers: {
+                            'apikey': anonKey || '',
+                            'Authorization': `Bearer ${session?.access_token || anonKey || ''}`,
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=minimal'
+                        },
+                        body
+                    }).catch(() => { /* swallow */ });
+                } catch (e) { /* swallow */ }
+            } catch (e) { /* swallow */ }
+        };
+
+        window.addEventListener('pagehide', marcarGestorOffline);
+        return () => window.removeEventListener('pagehide', marcarGestorOffline);
+    }, [user, session]);
+
+    // Log de ambiente (REAL vs MOCK) para diagnóstico
+    useEffect(() => {
+        // diagnostic log removed for performance in render path
+    }, []);
+
+    // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
+    const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
+
+    // Center for map: force Santa Catarina as requested
+    const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
+    // Forçar centro em Santa Catarina (coordenadas antigas removidas) — usar `mapCenterState`.
+
+    // SmoothMarker: mantém posição exibida localmente para permitir transições CSS suaves
+    const SmoothMarker = ({ m }) => {
+        const [displayPos, setDisplayPos] = useState({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
+        useEffect(() => {
+            // Ao receber novas coordenadas do Supabase, atualiza gradualmente o estado exibido
+            setDisplayPos({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
+        }, [m.lat, m.lng]);
+
+        const iconSize = zoomLevel > 15 ? 48 : 32;
+        const MarkerComp = mapsLib && mapsLib.AdvancedMarker ? mapsLib.AdvancedMarker : ({ children }) => <div>{children}</div>;
+        return (
+            <MarkerComp key={m.id} position={{ lat: Number(displayPos.lat), lng: Number(displayPos.lng) }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
+                    <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
+                        {m.nome || 'Entregador'}
+                    </div>
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
+                </div>
+            </MarkerComp>
+        );
+    };
+
+    // (MapControls removed — using single `BotoesMapa` inside <Map>)
+
+    // Componente interno obrigatório para controle do mapa (deve ficar DENTRO de <Map>..</Map>)
+    function BotoesMapa() {
+        const map = mapsLib && typeof mapsLib.useMap === 'function' ? mapsLib.useMap() : null;
+        const [spinning, setSpinning] = useState(false);
+        const handleRefresh = () => {
+            try { setSpinning(true); } catch (e) { }
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    const { latitude, longitude } = position.coords;
+                    if (map) {
+                        map.panTo({ lat: latitude, lng: longitude });
+                        map.setZoom(15);
+                    }
+                    try { carregarDados(); } catch (e) { /* non-blocking */ }
+                    // stop spinning after a short interval to show feedback
+                    try { setTimeout(() => setSpinning(false), 900); } catch (e) { }
+                }, () => { try { setSpinning(false); } catch (e) { } });
+            } else {
+                try { setSpinning(false); } catch (e) { }
+            }
+        };
+        return (
+            <div style={{ position: 'absolute', top: 65, right: 12, zIndex: 9999 }}>
+                <button onClick={handleRefresh} style={{ width: 44, height: 44, borderRadius: '50%', background: '#fff', border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4b5563" strokeWidth="2" style={{ transform: spinning ? 'rotate(360deg)' : 'none', transition: 'transform 0.9s linear' }}><path d="M21 12a9 9 0 10-2.62 6.13M21 3v6h-6" /></svg>
+                </button>
+            </div>
+        );
+    }
+
+    // (MapControlsFallback removed — single `BotoesMapa` is used inside <Map>)
+
+    // Helpers para cores por tipo de carga
+    const getColorForType = (tipo) => {
+        const t = String(tipo || '').trim().toLowerCase();
+        if (t === 'entrega') return '#2563eb'; // azul
+        if (t === 'recolha') return '#f59e0b'; // laranja
+        if (t === 'outros' || t === 'outro') return '#a855f7'; // lilás
+        return '#10b981'; // verde livre / padrão
+    };
+
+    const getDriverServiceType = (motoristaId) => {
+        try {
+            const found = (rotaAtiva || []).find(r => Number(r.motorista_id) === Number(motoristaId) && String(r.status || '').trim().toLowerCase() === 'em_rota');
+            return found ? (found.tipo || null) : null;
+        } catch (e) { return null; }
+    };
+
+    const getDriverColor = (motoristaId) => {
+        const tipo = getDriverServiceType(motoristaId);
+        return tipo ? getColorForType(tipo) : '#10b981';
+    };
+
+    // Combina entregas em espera e rota ativa para analisar status por motorista
+    const entregasAtivos = [...(entregasEmEspera || []), ...(rotaAtiva || [])];
+
+
+
+    // Retorna coordenadas do gestor usando Geolocation com fallback para DEFAULT_MAP_CENTER
+    const obterPosicaoGestor = React.useCallback(() => {
+        return new Promise((resolve) => {
+            if (typeof navigator === 'undefined' || !navigator.geolocation) {
+                resolve(DEFAULT_MAP_CENTER);
+                return;
+            }
+            let resolved = false;
+            const onSuccess = (pos) => {
+                if (resolved) return;
+                resolved = true;
+                const lat = pos?.coords?.latitude || DEFAULT_MAP_CENTER.lat;
+                const lng = pos?.coords?.longitude || DEFAULT_MAP_CENTER.lng;
+                resolve({ lat: Number(lat), lng: Number(lng) });
+            };
+            const onError = () => {
+                if (resolved) return;
+                resolved = true;
+                resolve(DEFAULT_MAP_CENTER);
+            };
+            try {
+                navigator.geolocation.getCurrentPosition(onSuccess, onError, { timeout: 10000, maximumAge: 600000 });
+            } catch (e) {
+                onError();
+            }
+            // safety timeout in case the callback never fires
+            setTimeout(() => { if (!resolved) { resolved = true; resolve(DEFAULT_MAP_CENTER); } }, 11000);
+        });
+    }, []);
+
+    // Realtime: coração do rastreio - escuta UPDATEs na tabela `motoristas`
+    useEffect(() => {
+        if (!HAS_SUPABASE_CREDENTIALS) return;
+
+        const canal = supabase
+            .channel('rastreio-v10')
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas' }, (payload) => {
+                try {
+                    console.log('📡 GPS CHEGOU DO BANCO:', payload.new);
+                    const rec = payload.new || payload.record || null;
+                    if (!rec || !rec.id) return;
+                    const parsed = { ...rec };
+                    if (parsed.lat != null) parsed.lat = Number(parsed.lat);
+                    if (parsed.lng != null) parsed.lng = Number(parsed.lng);
+
+                    // Atualiza por mapeamento para preservar referências de objetos
+                    setFrota(prev => {
+                        try {
+                            const arr = Array.isArray(prev) ? prev : [];
+                            const found = arr.find(m => String(m.id) === String(parsed.id));
+                            if (found) {
+                                return arr.map(m => String(m.id) === String(parsed.id) ? { ...m, ...parsed } : m);
+                            }
+                            // Se não existir, adiciona ao final
+                            return [...arr, parsed];
+                        } catch (e) {
+                            return prev || [];
+                        }
+                    });
+                } catch (e) {
+                    console.warn('Erro no handler realtime motoristas:', e);
+                }
+            })
+            .subscribe();
+
+        return () => {
+            try { supabase.removeChannel(canal); } catch (e) { canal.unsubscribe && canal.unsubscribe(); }
+        };
     }, []);
 
     // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
     useEffect(() => {
-        if (!mapRef.current || !gestorPosicao) return;
+        if (!mapRef.current) return;
         const map = mapRef.current;
-        const pontos = [gestorPosicao, ...orderedRota.map(p => [p.lat, p.lng])].filter(Boolean);
+        const pontos = [
+            ...orderedRota.map(p => [p.lat, p.lng]),
+            ...((frota || []).map(m => [m.lat, m.lng]))
+        ].filter(pt => pt && pt.length >= 2 && !isNaN(Number(pt[0])) && !isNaN(Number(pt[1])));
         if (!pontos || pontos.length === 0) return;
         const bounds = new window.google.maps.LatLngBounds();
-        pontos.forEach(pt => { if (pt && pt.length >= 2) bounds.extend({ lat: Number(pt[0]), lng: Number(pt[1]) }); });
+        pontos.forEach(pt => { bounds.extend({ lat: Number(pt[0]), lng: Number(pt[1]) }); });
         try {
             map.fitBounds(bounds, 80);
             // ensure zoom isn't too close/far; clamp between 13 and 15
@@ -645,12 +816,35 @@ function App() {
             if (currentZoom && currentZoom < 13) map.setZoom(13);
             if (currentZoom && currentZoom > 15) map.setZoom(15);
         } catch (e) { /* ignore */ }
-    }, [orderedRota, gestorPosicao]);
+    }, [orderedRota, frota]);
+
+    // Remover motoristas sem atualização há mais de 2 minutos (evita 'fantasmas')
+    useEffect(() => {
+        const INTERVAL = 30 * 1000; // checa a cada 30s
+        const MAX_AGE = 2 * 60 * 1000; // 2 minutos
+        const id = setInterval(() => {
+            setFrota(prev => {
+                try {
+                    const now = Date.now();
+                    return (prev || []).filter(m => {
+                        try {
+                            const last = m.ultima_atualizacao || m.ultimo_sinal || m.updated_at || m.last_seen || null;
+                            if (!last) return true; // sem timestamp, mantém (conservador)
+                            const t = new Date(last).getTime();
+                            if (!t || Number.isNaN(t)) return true;
+                            return (now - t) <= MAX_AGE;
+                        } catch (e) { return true; }
+                    });
+                } catch (e) { return prev; }
+            });
+        }, INTERVAL);
+        return () => clearInterval(id);
+    }, []);
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        const baseLat = (gestorPosicao && Array.isArray(gestorPosicao) && gestorPosicao.length >= 2) ? Number(gestorPosicao[0]) : 0;
-        const baseLng = (gestorPosicao && Array.isArray(gestorPosicao) && gestorPosicao.length >= 2) ? Number(gestorPosicao[1]) : 0;
+        const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
+        const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
         const lat = baseLat + (Math.random() - 0.5) * 0.04;
         const lng = baseLng + (Math.random() - 0.5) * 0.04;
         // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
@@ -674,47 +868,52 @@ function App() {
         const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
         if (!parsedId || isNaN(parsedId)) {
             console.warn('excluirPedido: id inválido', id);
-            return;
+            return () => {
+                try { supabase.removeChannel && supabase.removeChannel(channel); } catch (e) { /* ignore */ }
+            };
         }
         const { error } = await supabase.from('entregas').delete().eq('id', parsedId);
         if (!error) carregarDados();
     };
 
     const dispararRota = async () => {
-        if (pedidosEmEspera.length === 0) return alert("⚠️ Fila vazia.");
+        if (entregasEmEspera.length === 0) return alert("⚠️ Fila vazia.");
         // Open driver selector modal to choose which driver will receive the route
         setShowDriverSelect(true);
     };
 
     // Assign a selected driver: optimize route and update each entrega to 'em_rota' with motorista_id e ordem
     const assignDriver = async (driver) => {
-        if (!driver || !driver.id) return;
-        const motoristaIdNum = Number(driver.id);
-        // Validação estrita de tipagem antes de enviar ao banco
-        if (isNaN(motoristaIdNum)) {
-            console.error('assignDriver: ID do motorista inválido', driver);
+        // allow caller to omit driver and use selectedMotorista from state
+        if ((!driver || !driver.id) && selectedMotorista) driver = selectedMotorista;
+        const selectedDriver = driver || selectedMotorista || null;
+        if (!selectedDriver?.id) {
+            console.error('Erro: Nenhum motorista selecionado');
             return;
         }
+        // Garantir que usamos UUID como string (nunca converter para Number)
+        const motoristaIdVal = String(selectedDriver.id);
         setDispatchLoading(true);
         try {
             try { audioRef.current.play().catch(() => { }); } catch (e) { }
             let rotaOtimizada = [];
             try {
-                rotaOtimizada = await otimizarRotaComGoogle(gestorPosicao, pedidosEmEspera, motoristaIdNum);
-                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
+                rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, entregasEmEspera, motoristaIdVal);
+                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
             } catch (e) {
                 // fallback para algoritmo local em caso de erro com Google API
-                rotaOtimizada = otimizarRota(gestorPosicao, pedidosEmEspera);
+                rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
             }
             // Validate motorista exists in local `frota` to avoid sending wrong id
-            const motoristaExists = frota && frota.find ? frota.find(m => Number(m.id) === motoristaIdNum) : null;
-            if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdNum);
-            // status para despacho: sempre normalizado (lowercase + trim)
-            const statusValue = String('em_rota').trim().toLowerCase();
+            const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
+            if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
+            // status para despacho: seguir regra solicitada ('pendente')
+            const statusValue = String('pendente').trim().toLowerCase();
 
-            // Determine pedidos to dispatch and ensure IDs are numbers
-            const pedidosParaDespachar = rotaOtimizada; // use rota otimizada as the set to dispatch
-            const assignedIds = (pedidosParaDespachar || []).map(p => Number(p.id)).filter(n => Number.isFinite(n));
+            // Determine entregas to dispatch and collect their IDs (preserve original type)
+            const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
+            const assignedIds = entregasParaDespachar.map(p => p.id).filter(id => id !== undefined && id !== null);
+            const assignedIdsStr = assignedIds.map(id => String(id));
 
             if (assignedIds.length === 0) {
                 console.warn('assignDriver: nenhum pedido válido para atualizar');
@@ -722,22 +921,22 @@ function App() {
                 let updErr = null;
                 try {
                     // Try bulk update; if .in is not available (mock), fallback to per-item updates
-                    let q = supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue });
+                    let q = supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
                     if (q && typeof q.in === 'function') {
                         const { data: updData, error } = await q.in('id', assignedIds);
                         updErr = error;
                         if (!updErr) {
-                            setPedidosEmEspera(prev => prev.filter(p => !assignedIds.includes(Number(p.id))));
+                            setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
                         }
                     } else {
                         // Fallback: update one by one
                         for (const id of assignedIds) {
                             try {
-                                const { error } = await supabase.from('entregas').update({ motorista_id: Number(driver.id), status: statusValue }).eq('id', Number(id));
+                                const { error } = await supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
                                 if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
                             } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
                         }
-                        if (!updErr) setPedidosEmEspera(prev => prev.filter(p => !assignedIds.includes(Number(p.id))));
+                        if (!updErr) setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
                     }
                 } catch (err) {
                     updErr = err;
@@ -747,8 +946,8 @@ function App() {
                 // Update local rotaOtimizada objects with ordem for UI only
                 for (let i = 0; i < rotaOtimizada.length; i++) {
                     const pedido = rotaOtimizada[i];
-                    const pid = typeof pedido.id === 'string' ? parseInt(pedido.id, 10) : pedido.id;
-                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_entrega: i + 1, motorista_id: Number(driver.id), id: pid };
+                    const pid = pedido.id;
+                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_entrega: i + 1, motorista_id: motoristaIdVal, id: pid };
                 }
 
                 // Only close modal and clear selection if update succeeded
@@ -760,8 +959,8 @@ function App() {
             // Persist ordem_entrega per entrega (cada pedido precisa da sua ordem específica)
             try {
                 for (let i = 0; i < rotaOtimizada.length; i++) {
-                    const pid = typeof rotaOtimizada[i].id === 'string' ? parseInt(rotaOtimizada[i].id, 10) : rotaOtimizada[i].id;
-                    if (!pid || isNaN(pid)) continue;
+                    const pid = rotaOtimizada[i].id;
+                    if (pid === undefined || pid === null) continue;
                     try {
                         const { error: ordErr } = await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
                         if (ordErr) console.error('Erro atualizando ordem_entrega:', ordErr && ordErr.message, ordErr && ordErr.hint);
@@ -786,7 +985,9 @@ function App() {
     };
 
     // --- NOVA INTERFACE (AQUI ESTÁ A MUDANÇA VISUAL) ---
-    return (
+    const motoristas = frota || [];
+    const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
+    const appContent = (
         <div style={{ minHeight: '100vh', minWidth: '1200px', backgroundColor: theme.bg, fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
 
             {/* 1. HEADER SUPERIOR (NAVBAR) */}
@@ -798,47 +999,56 @@ function App() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.2)'
+                boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                zIndex: 1300
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                    <div style={{ width: '35px', height: '35px', background: theme.primary, borderRadius: '8px', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold' }}>LC</div>
-                    <h2 style={{ margin: 0, fontSize: '20px', letterSpacing: '1px' }}>LOGI<span style={{ fontWeight: '300', opacity: 0.7 }}>CONTROL</span></h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1E3A8A,#3B82F6)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
+                        <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
+                    </div>
+
+                    <nav style={{ display: 'flex', gap: '8px' }}>
+                        {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
+                            <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
+                                padding: '10px 18px',
+                                background: abaAtiva === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                border: abaAtiva === tab ? `1px solid ${theme.primary}` : '1px solid transparent',
+                                color: abaAtiva === tab ? theme.primary : '#94a3b8', // Texto colorido quando ativo
+                                borderRadius: '20px',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                fontSize: '14px',
+                                transition: '0.18s'
+                            }}>
+                                {tab.toUpperCase()}
+                            </button>
+                        ))}
+                    </nav>
                 </div>
 
-                {/* ABAS NO TOPO */}
-                <nav style={{ display: 'flex', gap: '10px' }}>
-                    {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe'].map(tab => (
-                        <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
-                            padding: '10px 20px',
-                            background: abaAtiva === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
-                            border: abaAtiva === tab ? `1px solid ${theme.primary}` : '1px solid transparent',
-                            color: abaAtiva === tab ? theme.primary : '#94a3b8', // Texto colorido quando ativo
-                            borderRadius: '20px',
-                            cursor: 'pointer',
-                            fontWeight: '600',
-                            fontSize: '14px',
-                            transition: '0.3s'
-                        }}>
-                            {tab.toUpperCase()}
-                        </button>
-                    ))}
-                </nav>
+                <div style={{ flex: 1 }} />
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE</div>
-                        <div style={{ opacity: 0.6 }}>São Paulo, BR</div>
-                        {gestorPhone && <div style={{ opacity: 0.6 }}>Contato: {gestorPhone}</div>}
+                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
+                        <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
-                        <button onClick={async () => { carregarDados(); alert('Dados atualizados.'); }} style={{ padding: '8px 12px', borderRadius: '8px', border: 'none', background: theme.accent, color: '#fff', cursor: 'pointer' }}>Atualizar Posição</button>
+                        <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
                     </div>
                 </div>
             </header>
 
+            {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
+
             {/* 2. ÁREA DE CONTEÚDO */}
-            <main style={{ maxWidth: '1200px', margin: '40px auto', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1200px', margin: '40px auto', padding: '0 20px', marginTop: '110px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
@@ -854,51 +1064,45 @@ function App() {
 
                         {/* MAPA EM CARD (DIMINUÍDO E ELEGANTE) */}
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px' }}>
-                            <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden' }}>
-                                {googleLoaded ? (
-                                    <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
-                                        <Map
-                                            defaultCenter={{ lat: -27.6485, lng: -48.6672 }}
-                                            defaultZoom={13}
-                                            mapId="546bd17ef4a30773714756d8"
-                                            style={{ width: '100%', height: '100%' }}
-                                            onZoomChanged={(ev) => setZoomLevel(ev?.detail?.zoom)}
-                                        >
-                                            {(() => {
-                                                const motoristas = frota || [];
-                                                return motoristas?.filter(m => {
-                                                    const la = parseFloat(m.lat);
-                                                    const lo = parseFloat(m.lng);
-                                                    return !isNaN(la) && !isNaN(lo) && la !== 0;
-                                                }).map((m) => {
-                                                    const iconSize = zoomLevel > 15 ? 48 : 32;
-                                                    return (
-                                                        <AdvancedMarker
-                                                            key={m.id}
-                                                            position={{ lat: parseFloat(m.lat), lng: parseFloat(m.lng) }}
-                                                        >
-                                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
-                                                                {/* Nome do Motorista */}
-                                                                <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                                                                    {m.nome?.split(' ')[0] || 'Entregador'}
-                                                                </div>
+                            <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
+                                {
+                                    // Se a lib do maps foi carregada com sucesso, renderiza o mapa dentro de ErrorBoundary
+                                    (mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
+                                        (() => {
+                                            const MapComp = mapsLib.Map;
+                                            return (
+                                                <ErrorBoundary>
+                                                    <MapComp
+                                                        defaultCenter={mapCenterState}
+                                                        defaultZoom={zoomLevel}
+                                                        mapId="546bd17ef4a30773714756d8"
+                                                        style={{ width: '100%', height: '100%' }}
+                                                        onZoomChanged={(ev) => setZoomLevel(ev?.detail?.zoom)}
+                                                        onLoad={(m) => {
+                                                            try {
+                                                                const inst = (m && (m.map || m.__map || m)) || m;
+                                                                mapRef.current = inst;
+                                                            } catch (e) { /* ignore */ }
+                                                        }}
+                                                    >
+                                                        <BotoesMapa />
+                                                        <MarkerList frota={frota} mapsLib={mapsLib} zoomLevel={zoomLevel} onSelect={setSelectedMotorista} />
+                                                    </MapComp>
+                                                </ErrorBoundary>
+                                            );
+                                        })()
+                                    ) : (
+                                        // fallback seguro: evita piscar enquanto frota não carregou
+                                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b1220' }}>
+                                            {loadingFrota ? <div style={{ color: '#9ca3af' }}>Carregando posições...</div> : <div style={{ color: '#9ca3af' }}>{mapsLoadError ? 'Mapa indisponível — visualização desativada' : ''}</div>}
+                                        </div>
+                                    )
+                                }
 
-                                                                {/* Ícone da Entrega (Tamanho Dinâmico) */}
-                                                                <img
-                                                                    src="/bicicleta-de-entrega.png"
-                                                                    alt="Entregador"
-                                                                    style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }}
-                                                                />
-                                                            </div>
-                                                        </AdvancedMarker>
-                                                    );
-                                                });
-                                            })()}
-                                        </Map>
-                                    </APIProvider>
-                                ) : (
-                                    <div style={{ width: '100%', height: '100%' }} />
-                                )}
+                                {/* Map controls consolidated: single `BotoesMapa` is rendered INSIDE the <Map> */}
+
+                                {/* Floating refresh button removed; use single `BotoesMapa` inside the <Map> */}
+
                             </div>
                         </div>
 
@@ -985,9 +1189,9 @@ function App() {
                             <h2>Fila de Preparação</h2>
                             <button onClick={dispararRota} style={{ ...btnStyle(theme.success), width: 'auto' }}>🚀 DISPARAR ROTA (WHATSAPP)</button>
                         </div>
-                        {(!pedidosEmEspera || pedidosEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
+                        {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-                                {pedidosEmEspera?.map(p => (
+                                {entregasEmEspera?.map(p => (
                                     <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
@@ -1076,8 +1280,8 @@ function App() {
                                     const statusText = isOnline ? 'Disponível' : 'Offline';
                                     const statusColor = isOnline ? '#10b981' : 'rgba(239,68,68,0.6)';
 
-                                    // Progresso de carga: contar entregas vinculadas ao motorista a partir de pedidosAtivos
-                                    const entregasMot = (pedidosAtivos || []).filter(e => Number(e.motorista_id) === Number(m.id));
+                                    // Progresso de carga: contar entregas vinculadas ao motorista a partir de entregasAtivos
+                                    const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
                                     const total = entregasMot.length;
                                     const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
                                     // Tipo principal (para rótulo dinâmico) — preferir o primeiro tipo conhecido
@@ -1092,7 +1296,7 @@ function App() {
                                     };
 
                                     return (
-                                        <tr key={m.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                        <tr key={m.id} onClick={() => setSelectedMotorista(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
                                             <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
                                                 <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
@@ -1121,6 +1325,31 @@ function App() {
                     </div>
                 )}
 
+                {/* GESTÃO DE MOTORISTAS */}
+                {abaAtiva === 'Gestão de Motoristas' && (
+                    <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
+                        <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
+                        <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
+
+                        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                            <thead>
+                                <tr style={{ textAlign: 'left', borderBottom: '2px solid #e6e6e6', color: '#000' }}>
+                                    <th style={{ padding: '10px' }}>NOME</th>
+                                    <th style={{ padding: '10px' }}>EMAIL</th>
+                                    <th style={{ padding: '10px' }}>STATUS</th>
+                                    <th style={{ padding: '10px' }}>VEÍCULO</th>
+                                    <th style={{ padding: '10px' }}>PLACA</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {frota.map(m => (
+                                    <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
             </main>
 
             {/* Driver selection modal (componente minimalista) */}
@@ -1129,11 +1358,16 @@ function App() {
                 onClose={() => { setShowDriverSelect(false); setSelectedMotorista(null); }}
                 frota={frota}
                 onSelect={assignDriver}
+                setSelectedMotorista={setSelectedMotorista}
                 theme={theme}
                 loading={dispatchLoading}
             />
         </div>
     );
+
+    return APIProviderComp ? (
+        <APIProviderComp apiKey={GOOGLE_MAPS_API_KEY}>{appContent}</APIProviderComp>
+    ) : appContent;
 }
 
 // Componentes Pequenos
@@ -1150,7 +1384,7 @@ const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border
 const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
 
 // Modal minimalista para seleção de motorista online
-function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false }) {
+function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null }) {
     const [localSelected, setLocalSelected] = useState(null);
     useEffect(() => { if (!visible) setLocalSelected(null); }, [visible]);
     if (!visible) return null;
@@ -1159,6 +1393,7 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
     const handleSelect = async (m) => {
         if (loading) return; // bloqueia se já estiver enviando
         setLocalSelected(m.id);
+        try { if (setSelectedMotorista) setSelectedMotorista(m); } catch (e) { }
         try {
             await onSelect(m);
         } catch (err) {

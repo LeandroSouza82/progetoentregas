@@ -53,12 +53,12 @@ function InternalMobileApp() {
         }, 10000);
         return () => clearInterval(interval);
     }, []);
-    // Estado do Motorista (Simulado)
-    const [motorista] = useState({
-        id: 1,
-        nome: 'Carlos Oliveira',
-        status: 'Online',
-        foto: 'https://randomuser.me/api/portraits/men/32.jpg' // exemplo de foto
+    // Estado do Motorista: inicializa a partir da sessão persistida (localStorage)
+    const [motorista, setMotorista] = useState(() => {
+        try {
+            const raw = localStorage.getItem('motorista');
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
     });
     const [entregas, setEntregas] = useState([]);
     const [selectedId, setSelectedId] = useState(null);
@@ -82,7 +82,7 @@ function InternalMobileApp() {
         }, 1200);
     }
 
-    // Carrega pedidos do Supabase
+    // Carrega entregas do Supabase
     useEffect(() => {
         // Ao abrir o app, marca motorista como Online (sincroniza com o dashboard)
         markOnline();
@@ -96,8 +96,12 @@ function InternalMobileApp() {
     // Marca o motorista como Online no backend (mock ou real)
     async function markOnline() {
         try {
-            // mark driver as online using `motoristas.esta_online`
-            const { error } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motorista.id);
+            const motoristaId = motorista && motorista.id ? motorista.id : null;
+            if (!motoristaId) {
+                console.warn('[motorista] markOnline: motoristaId ausente, não irá marcar online');
+                return;
+            }
+            const { error } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motoristaId);
             if (error) console.error('[motorista] markOnline: erro ao atualizar motoristas', error);
             else console.log('[motorista] markOnline: motorista marcado como Online');
         } catch (err) {
@@ -106,10 +110,10 @@ function InternalMobileApp() {
     }
 
     async function carregarRota() {
-        console.log('[motorista] carregarRota: iniciando fetch de pedidos');
+        console.log('[motorista] carregarRota: iniciando fetch de entregas');
         setCarregando(true);
         try {
-            // Pega apenas pedidos com status 'Em Rota'
+            // Pega apenas entregas com status 'Em Rota'
             // Na vida real, filtraria pelo ID do motorista também
             const res = await supabase
                 .from('entregas')
@@ -185,10 +189,10 @@ function InternalMobileApp() {
         }
     };
 
-    // Função de debug: semear um pedido de teste no localStorage
-    function seedPedido() {
+    // Função de debug: semear uma entrega de teste no localStorage
+    function seedEntrega() {
         try {
-            const key = 'mock_pedidos';
+            const key = 'mock_entregas';
             const raw = localStorage.getItem(key);
             const arr = raw ? JSON.parse(raw) : [];
             const novo = {
@@ -202,22 +206,22 @@ function InternalMobileApp() {
             };
             arr.push(novo);
             localStorage.setItem(key, JSON.stringify(arr));
-            console.log('[motorista] seedPedido: gravado', novo);
+            console.log('[motorista] seedEntrega: gravado', novo);
             carregarRota();
         } catch (err) {
-            console.error('[motorista] seedPedido: erro', err);
+            console.error('[motorista] seedEntrega: erro', err);
         }
     }
 
-    // Remove pedidos de teste do storage e força recarga
+    // Remove entregas de teste do storage e força recarga
     function clearSeeds() {
         try {
-            const key = 'mock_pedidos';
+            const key = 'mock_entregas';
             localStorage.removeItem(key);
-            console.log('[motorista] clearSeeds: mock_pedidos removido');
+            console.log('[motorista] clearSeeds: mock_entregas removido');
             // Também tenta remover do supabase se estiver usando o mock com API
             try {
-                // remove pedidos temporários com status 'Em Rota' sem cliente definido? conservador: não executa delete global
+                // remove entregas temporárias com status 'Em Rota' sem cliente definido? conservador: não executa delete global
             } catch (e) {
                 // ignore
             }
@@ -327,8 +331,8 @@ function InternalMobileApp() {
                                 {carregando ? '...' : '⟳'}
                             </button>
                             <button
-                                onClick={() => seedPedido()}
-                                title="Semear pedido de teste"
+                                onClick={() => seedEntrega()}
+                                title="Semear entrega de teste"
                                 style={{
                                     padding: '6px 10px',
                                     borderRadius: '10px',
@@ -342,7 +346,7 @@ function InternalMobileApp() {
                             </button>
                             <button
                                 onClick={() => clearSeeds()}
-                                title="Remover pedidos de teste"
+                                title="Remover entregas de teste"
                                 style={{
                                     padding: '6px 10px',
                                     borderRadius: '10px',
@@ -366,7 +370,7 @@ function InternalMobileApp() {
                 {carregando ? (
                     <div style={{ textAlign: 'center', padding: '40px', color: theme.textLight }}>Buscando rota...</div>
                 ) : !tarefaAtual ? (
-                    // TELA DE DESCANSO (SEM PEDIDOS)
+                    // TELA DE DESCANSO (SEM ENTREGAS)
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: theme.textLight }}>
                         <div style={{ fontSize: '60px', marginBottom: '20px' }}>🎉</div>
                         <h3>Tudo entregue!</h3>

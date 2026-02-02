@@ -5,8 +5,17 @@ export default function AppMotorista() {
   const [entregas, setEntregas] = useState([]);
   const [status, setStatus] = useState('Conectando...');
 
-  // Determine motorista id: prefer localStorage, fallback to 1
-  const motoristaId = parseInt((typeof window !== 'undefined' && window.localStorage && localStorage.getItem('motorista_id')) || '1', 10);
+  // Determine motorista id: read session object from localStorage (no numeric fallback)
+  let motoristaId = null;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = localStorage.getItem('motorista');
+      if (raw) {
+        const obj = JSON.parse(raw);
+        motoristaId = obj && obj.id ? obj.id : null;
+      }
+    }
+  } catch (e) { motoristaId = null; }
 
   useEffect(() => {
     let channel = null;
@@ -65,15 +74,15 @@ export default function AppMotorista() {
       try { if (channel) supabase.removeChannel(channel); } catch (e) { /* ignore */ }
       // marcar offline (best-effort)
       (async () => {
-        try { await supabase.from('motoristas').update({ esta_online: false }).eq('id', motoristaId); } catch (e) { }
+        try { if (motoristaId) await supabase.from('motoristas').update({ esta_online: false }).eq('id', motoristaId); } catch (e) { }
       })();
     };
   }, [motoristaId]);
 
   const concluirEntrega = async (id) => {
     try {
-      const parsed = typeof id === 'string' ? parseInt(id, 10) : id;
-      if (!parsed || isNaN(parsed)) return;
+      const parsed = id;
+      if (!parsed) return;
       const { error } = await supabase.from('entregas').update({ status: 'concluido' }).eq('id', parsed);
       if (!error) setEntregas(prev => prev.filter(e => e.id !== parsed));
     } catch (e) { console.warn('Erro concluindo entrega:', e); }

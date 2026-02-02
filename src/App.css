@@ -328,3 +328,32 @@ header p {
   display: inline-block;
   margin-right: 5px;
 }
+
+/* Fixed Gestor Badge */
+/* gestor-fixed-badge removido (duplicata removida) */
+
+/* Estilo do botão de refresh no mapa - garantir clicabilidade e visibilidade */
+.map-refresh-button {
+  z-index: 9999 !important;
+  pointer-events: auto !important;
+  cursor: pointer !important;
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: none;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.3);
+}
+
+/* Gradient text for DASHBOARD title */
+.dashboard-title {
+  background: linear-gradient(90deg, #1E3A8A 0%, #FFFFFF 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
+  letter-spacing: 1px;
+}

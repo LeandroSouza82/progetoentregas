@@ -100,6 +100,6 @@ npm run dev
 - **Não** coloque a chave `sb_secret_...` (server key) no frontend ou em repositórios públicos; revogue/rotacione se ela foi exposta.
 - O `.gitignore` já contém `.env` e `.env.local` para evitar commits acidentais.
 
-4. Teste rápido: insira um registro na tabela `pedidos` via Supabase Studio ou SQL e verifique o console do dashboard (`Realtime pedidos -> …`) ou se o app atualiza automaticamente.
+4. Teste rápido: insira um registro na tabela `entregas` via Supabase Studio ou SQL e verifique o console do dashboard (`Realtime entregas -> …`) ou se o app atualiza automaticamente.
 
 Se desejar, posso criar um `.env.local` local para você (não será comitado) e testar o fluxo agora — quer que eu faça isso? (Não vou adicionar chaves sensíveis ao repositório.)
