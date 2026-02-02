@@ -497,6 +497,11 @@ function App() {
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const enderecoRef = useRef(null);
     const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Autocomplete
+    const [predictions, setPredictions] = useState([]);
+    const [historySuggestions, setHistorySuggestions] = useState([]);
+    const predictionServiceRef = useRef(null);
+    const placesServiceRef = useRef(null);
+    const predictionTimerRef = useRef(null);
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
     const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
     const [recentList, setRecentList] = useState([]);
@@ -591,68 +596,25 @@ function App() {
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
 
-    // Autocomplete (Google Places) — inicialização forçada quando a aba 'Nova Carga' está ativa
+    // Autocomplete (Places) — replaced Autocomplete widget with controlled AutocompleteService (debounced)
     useEffect(() => {
         if (typeof window === 'undefined') return;
         if (abaAtiva !== 'Nova Carga') return;
 
-        if (!enderecoRef.current) return;
-        let ac = null;
-        let listener = null;
-        let timer = null;
-        let attempts = 0;
-        const MAX_ATTEMPTS = 5;
-
-        const tryInit = () => {
-            attempts += 1;
-            if (!window.google || !window.google.maps || !window.google.maps.places) {
-                if (attempts >= MAX_ATTEMPTS) {
-                    console.warn('Google Maps Places não disponível após várias tentativas. Verifique a carga da library `places`.');
-                    return;
+        // Initialize services when Google loaded
+        try {
+            if (gmapsLoaded && window.google && window.google.maps && window.google.maps.places) {
+                if (!predictionServiceRef.current && window.google.maps.places.AutocompleteService) predictionServiceRef.current = new window.google.maps.places.AutocompleteService();
+                if (!placesServiceRef.current && window.google.maps.places.PlacesService) {
+                    try { placesServiceRef.current = new window.google.maps.places.PlacesService(document.createElement('div')); } catch (e) { placesServiceRef.current = null; }
                 }
-                // tentar novamente em 500ms
-                timer = setTimeout(tryInit, 500);
-                return;
             }
+        } catch (e) { console.warn('AutocompleteService init failed', e); }
 
-            try {
-                // Garantir que o input exista
-                if (!enderecoRef.current) return;
-                ac = new window.google.maps.places.Autocomplete(enderecoRef.current, { types: ['address'], componentRestrictions: { country: 'br' } });
-                // solicitar fields mínimos para desempenho
-                ac.setFields(['formatted_address', 'geometry', 'address_components', 'name']);
-                listener = ac.addListener('place_changed', () => {
-                    try {
-                        const place = ac.getPlace();
-                        if (place && place.formatted_address) setEnderecoEntrega(place.formatted_address); else if (enderecoRef.current && enderecoRef.current.value) setEnderecoEntrega(enderecoRef.current.value);
-                        // mark this as NOT from history (it came from Google Autocomplete)
-                        try { setEnderecoFromHistory(false); } catch (e) { }
-                        if (place && place.geometry && place.geometry.location) {
-                            const lat = place.geometry.location.lat();
-                            const lng = place.geometry.location.lng();
-                            setEnderecoCoords({ lat, lng });
-                        } else {
-                            setEnderecoCoords(null);
-                            console.warn('Place selecionado sem geometry — assegure que o usuário clique em uma sugestão do Google');
-                        }
-                    } catch (e) { console.warn('Erro ao processar place_changed', e); }
-                });
-            } catch (e) {
-                console.warn('Autocomplete init failed', e);
-            }
-        };
+        return () => { /* nothing to clean for services */ };
+    }, [abaAtiva, gmapsLoaded]);
 
-        // inicializa imediatamente (ou em retry) — protege contra render timing
-        tryInit();
-
-        return () => {
-            clearTimeout(timer);
-            try { if (listener && typeof listener.remove === 'function') listener.remove(); else if (listener && typeof listener.unsubscribe === 'function') listener.unsubscribe(); }
-            catch (e) { }
-        };
-    }, [abaAtiva]);
-
-    // Draft point: set when gestor seleciona um endereço via Autocomplete
+    // Draft point: set when gestor seleciona um endereço
     useEffect(() => {
         if (!enderecoCoords || !enderecoEntrega) { setDraftPoint(null); return; }
         try {
@@ -700,43 +662,61 @@ function App() {
         return () => { mounted = false; clearTimeout(draftOptimizeTimerRef.current); };
     }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState, gmapsLoaded]);
 
-    // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
-    const carregarDados = React.useCallback(async () => {
-        if (!HAS_SUPABASE_CREDENTIALS) {
-            console.error('carregarDados: Supabase keys missing — aborting data load');
-            return;
-        }
-        if (!supabase) {
-            console.error('carregarDados: supabase client not initialized — aborting');
-            return;
-        }
-
-        // Avoid concurrent fetches
-        if (fetchInProgressRef.current) return;
-        fetchInProgressRef.current = true;
-        setLoadingFrota(true);
-
-        // Retry control to avoid infinite retry loops that exhaust resources
-        const MAX_CARREGAR_RETRIES = 5;
-        const scheduleRetry = (delayMs = 5000) => {
-            try {
-                if (!retryTimerRef.current) {
-                    retryCountRef.current = (retryCountRef.current || 0) + 1;
-                    if (retryCountRef.current > MAX_CARREGAR_RETRIES) {
-                        console.error('carregarDados: exceeded max retry attempts — stopping further retries to preserve resources');
-                        return;
-                    }
-                    retryTimerRef.current = setTimeout(() => {
-                        retryTimerRef.current = null;
-                        carregarDados();
-                    }, delayMs);
-                }
-            } catch (e) { /* ignore */ }
-        };
-
-        // motoristas reais
+    // Suggestions: fetch history matches from Supabase
+    async function fetchHistoryMatches(q) {
         try {
-            let q = supabase.from('motoristas').select('*');
+            if (!q || String(q).trim().length < 3) { setHistorySuggestions([]); return; }
+            const { data, error } = await supabase.from('entregas').select('cliente,endereco,lat,lng').ilike('endereco', `%${q}%`).limit(6);
+            if (error) { setHistorySuggestions([]); return; }
+            setHistorySuggestions(Array.isArray(data) ? data : []);
+        } catch (e) { setHistorySuggestions([]); }
+    }
+
+    // Suggestions: fetch Google Place predictions (debounced caller)
+    async function fetchPredictions(q) {
+        try {
+            if (!q || String(q).trim().length < 3) { setPredictions([]); return; }
+            if (!predictionServiceRef.current) { setPredictions([]); return; }
+            return new Promise((resolve) => {
+                predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
+                    if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
+                    else { setPredictions([]); resolve([]); }
+                });
+            });
+        } catch (e) { setPredictions([]); }
+    }
+
+    async function handlePredictionClick(pred) {
+        try {
+            if (!pred) return;
+            // Mark as not history
+            try { setEnderecoFromHistory(false); } catch (e) { }
+            try { setEnderecoEntrega(pred.description || (pred && pred.structured_formatting && pred.structured_formatting.main_text) || ''); } catch (e) { }
+            // If we have a place_id, fetch details for coords
+            if (pred && pred.place_id && placesServiceRef.current && placesServiceRef.current.getDetails) {
+                try {
+                    const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry','formatted_address'] }, (res, stat) => resolve({ res, stat })));
+                    if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
+                        const loc = details.res.geometry.location;
+                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                    } else {
+                        setEnderecoCoords(null);
+                    }
+                } catch (e) { setEnderecoCoords(null); }
+            }
+            // clear suggestions
+            try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
+        } catch (e) { /* ignore */ }
+    }
+
+    const carregarDados = React.useCallback(async () => {
+            // Fetch control refs to avoid concurrent fetches
+            if (fetchInProgressRef.current) return;
+            fetchInProgressRef.current = true;
+            setLoadingFrota(true);
+
+            try {
+                let q = supabase.from('motoristas').select('*');
             if (q && typeof q.order === 'function') q = q.order('id');
             const { data: motoristas, error: motorErr } = await q;
             if (motorErr) {
@@ -772,7 +752,11 @@ function App() {
                 // clear any pending retry
                 if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
                 // reset retry counter on success
-                try { retryCountRef.current = 0; } catch (e) { }
+                try {
+                    retryCountRef.current = 0;
+                } catch (err) {
+                    /* ignore */
+                }
             }
         } catch (e) {
             console.warn('Erro carregando motoristas:', e);
@@ -784,6 +768,7 @@ function App() {
             fetchInProgressRef.current = false;
             setLoadingFrota(false);
         }
+
 
         // entregas: filtro por NEW_LOAD_STATUS
         try {
@@ -2199,10 +2184,30 @@ function App() {
                                     </select>
                                 </label>
                                 <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
-                                <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
+                                <div style={{ position: 'relative' }}>
+                                    <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
                                             try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
-                                            try { inputIdleRef.current = false; clearTimeout(inputIdleTimerRef.current); inputIdleTimerRef.current = setTimeout(() => { inputIdleRef.current = true; }, 500); } catch (e) { }
+                                            try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
                                         }} />
+
+                                        {/* Suggestions dropdown: history first, then Google predictions */}
+                                        {( (historySuggestions && historySuggestions.length>0) || (predictions && predictions.length>0) ) && (
+                                            <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
+                                                {historySuggestions && historySuggestions.map((h, idx) => (
+                                                    <div key={'h-'+idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
+                                                        <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
+                                                        <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
+                                                    </div>
+                                                ))}
+                                                {predictions && predictions.map((p, idx) => (
+                                                    <div key={'p-'+idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
+                                                        <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
+                                                        <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                             </form>
