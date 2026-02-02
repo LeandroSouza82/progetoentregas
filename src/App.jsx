@@ -494,6 +494,7 @@ function App() {
     // Distance and driver-select mode state
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
+    const [estimatedTimeText, setEstimatedTimeText] = useState(null);
     const [distanceCalculating, setDistanceCalculating] = useState(false);
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
 
@@ -533,6 +534,17 @@ function App() {
             return `${h}h ${m}m`;
         } catch (e) { return ''; }
     }
+
+    // Ensure human readable time text updates when seconds change
+    useEffect(() => {
+        try {
+            if (!estimatedTimeSec || estimatedTimeSec <= 0) {
+                setEstimatedTimeText(null);
+                return;
+            }
+            setEstimatedTimeText(formatDuration(estimatedTimeSec));
+        } catch (e) { /* ignore */ }
+    }, [estimatedTimeSec]);
     const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
     const [mensagemGeral, setMensagemGeral] = useState('');
@@ -1368,23 +1380,42 @@ function App() {
                     if (Array.isArray(wpOrder) && wpOrder.length === waypts.length && orderedList && orderedList.length === waypts.length) {
                         try {
                             const newOrdered = wpOrder.map(i => orderedList[i]);
-                            // Persist ordem_logistica for motorista (if provided)
+
+                            // If motoristaId provided -> persist ATOMICAMENTE (Promise.all)
                             if (motoristaId != null) {
-                                for (let i = 0; i < newOrdered.length; i++) {
-                                    const pid = newOrdered[i] && newOrdered[i].id ? newOrdered[i].id : null;
-                                    if (!pid) continue;
-                                    try {
-                                        await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                                    } catch (e) { console.warn('Erro atualizando ordem_logistica via waypoint_order:', e); }
+                                const updates = newOrdered.map((item, idx) => {
+                                    const pid = item && item.id ? item.id : null;
+                                    if (!pid) return null;
+                                    return supabase.from('entregas').update({ ordem_logistica: Number(idx + 1) }).eq('id', pid);
+                                }).filter(Boolean);
+
+                                if (updates.length > 0) {
+                                    // execute in parallel and wait for all results
+                                    const results = await Promise.all(updates.map(p => (p.catch ? p.catch(err => ({ error: err })) : p)));
+                                    const anyErr = results.find(r => r && (r.error || r.error === 0));
+                                    if (anyErr) console.error('Erro persistindo ordem_logistica via waypoint_order:', anyErr);
+                                    // Refresh data so UI and motorista app pick up the new ordem_logistica
+                                    try { await carregarDados(); } catch (e) { }
                                 }
-                                // Refresh data so UI and motorista app pick up the new ordem_logistica
-                                try { await carregarDados(); } catch (e) { }
-                                // Update local state
+
+                                // Update local state using ordem_logistica authoritative numbers
                                 try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
+
+                                // provide visual feedback: ensure modal/handler can close after persistence
                             } else {
                                 // preview mode: update local draft preview only
                                 try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1) }))); } catch (e) { }
                             }
+
+                            // Set distance/time from response legs if available
+                            try {
+                                const legs = res.routes?.[0]?.legs || [];
+                                const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
+                                const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
+                                if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
+                                if (secs > 0) setEstimatedTimeSec(secs);
+                            } catch (e) { /* ignore */ }
+
                             // use overview_path for polyline below
                         } catch (e) { console.warn('Erro ao aplicar waypoint_order:', e); }
                     }
@@ -1462,7 +1493,7 @@ function App() {
             }
 
             // Fetch remaining deliveries for this motorista
-            const { data: remData } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).in('status', ['pendente', 'em_rota']);
+            const { data: remData } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).in('status', ['pendente', 'em_rota']).order('ordem_logistica', { ascending: true });
             const remainingForDriver = remData || [];
             if (!remainingForDriver || remainingForDriver.length === 0) return;
 
@@ -1796,6 +1827,10 @@ function App() {
         // reoptimize path for selected driver (no send)
         setDispatchLoading(true);
         try {
+            // clear cached route UI and indicators
+            try { if (routePolylineRef.current) { routePolylineRef.current.setMap(null); routePolylineRef.current = null; } } catch (e) { }
+            try { setDraftPreview([]); setEstimatedDistanceKm(null); setEstimatedTimeSec(null); setEstimatedTimeText(null); } catch (e) { }
+
             await recalcRotaForMotorista(String(m.id));
             // close modal and show success feedback after persistence
             try { setShowDriverSelect(false); } catch (e) { }
@@ -2027,8 +2062,7 @@ function App() {
                             <h2>Fila de Preparação</h2>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <div style={{ color: theme.textLight, fontWeight: 700 }}>
-                                    Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null) ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando distância...' : 'Calculando distância...')}</span>
-                                    {estimatedTimeSec != null && <span style={{ marginLeft: '10px', color: theme.textLight }}>• {formatDuration(estimatedTimeSec)}</span>}
+                                    Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null && estimatedTimeText != null) ? `${estimatedDistanceKm} KM | ${estimatedTimeText}` : (distanceCalculating ? 'Calculando...' : 'Calculando...')}</span>
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
                                     <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>🔄 REORGANIZAR ROTA</button>
