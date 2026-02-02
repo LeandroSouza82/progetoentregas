@@ -1171,7 +1171,7 @@ function App() {
             {/* 2. ÁREA DE CONTEÚDO */}
 
 
-            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1450px', width: '100%', margin: '0 auto', padding: '20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
@@ -1384,6 +1384,7 @@ function App() {
                                 </button>
                             </div>
                         </div>
+                        <div className="table-container" style={{ width: '100%' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
@@ -1445,6 +1446,7 @@ function App() {
                                 })}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 )}
 
@@ -1454,7 +1456,8 @@ function App() {
                         <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
                         <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
-                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto' }}>
+                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto', padding: '0 20px' }}>
+                            <div className="table-container" style={{ width: '100%' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
                                 <thead>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
@@ -1470,6 +1473,7 @@ function App() {
                                     ))}
                                 </tbody>
                             </table>
+                            </div>
                         </div>
                     </div>
                 )}
