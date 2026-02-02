@@ -988,7 +988,7 @@ function App() {
     const motoristas = frota || [];
     const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
     const appContent = (
-        <div style={{ minHeight: '100vh', minWidth: '1200px', backgroundColor: theme.bg, fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+        <div style={{ minHeight: '100vh', width: '100%', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
 
             {/* 1. HEADER SUPERIOR (NAVBAR) */}
             <header style={{
@@ -1048,7 +1048,7 @@ function App() {
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
-            <main style={{ maxWidth: '1200px', margin: '40px auto', padding: '0 20px', marginTop: '110px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: '0 auto', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
