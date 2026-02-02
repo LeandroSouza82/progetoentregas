@@ -279,7 +279,7 @@ const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLev
                     <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
                         {motorista.nome || 'Entregador'}
                     </div>
-                    <img src="/bicicleta-de-entrega.png" alt="Entregador" onError={(e)=>{ try { e.target.onerror=null; e.target.src = motoristaIconUrl; } catch(_) { } }} style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" onError={(e) => { try { e.target.onerror = null; e.target.src = motoristaIconUrl; } catch (_) { } }} style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
                 </div>
             </MarkerComp>
         );
@@ -422,7 +422,7 @@ function App() {
 
     // Cleanup on unmount for any pending retry
     useEffect(() => {
-        return () => { try { if (retryTimerRef.current) clearTimeout(retryTimerRef.current); } catch (e) {} };
+        return () => { try { if (retryTimerRef.current) clearTimeout(retryTimerRef.current); } catch (e) { } };
     }, []);
 
     // define map center EARLY to avoid ReferenceError in effects
@@ -460,11 +460,11 @@ function App() {
             ro = { disconnect: () => window.removeEventListener('resize', onWin) };
         }
 
-        return () => { try { if (ro && typeof ro.disconnect === 'function') ro.disconnect(); } catch (e) { } ; clearTimeout(t); };
+        return () => { try { if (ro && typeof ro.disconnect === 'function') ro.disconnect(); } catch (e) { }; clearTimeout(t); };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mapCenterState]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
-    const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false; 
+    const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
 
     // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
     const carregarDados = React.useCallback(async () => {
@@ -505,7 +505,7 @@ function App() {
                     lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
                 }));
 
-                const merged = (function(prev) {
+                const merged = (function (prev) {
                     try {
                         const byId = new Map((prev || []).map(p => [p.id, p]));
                         return normalized.map(n => {
