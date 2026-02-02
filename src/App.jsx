@@ -513,6 +513,7 @@ function App() {
     const [zoomLevel, setZoomLevel] = useState(13);
     const DEFAULT_MAP_CENTER = { lat: -27.645, lng: -48.648 };
     const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
+    const [pontoPartida, setPontoPartida] = useState(DEFAULT_MAP_CENTER); // sede/company fallback or dynamic driver origin
     const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
 
     // Ensure Google Maps resizes after the container height changes
@@ -1147,6 +1148,8 @@ function App() {
     }
 
     // Recalculate route for a specific motorista (used on new recolhas and manual trigger)
+    // Recalculate route for a specific motorista (used on new recolhas and manual trigger)
+    // This function sets pontoPartida dynamically (driver location or sede fallback) and runs routing safely
     const recalcRotaForMotorista = React.useCallback(async (motoristaId) => {
         try {
             if (!motoristaId) return;
@@ -1155,7 +1158,18 @@ function App() {
             const motor = mdata && mdata[0] ? mdata[0] : null;
             if (!motor) return;
             if (motor.esta_online !== true) return; // RULE: only online drivers receive routing
-            if (motor.lat == null || motor.lng == null) return; // need position
+
+            // Determine origin: prefer current driver lat/lng, fallback to sede/mapCenter
+            let origin = null;
+            if (motor.lat != null && motor.lng != null) {
+                origin = { lat: Number(motor.lat), lng: Number(motor.lng) };
+                // Update pontoPartida to the driver's current location (dynamic)
+                try { setPontoPartida(origin); } catch (e) { /* ignore */ }
+            } else {
+                // fallback to company HQ / mapCenterState
+                origin = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
+                try { setPontoPartida(origin); } catch (e) { /* ignore */ }
+            }
 
             // Fetch remaining deliveries for this motorista
             const { data: remData } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).in('status', ['pendente', 'em_rota']);
@@ -1163,16 +1177,15 @@ function App() {
             if (!remainingForDriver || remainingForDriver.length === 0) return;
 
             // Compute optimized order based on current location
-            const origin = { lat: Number(motor.lat), lng: Number(motor.lng) };
             const optimized = await otimizarRotaComGoogle(origin, remainingForDriver, motoristaId);
 
             // Draw on map (include HQ if necessary)
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState);
+            await drawRouteOnMap(origin, optimized, includeHQ, puntoPartida || mapCenterState);
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
         }
-    }, [pontoPartida]);
+    }, [pontoPartida, mapCenterState]);
 
     // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
     useEffect(() => {
