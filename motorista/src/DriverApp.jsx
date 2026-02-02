@@ -99,17 +99,9 @@ export default function AppMotorista() {
                             }
                         }
                     });
-                    // If signup returned a user/session, proactively mark that auth user id as online
-                    try {
-                        const authUserId = signRes?.data?.user?.id || null;
-                        if (authUserId) {
-                            await supabase.from('motoristas').update({ esta_online: true }).eq('id', authUserId);
-                            console.log('Marca online via auth id:', authUserId);
-                        }
-                    } catch (e2) {
-                        // non-blocking
-                        console.warn('Falha ao marcar online por auth user id (non-fatal):', e2 && e2.message ? e2.message : e2);
-                    }
+                    // Nota: não marcar automaticamente como online aqui — controlaremos o flag de `esta_online` apenas após
+                    // login concluído e com motorista aprovado. Escrita automática aqui foi removida conforme regra de ouro.
+                    // (Se houver necessidade futura, marcar online deve ser ação explícita do motorista.)
                 } catch (e) {
                     console.warn('supabase.auth.signUp failed (non-fatal):', e && e.message ? e.message : e);
                 }
@@ -124,21 +116,30 @@ export default function AppMotorista() {
 
             let driver = null;
             if (existing && existing.id) {
-                const upd = await supabase.from('motoristas').update({ nome: formNome.trim(), email: formEmail.trim() || existing.email, avatar_path: formFoto, esta_online: true }).eq('id', existing.id);
+                // Atualiza apenas campos de perfil — NÃO alteramos `esta_online` automaticamente aqui
+                const upd = await supabase.from('motoristas').update({ nome: formNome.trim(), email: formEmail.trim() || existing.email, avatar_path: formFoto }).eq('id', existing.id);
                 driver = Array.isArray(upd.data) ? upd.data[0] : upd.data;
             } else {
-                // Garantir que novo motorista comece com `aprovado: false`
-                const ins = await supabase.from('motoristas').insert([{ nome: formNome.trim(), email: formEmail.trim() || null, avatar_path: formFoto, esta_online: true, aprovado: false }]);
-                driver = Array.isArray(ins.data) ? ins.data[0] : ins.data;
+                // Garantir que novo motorista comece com `aprovado: false` e `esta_online: false` (não iremos marcar online automaticamente)
+                const ins = await supabase.from('motoristas').insert([{ nome: formNome.trim(), email: formEmail.trim() || null, avatar_path: formFoto, esta_online: false, aprovado: false }]);
             }
 
-            const sess = { id: driver.id, nome: driver.nome, avatar_path: driver.avatar_path, email: driver.email || formEmail.trim(), aprovado: !!driver.aprovado };
+            const sess = { id: driver.id, nome: driver.nome, avatar_path: driver.avatar_path, email: driver.email || formEmail.trim(), aprovado: !!driver.aprovado, esta_online: !!driver.esta_online };
             localStorage.setItem('motorista', JSON.stringify(sess));
             try { if (sess.email) localStorage.setItem('v10_email', sess.email); } catch (e) { }
             setLoggedIn(sess);
             setLoginVisible(false);
             setStatus('Online (logado)');
             try { if (window.Notification && Notification.permission === 'granted') new Notification('Bem vindo, ' + sess.nome); } catch (e) { }
+
+            // Marcar online de forma explícita **apenas** se já estiver aprovado pelo gestor
+            if (sess.aprovado === true) {
+                (async () => {
+                    try {
+                        await supabase.from('motoristas').update({ esta_online: true }).eq('id', sess.id);
+                    } catch (e) { console.warn('Falha ao marcar online após login (non-fatal):', e && e.message ? e.message : e); }
+                })();
+            }
 
             // Forçar prompt de permissão GPS ao fazer login e alertar se negado
             try {
@@ -292,7 +293,12 @@ export default function AppMotorista() {
                     try {
                         if (event === 'SIGNED_IN' && sess && sess.user && sess.user.id) {
                             const authId = sess.user.id;
-                            supabase.from('motoristas').update({ esta_online: true }).eq('id', authId).catch(() => { /* swallow */ });
+                            // Só marcar online automaticamente se o cliente local já tem esse motorista logado e ele está aprovado
+                            let stored = null;
+                            try { stored = JSON.parse(localStorage.getItem('motorista') || 'null'); } catch (e) { stored = null; }
+                            if (stored && stored.id && String(stored.id) === String(authId) && stored.aprovado === true) {
+                                supabase.from('motoristas').update({ esta_online: true }).eq('id', authId).catch(() => { /* swallow */ });
+                            }
                         }
                     } catch (e) { /* swallow */ }
                 });
@@ -329,12 +335,22 @@ export default function AppMotorista() {
                     try {
                         const rec = payload.new || payload.record || null;
                         if (!rec) return;
+
+                        // Sincroniza flag de aprovação
                         if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
                             const updated = { ...(loggedIn || {}), aprovado: true };
                             try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
                             try { setLoggedIn(updated); } catch (e) { }
                             try { setStatus('Online (aprovado)'); } catch (e) { }
                             try { carregarRota(); } catch (e) { }
+                        }
+
+                        // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
+                        if (typeof rec.esta_online !== 'undefined' && loggedIn && String(loggedIn.id) === String(rec.id)) {
+                            const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true };
+                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                            try { setLoggedIn(updated); } catch (e) { }
+                            try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
                         }
                     } catch (e) { /* ignore */ }
                 }).subscribe();
@@ -347,6 +363,7 @@ export default function AppMotorista() {
                     try {
                         const rec = payload.new || payload.record || null;
                         if (!rec) return;
+
                         if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
                             const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
                             try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
@@ -354,30 +371,15 @@ export default function AppMotorista() {
                             try { setStatus('Online (aprovado)'); } catch (e) { }
                             try { carregarRota(); } catch (e) { }
                         }
-                    } catch (e) { /* ignore */ }
-                }).subscribe();
-                channels.push(chEmail);
-            }
-        } catch (e) { /* ignore */ }
 
-        return () => {
-            try { channels.forEach(c => { if (c && typeof c.unsubscribe === 'function') c.unsubscribe(); }); } catch (e) { }
-        };
-    }, [loggedIn && loggedIn.id, loggedIn && loggedIn.email
-
-            if (email) {
-                const chanEmail = `motorista-updates-email-${email}`;
-                const chEmail = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
-                    try {
-                        const rec = payload.new || payload.record || null;
-                        if (!rec) return;
-                        if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
-                            const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
+                        // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
+                        if (typeof rec.esta_online !== 'undefined') {
+                            const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true, id: rec.id || (loggedIn && loggedIn.id) };
                             try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
                             try { setLoggedIn(updated); } catch (e) { }
-                            try { setStatus('Online (aprovado)'); } catch (e) { }
-                            try { carregarRota(); } catch (e) { }
+                            try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
                         }
+
                     } catch (e) { /* ignore */ }
                 }).subscribe();
                 channels.push(chEmail);
@@ -389,10 +391,16 @@ export default function AppMotorista() {
         };
     }, [loggedIn && loggedIn.id, loggedIn && loggedIn.email]);
     // GPS: força prompt e inicia watchPosition para enviar lat/lng ao Supabase
+    // GPS: força prompt e inicia watchPosition para enviar lat/lng ao Supabase
     useEffect(() => {
         if (!loggedIn) return;
         // Somente iniciar captura de posição quando motorista estiver aprovado
         if (!loggedIn.aprovado) return;
+        // Se gestor marcou motorista como offline/blocked, não devemos iniciar captura de posição nem sobrescrever o flag
+        if (loggedIn.esta_online === false) {
+            try { setStatus('Offline (bloqueado pelo gestor)'); } catch (e) { }
+            return;
+        }
         if (typeof navigator === 'undefined' || !navigator.geolocation) {
             console.warn('[motorista] Geolocation API não disponível no navegador');
             return;
