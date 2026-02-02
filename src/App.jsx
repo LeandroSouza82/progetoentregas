@@ -268,7 +268,7 @@ class ErrorBoundary extends React.Component {
 const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLevel, onSelect }) {
     if (!mapsLib || !mapsLib.Map) return null;
     const MarkerComp = mapsLib.AdvancedMarker || (({ children }) => <div>{children}</div>);
-    return (frota || []).filter(motorista => motorista.esta_online === true && motorista.lat != null && motorista.lng != null && !isNaN(parseFloat(motorista.lat)) && !isNaN(parseFloat(motorista.lng))).map(motorista => {
+    return (frota || []).filter(motorista => motorista.aprovado === true && motorista.esta_online === true && motorista.lat != null && motorista.lng != null && !isNaN(parseFloat(motorista.lat)) && !isNaN(parseFloat(motorista.lng))).map(motorista => {
         const iconSize = zoomLevel > 15 ? 48 : 32;
         return (
             <MarkerComp
@@ -279,7 +279,7 @@ const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLev
                     <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
                         {motorista.nome || 'Entregador'}
                     </div>
-                    <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" onError={(e)=>{ try { e.target.onerror=null; e.target.src = motoristaIconUrl; } catch(_) { } }} onError={(e)=>{ try { e.target.onerror=null; e.target.src = motoristaIconUrl; } catch(_) { } }} style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
                 </div>
             </MarkerComp>
         );
@@ -415,6 +415,22 @@ function App() {
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
     const mapContainerRef = useRef(null);
 
+    // Fetch control refs to avoid concurrent fetches and manage retries
+    const fetchInProgressRef = useRef(false);
+    const retryTimerRef = useRef(null);
+    const lastFrotaRef = useRef([]);
+
+    // Cleanup on unmount for any pending retry
+    useEffect(() => {
+        return () => { try { if (retryTimerRef.current) clearTimeout(retryTimerRef.current); } catch (e) {} };
+    }, []);
+
+    // define map center EARLY to avoid ReferenceError in effects
+    const [zoomLevel, setZoomLevel] = useState(13);
+    const DEFAULT_MAP_CENTER = { lat: -27.645, lng: -48.648 };
+    const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
+    const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
+
     // Ensure Google Maps resizes after the container height changes
     useEffect(() => {
         if (!mapContainerRef.current) return;
@@ -448,11 +464,7 @@ function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mapCenterState]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
-    const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
-    const [zoomLevel, setZoomLevel] = useState(13);
-    const DEFAULT_MAP_CENTER = { lat: -27.645, lng: -48.648 };
-    const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
-    const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
+    const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false; 
 
     // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
     const carregarDados = React.useCallback(async () => {
@@ -464,7 +476,12 @@ function App() {
             console.error('carregarDados: supabase client not initialized — aborting');
             return;
         }
+
+        // Avoid concurrent fetches
+        if (fetchInProgressRef.current) return;
+        fetchInProgressRef.current = true;
         setLoadingFrota(true);
+
         // motoristas reais
         try {
             let q = supabase.from('motoristas').select('*');
@@ -472,7 +489,15 @@ function App() {
             const { data: motoristas, error: motorErr } = await q;
             if (motorErr) {
                 console.warn('carregarDados: erro ao buscar motoristas', motorErr);
-                setFrota([]);
+                // Schedule retry if not already scheduled
+                if (!retryTimerRef.current) {
+                    retryTimerRef.current = setTimeout(() => {
+                        retryTimerRef.current = null;
+                        carregarDados();
+                    }, 5000);
+                }
+                // Preserve last known valid frota
+                setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
             } else {
                 const normalized = (motoristas || []).map(m => ({
                     ...m,
@@ -480,23 +505,40 @@ function App() {
                     lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
                 }));
 
-                setFrota(prev => {
+                const merged = (function(prev) {
                     try {
                         const byId = new Map((prev || []).map(p => [p.id, p]));
-                        const merged = normalized.map(n => {
+                        return normalized.map(n => {
                             const existing = byId.get(n.id);
                             if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
                                 return existing;
                             }
                             return n;
                         });
-                        return merged;
                     } catch (e) {
                         return normalized;
                     }
-                });
+                })(lastFrotaRef.current || []);
+
+                setFrota(merged);
+                lastFrotaRef.current = merged;
+                // clear any pending retry
+                if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
             }
-        } catch (e) { console.warn('Erro carregando motoristas:', e); setFrota([]); }
+        } catch (e) {
+            console.warn('Erro carregando motoristas:', e);
+            if (!retryTimerRef.current) {
+                retryTimerRef.current = setTimeout(() => {
+                    retryTimerRef.current = null;
+                    carregarDados();
+                }, 5000);
+            }
+            // keep previous frota
+            setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
+        } finally {
+            fetchInProgressRef.current = false;
+            setLoadingFrota(false);
+        }
 
         // entregas: filtro por NEW_LOAD_STATUS
         try {
@@ -504,14 +546,28 @@ function App() {
             if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
             const { data: entregasPend, error: entregasErr } = await q;
             if (entregasErr) { console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr); setEntregasEmEspera([]); } else setEntregasEmEspera(entregasPend || []);
-        } catch (e) { console.warn('Erro carregando entregas (filtro de status):', e); setEntregasEmEspera([]); }
+        } catch (e) {
+            console.warn('Erro carregando entregas (filtro de status):', e);
+            // preserve previous entregasEmEspera if available
+            setEntregasEmEspera(prev => (prev && prev.length) ? prev : []);
+            if (!retryTimerRef.current) {
+                retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; carregarDados(); }, 5000);
+            }
+        }
 
         // total de entregas
         try {
             let q2 = supabase.from('entregas').select('*');
             const { data: todas } = await q2;
             setTotalEntregas((todas || []).length);
-        } catch (e) { console.warn('Erro contando entregas:', e); setTotalEntregas(0); }
+        } catch (e) {
+            console.warn('Erro contando entregas:', e);
+            // don't reset total to 0 on transient errors
+            // leave current value
+            if (!retryTimerRef.current) {
+                retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; carregarDados(); }, 5000);
+            }
+        }
 
         // avisos do gestor
         try {
@@ -1220,7 +1276,7 @@ function App() {
                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
 
                         {/* MAPA EM CARD (DIMINUÍDO, REDIMENSIONÁVEL E ELEGANTE) */}
-                        <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'auto', minHeight: '400px', maxHeight: '800px', position: 'relative' }}>
+                        <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'hidden', minHeight: '450px', maxHeight: '800px', position: 'relative' }}>
                             <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
                                 {
                                     // Se a lib do maps foi carregada com sucesso, renderiza o mapa dentro de ErrorBoundary
