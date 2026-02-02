@@ -1175,9 +1175,10 @@ function App() {
             const lng = Number(p.lng);
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
             // Use ordem_logistica exclusively for numbering on the map. If not set (>0) show empty.
-            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : '';
+                    // Use ordem_logistica when available, otherwise fallback to index+1 so pins are always visible
+            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : String(idx + 1);
             const tipo = String(p.tipo || 'Entrega');
-            // If ordem_logistica is zero or not set, we deliberately show blank on the map to enforce DB as SSoT
+            // If ordem_logistica is zero or not set, show fallback index to keep pins visible (temporary)
             const color = colorForType(tipo);
             const MarkerComp = mapsLib.AdvancedMarker;
             return (
@@ -1385,20 +1386,35 @@ function App() {
                         try {
                             const newOrdered = wpOrder.map(i => orderedList[i]);
 
-                            // If motoristaId provided -> persist ATOMICAMENTE (Promise.all)
-                            if (motoristaId != null) {
-                                const updates = newOrdered.map((item, idx) => {
-                                    const pid = item && item.id ? item.id : null;
-                                    if (!pid) return null;
-                                    return supabase.from('entregas').update({ ordem_logistica: Number(idx + 1) }).eq('id', pid);
-                                }).filter(Boolean);
+                            // Log the computed order IDs for debugging
+                            try { console.log('drawRouteOnMap: waypoint_order result IDs:', newOrdered.map(n => n && n.id)); } catch (e) { }
 
-                                if (updates.length > 0) {
-                                    // execute in parallel and wait for all results
-                                    const results = await Promise.all(updates.map(p => (p.catch ? p.catch(err => ({ error: err })) : p)));
-                                    const anyErr = results.find(r => r && (r.error || r.error === 0));
-                                    if (anyErr) console.error('Erro persistindo ordem_logistica via waypoint_order:', anyErr);
-                                    // Refresh data so UI and motorista app pick up the new ordem_logistica
+                            // If motoristaId provided -> persist SEQUENCIALMENTE (for..of) and ensure id is used
+                            if (motoristaId != null) {
+                                let allOk = true;
+                                for (let i = 0; i < newOrdered.length; i++) {
+                                    const pi = newOrdered[i];
+                                    const pid = pi && pi.id ? pi.id : null;
+                                    if (!pid) continue;
+                                    try {
+                                        const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                                        if (error) {
+                                            allOk = false;
+                                            console.error('drawRouteOnMap: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
+                                            try { alert('Erro ao gravar ordem_logistica para id ' + pid + ': ' + (error && error.message ? error.message : String(error))); } catch (e) { }
+                                            break; // stop on failure per safety
+                                        } else {
+                                            console.log('drawRouteOnMap: ordem_logistica gravada para id', pid, 'ordem', i + 1, 'retorno:', updData);
+                                        }
+                                    } catch (err) {
+                                        allOk = false;
+                                        console.error('drawRouteOnMap: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
+                                        try { alert('Exceção ao gravar ordem_logistica para id ' + pid + ': ' + (err && err.message ? err.message : String(err))); } catch (e) { }
+                                        break;
+                                    }
+                                }
+
+                                if (allOk) {
                                     try { await carregarDados(); } catch (e) { }
                                 }
 
@@ -1507,6 +1523,8 @@ function App() {
 
             // Compute optimized order using company HQ as final destination and respecting driver position via motoristaId
             try { setDistanceCalculating(true); } catch (e) { }
+            // Log IDs being sent to Google for traceability
+            try { console.log('recalcRotaForMotorista: enviando ao Google IDs:', (remainingForDriver||[]).map(r => r && r.id)); } catch (e) { }
             const optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
             try { setDistanceCalculating(false); } catch (e) { }
 

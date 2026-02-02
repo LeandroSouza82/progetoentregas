@@ -51,6 +51,7 @@ if (typeof window === 'undefined') {
         writeTable('frota', [{ id: 1, nome: 'Carlos Oliveira', status: 'Online', veiculo: 'Fiorino', placa: 'ABC-1234', fone: '5511999990000' }]);
     }
     if (!localStorage.getItem(storageKey('entregas'))) { writeTable('entregas', []); }
+    if (!localStorage.getItem(storageKey('logs_roteirizacao'))) { writeTable('logs_roteirizacao', []); }
 
     supabase = { from(table) { return createQuery(table); } };
     HAS_SUPABASE_CREDENTIALS = false;
