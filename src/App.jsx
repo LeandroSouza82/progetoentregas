@@ -292,10 +292,8 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
     const email = m.email || null;
     const telefone = (m.telefone && String(m.telefone).trim().length > 0) ? m.telefone : null;
 
-    // Prepara mensagem de ativação contendo o ID do motorista (link de ativação)
-    const activationUrl = (typeof window !== 'undefined' ? `${window.location.origin}/aprovar?id=${m.id}` : `/aprovar?id=${m.id}`);
-    // Formato com quebras de linha para garantir que o link fique em linha separada
-    const waMessage = `Olá! Recebemos seu cadastro no V10.\n\nPara ser aprovado agora, clique no link abaixo:\n\n${activationUrl}`;
+    // Mensagem profissional que solicita resposta 'OK' — sem link de aprovação automática
+    const waMessage = `Olá! Sou o gestor do V10. Recebemos seu cadastro para trabalhar conosco. Para validar seu perfil e liberar seu acesso agora, por favor, responda com um 'OK' a esta mensagem.`;
 
     return (
         <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>
@@ -319,13 +317,13 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
                 ) : 'Sem telefone'}
             </td>
 
-            { (onApprove || onReject) && (
+            {(onApprove || onReject) && (
                 <td style={{ padding: '10px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                     {onApprove && (
-                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) {} }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
+                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) { } }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
                     )}
                     {onReject && (
-                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) {} }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn red">REPROVAR</button>
+                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) { } }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn red">REPROVAR</button>
                     )}
                 </td>
             )}
@@ -357,27 +355,15 @@ function App() {
                         setState({ status: 'error', message: 'Link inválido. ID ausente.' });
                         return;
                     }
-                    const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', id).select();
-                    if (error) {
-                        setState({ status: 'error', message: 'Falha ao ativar cadastro.' });
-                        return;
-                    }
-                    const motorista = Array.isArray(data) ? data[0] : data;
-                    const telefone = motorista?.telefone || null;
 
-                    // Envia mensagem de parabéns via WhatsApp (abre nova aba para confirmação)
-                    if (telefone) {
-                        const finalMsg = 'Parabéns! Seu cadastro no V10 foi aprovado. Você já pode abrir o seu aplicativo e começar a trabalhar! 🚀';
-                        const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(String(telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(finalMsg)}`;
-                        try { window.open(waUrl, '_blank'); } catch (e) { /* ignore */ }
-                    }
+                    // ATENÇÃO: não alteramos o banco por aqui.
+                    // O processo de aprovação é manual e ocorre quando o gestor clica em "APROVAR" no Dashboard.
+                    setState({ status: 'success', message: 'PEDIDO RECEBIDO' });
 
                     // Evitar re-execução no reload
                     try { window.history.replaceState({}, document.title, '/aprovar?processed=1'); } catch (e) { /* ignore */ }
-
-                    setState({ status: 'success', message: 'PARABÉNS! SEU ACESSO FOI LIBERADO' });
                 } catch (e) {
-                    setState({ status: 'error', message: 'Erro ao processar ativação.' });
+                    setState({ status: 'error', message: 'Erro ao processar link.' });
                 }
             })();
             // run on mount only
@@ -390,10 +376,10 @@ function App() {
                     <div style={{ fontWeight: 900, fontSize: '22px', marginBottom: '10px', background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 DASHBOARD</div>
                     <div style={{ fontSize: '64px', margin: '18px 0', color: '#10b981' }}>✅</div>
                     <div style={{ fontSize: '20px', fontWeight: 800, marginBottom: '8px' }}>{state.message}</div>
-                    <p style={{ color: '#cbd5e1', marginBottom: '24px' }}>Seu cadastro foi ativado com sucesso. Já pode entrar no aplicativo e começar suas entregas.</p>
+                    <p style={{ color: '#cbd5e1', marginBottom: '24px' }}>Seu pedido foi recebido. Aguarde que o gestor valide seu perfil via WhatsApp. Para validar mais rápido, responda com 'OK' à mensagem do gestor. A aprovação só é concluída quando o gestor clicar em APROVAR no Dashboard.</p>
                     <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                        <button onClick={() => { try { window.location.href = '/motorista'; } catch (e) {} }} style={{ padding: '14px 20px', borderRadius: '10px', border: 'none', background: '#10b981', color: '#000', cursor: 'pointer', fontWeight: 800 }}>ABRIR APLICATIVO V10</button>
-                        <button onClick={() => { try { window.location.href = '/'; } catch (e) {} }} style={{ padding: '14px 20px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>VOLTAR AO SITE</button>
+                        <button onClick={() => { try { window.location.href = '/motorista'; } catch (e) { } }} style={{ padding: '14px 20px', borderRadius: '10px', border: 'none', background: '#10b981', color: '#000', cursor: 'pointer', fontWeight: 800 }}>ABRIR APLICATIVO V10</button>
+                        <button onClick={() => { try { window.location.href = '/'; } catch (e) { } }} style={{ padding: '14px 20px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: '#fff', cursor: 'pointer', fontWeight: 700 }}>VOLTAR AO SITE</button>
                     </div>
                 </div>
             </div>
@@ -553,9 +539,10 @@ function App() {
             // Atualiza a lista no dashboard
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
 
-            // Dispara mensagem de parabéns via WhatsApp (abre nova janela para que o gestor confirme envio)
+            // Feedback visual para o gestor e mensagem de parabéns via WhatsApp (nova aba)
+            try { alert('Motorista aprovado com sucesso!'); } catch (e) { /* ignore */ }
             if (telefone) {
-                const finalMsg = 'Parabéns! Seu cadastro no V10 foi aprovado. Você já pode abrir o seu aplicativo e começar a trabalhar! 🚀';
+                const finalMsg = 'Parabéns! Seu perfil foi validado. O aplicativo já está liberado para você trabalhar. Boa sorte! 🚀';
                 const waUrl = `https://api.whatsapp.com/send?phone=${encodeURIComponent(String(telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(finalMsg)}`;
                 try { window.open(waUrl, '_blank'); } catch (e) { /* ignore */ }
             }
@@ -1352,12 +1339,12 @@ function App() {
                         <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
-                                                    <option value="all">📢 Enviar para Todos</option>
-                                                    {motoristasAtivos.map(m => (
-                                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
-                                                    ))}
-                                                </select>
+                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
+                                    <option value="all">📢 Enviar para Todos</option>
+                                    {motoristasAtivos.map(m => (
+                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                    ))}
+                                </select>
                                 <div style={{ flex: 1 }}>
                                     <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
                                 </div>
