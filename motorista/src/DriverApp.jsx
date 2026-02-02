@@ -50,12 +50,25 @@ export default function AppMotorista() {
         } catch (e) { /* swallow */ }
     };
 
+    // If we have an email but no id, try to resolve the full motorista record (id, aprovado) by email
     useEffect(() => {
-        if (!loggedIn) {
-            setLoginVisible(false);
-            const t = setTimeout(() => setLoginVisible(true), 20);
-            return () => clearTimeout(t);
+        if (!loggedIn) return;
+        if (loggedIn && !loggedIn.id && loggedIn.email) {
+            (async () => {
+                try {
+                    const res = await supabase.from('motoristas').select('*').eq('email', loggedIn.email).limit(1);
+                    const found = res && res.data ? res.data[0] : null;
+                    if (found && found.id) {
+                        const updated = { ...(loggedIn || {}), id: found.id, aprovado: !!found.aprovado };
+                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                        try { setLoggedIn(updated); } catch (e) { }
+                    }
+                } catch (e) { console.warn('Falha ao resolver motorista por email:', e); }
+            })();
         }
+        setLoginVisible(false);
+        const t = setTimeout(() => setLoginVisible(true), 20);
+        return () => clearTimeout(t);
     }, [loggedIn]);
 
     async function fazerLogin(e) {
@@ -238,7 +251,7 @@ export default function AppMotorista() {
 
     // carregar rota apenas uma vez ao montar a página (evita re-execuções infinitas)
     useEffect(() => {
-        if (!loggedIn) return;
+        if (!loggedIn?.id) return; // ensure we have an id before attempting to load
         // Se não aprovado, não carrega rota nem ativa GPS; mostra mensagem de análise
         if (!loggedIn.aprovado) {
             setEntregas([]);
@@ -302,6 +315,79 @@ export default function AppMotorista() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Realtime: escuta atualizações do motorista logado (aprovação em tempo real)
+    useEffect(() => {
+        if (!loggedIn) return;
+        const id = loggedIn.id;
+        const email = loggedIn.email;
+        const channels = [];
+
+        try {
+            if (id) {
+                const chanId = `motorista-updates-id-${id}`;
+                const chId = supabase.channel(chanId).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `id=eq.${id}` }, (payload) => {
+                    try {
+                        const rec = payload.new || payload.record || null;
+                        if (!rec) return;
+                        if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                            const updated = { ...(loggedIn || {}), aprovado: true };
+                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                            try { setLoggedIn(updated); } catch (e) { }
+                            try { setStatus('Online (aprovado)'); } catch (e) { }
+                            try { carregarRota(); } catch (e) { }
+                        }
+                    } catch (e) { /* ignore */ }
+                }).subscribe();
+                channels.push(chId);
+            }
+
+            if (email) {
+                const chanEmail = `motorista-updates-email-${email}`;
+                const chEmail = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
+                    try {
+                        const rec = payload.new || payload.record || null;
+                        if (!rec) return;
+                        if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                            const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
+                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                            try { setLoggedIn(updated); } catch (e) { }
+                            try { setStatus('Online (aprovado)'); } catch (e) { }
+                            try { carregarRota(); } catch (e) { }
+                        }
+                    } catch (e) { /* ignore */ }
+                }).subscribe();
+                channels.push(chEmail);
+            }
+        } catch (e) { /* ignore */ }
+
+        return () => {
+            try { channels.forEach(c => { if (c && typeof c.unsubscribe === 'function') c.unsubscribe(); }); } catch (e) { }
+        };
+    }, [loggedIn && loggedIn.id, loggedIn && loggedIn.email
+
+            if (email) {
+                const chanEmail = `motorista-updates-email-${email}`;
+                const chEmail = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
+                    try {
+                        const rec = payload.new || payload.record || null;
+                        if (!rec) return;
+                        if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                            const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
+                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                            try { setLoggedIn(updated); } catch (e) { }
+                            try { setStatus('Online (aprovado)'); } catch (e) { }
+                            try { carregarRota(); } catch (e) { }
+                        }
+                    } catch (e) { /* ignore */ }
+                }).subscribe();
+                channels.push(chEmail);
+            }
+        } catch (e) { /* ignore */ }
+
+        return () => {
+            try { channels.forEach(c => { if (c && typeof c.unsubscribe === 'function') c.unsubscribe(); }); } catch (e) { }
+        };
+    }, [loggedIn && loggedIn.id, loggedIn && loggedIn.email]);
     // GPS: força prompt e inicia watchPosition para enviar lat/lng ao Supabase
     useEffect(() => {
         if (!loggedIn) return;

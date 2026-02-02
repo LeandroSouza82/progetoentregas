@@ -318,10 +318,16 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
                     <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
                 </span>
             </td>
-            <td style={{ padding: '10px', display: 'flex', gap: '8px' }}>
-                <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) {} }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
-                <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) {} }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn red">REPROVAR</button>
-            </td>
+            { (onApprove || onReject) && (
+                <td style={{ padding: '10px', display: 'flex', gap: '8px' }}>
+                    {onApprove && (
+                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) {} }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
+                    )}
+                    {onReject && (
+                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) {} }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn red">REPROVAR</button>
+                    )}
+                </td>
+            )}
         </tr>
     );
 }, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme);
@@ -472,26 +478,45 @@ function App() {
     }, []);
 
     // Approve / Reject handlers for Gestão de Motoristas
-    const approveDriver = async (m) => {
+    // New admin-facing approve by id
+    const aprovarMotorista = async (id) => {
         try {
-            const id = m && (m.id || m);
             if (!id) return;
-            await supabase.from('motoristas').update({ acesso: 'aprovado', aprovado: true }).eq('id', id);
+            const sid = String(id);
+            const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', sid).select();
+            if (error) {
+                console.error('aprovarMotorista db error:', error);
+                return { error };
+            }
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
+            return { data };
         } catch (e) {
-            console.error('approveDriver error:', e);
+            console.error('aprovarMotorista error:', e);
+            return { error: e };
         }
+    };
+
+    const approveDriver = async (m) => {
+        // backward-compatible wrapper
+        const id = m && (m.id || m);
+        return aprovarMotorista(id);
     };
 
     const rejectDriver = async (m) => {
         try {
             const id = m && (m.id || m);
             if (!id) return;
-            // mark as rejected instead of hard delete
-            await supabase.from('motoristas').update({ acesso: 'rejeitado', aprovado: false }).eq('id', id);
+            const sid = String(id);
+            const { data, error } = await supabase.from('motoristas').delete().eq('id', sid).select();
+            if (error) {
+                console.error('rejectDriver db error:', error);
+                return { error };
+            }
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
+            return { data };
         } catch (e) {
             console.error('rejectDriver error:', e);
+            return { error: e };
         }
     };
 
@@ -1015,8 +1040,9 @@ function App() {
     // --- NOVA INTERFACE (AQUI ESTÁ A MUDANÇA VISUAL) ---
     const motoristas = frota || [];
     const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
-    const pendingDrivers = (frota || []).filter(m => String(m.acesso || '').toLowerCase() === 'pendente' || m.aprovado === false);
-    const approvedDrivers = (frota || []).filter(m => String(m.acesso || '').toLowerCase() === 'aprovado');
+    // Use explicit aprovado boolean to split lists
+    const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
+    const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
 
@@ -1246,12 +1272,12 @@ function App() {
                         <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
-                                    <option value="all">📢 Enviar para Todos</option>
-                                    {approvedDrivers && approvedDrivers.map(m => (
-                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
-                                    ))}
-                                </select>
+                                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
+                                                    <option value="all">📢 Enviar para Todos</option>
+                                                    {motoristasAtivos.map(m => (
+                                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                                    ))}
+                                                </select>
                                 <div style={{ flex: 1 }}>
                                     <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
                                 </div>
@@ -1293,7 +1319,7 @@ function App() {
                         </div>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
-                                <tr style={{ textAlign: 'left', borderBottom: '2px solid #f1f5f9', color: theme.textLight }}>
+                                <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
                                     <th style={{ padding: '10px' }}>NOME</th>
                                     <th>STATUS</th>
                                     <th>VEÍCULO</th>
@@ -1302,7 +1328,7 @@ function App() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {approvedDrivers.map(m => {
+                                {motoristasAtivos.map(m => {
                                     const isOnline = Boolean(m.esta_online);
                                     const dotColor = isOnline ? '#10b981' : '#ef4444';
                                     const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
@@ -1361,20 +1387,17 @@ function App() {
                         <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
                         <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
-                                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
                             <thead>
-                                <tr style={{ textAlign: 'left', borderBottom: '2px solid #e6e6e6', color: '#000' }}>
+                                <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
                                     <th style={{ padding: '10px' }}>NOME</th>
                                     <th style={{ padding: '10px' }}>EMAIL</th>
-                                    <th style={{ padding: '10px' }}>STATUS</th>
-                                    <th style={{ padding: '10px' }}>VEÍCULO</th>
-                                            <th style={{ padding: '10px' }}>PLACA</th>
-                                            <th style={{ padding: '10px' }}>AÇÕES</th>
+                                    <th style={{ padding: '10px' }}>AÇÕES</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {pendingDrivers.map(m => (
-                                    <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={approveDriver} onReject={rejectDriver} />
+                                {motoristasPendentes.map(m => (
+                                    <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
                                 ))}
                             </tbody>
                         </table>
