@@ -1389,43 +1389,24 @@ function App() {
                             // Log the computed order IDs for debugging
                             try { console.log('drawRouteOnMap: waypoint_order result IDs:', newOrdered.map(n => n && n.id)); } catch (e) { }
 
-                            // If motoristaId provided -> persist SEQUENCIALMENTE (for..of) and ensure id is used
-                            if (motoristaId != null) {
-                                let allOk = true;
-                                for (let i = 0; i < newOrdered.length; i++) {
-                                    const pi = newOrdered[i];
-                                    const pid = pi && pi.id ? pi.id : null;
-                                    if (!pid) continue;
-                                    try {
-                                        const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                                        if (error) {
-                                            allOk = false;
-                                            console.error('drawRouteOnMap: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
-                                            try { alert('Erro ao gravar ordem_logistica para id ' + pid + ': ' + (error && error.message ? error.message : String(error))); } catch (e) { }
-                                            break; // stop on failure per safety
-                                        } else {
-                                            console.log('drawRouteOnMap: ordem_logistica gravada para id', pid, 'ordem', i + 1, 'retorno:', updData);
-                                        }
-                                    } catch (err) {
-                                        allOk = false;
-                                        console.error('drawRouteOnMap: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
-                                        try { alert('Exceção ao gravar ordem_logistica para id ' + pid + ': ' + (err && err.message ? err.message : String(err))); } catch (e) { }
-                                        break;
-                                    }
-                                }
+                            // Update UI state with the new order (do NOT persist here) — persistence is handled in recalcRotaForMotorista
+                            try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
+                            // preview mode: update local draft preview as well
+                            try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1) }))); } catch (e) { }
 
-                                if (allOk) {
-                                    try { await carregarDados(); } catch (e) { }
-                                }
-
-                                // Update local state using ordem_logistica authoritative numbers
-                                try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
-
-                                // provide visual feedback: ensure modal/handler can close after persistence
-                            } else {
-                                // preview mode: update local draft preview only
-                                try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1) }))); } catch (e) { }
-                            }
+                            // Store wpOrderIds to include in possible return
+                            const wpOrderIds = newOrdered.map(p => p && p.id);
+                            try { console.log('drawRouteOnMap: wpOrderIds prepared', wpOrderIds); } catch (e) { }
+                            // Set distance/time from response legs if available
+                            try {
+                                const legs = res.routes?.[0]?.legs || [];
+                                const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
+                                const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
+                                if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
+                                if (secs > 0) setEstimatedTimeSec(secs);
+                                return { meters: meters || 0, secs: secs || 0, wpOrderIds };
+                            } catch (e) { /* ignore */ }
+                            // use overview_path for polyline below
 
                             // Set distance/time from response legs if available
                             try {
@@ -1532,11 +1513,16 @@ function App() {
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
             // ensure UI shows calculating while we call Directions
             try { setDistanceCalculating(true); } catch (e) { }
-            const drawResult = await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
-            try { setDistanceCalculating(false); } catch (e) { }
+            let drawResult = null;
+            try {
+                drawResult = await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
+            } finally {
+                try { setDistanceCalculating(false); } catch (e) { }
+            }
 
-            // Persist ordem_logistica per item (índice + 1) — use sequential for..of to guarantee write order and logging
+            // Persist ordem_logistica per item (índice + 1) — sequentially, continue on errors
             let newOrderIds = [];
+            let allOk = true;
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
                     for (let i = 0; i < optimized.length; i++) {
@@ -1547,12 +1533,18 @@ function App() {
                         try {
                             const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
                             if (error) {
+                                allOk = false;
                                 console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
+                                // continue to next item
+                                continue;
                             } else {
                                 console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: Number(i + 1), returned: updData });
                             }
                         } catch (err) {
+                            allOk = false;
                             console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
+                            // continue to next item
+                            continue;
                         }
                     }
                     // Refresh data so other components see updated ordem_logistica
@@ -1563,16 +1555,21 @@ function App() {
             // After persistence, create an audit log entry with previous/new distances and the new order
             try {
                 if (motoristaId != null) {
-                    try {
-                        const prevDist = Number(previousDistanceKm) || null;
-                        const newDist = Number((drawResult && drawResult.meters ? drawResult.meters / 1000 : (estimatedDistanceKm || null))) || null;
-                        const payload = [{ motorista_id: motoristaId, distancia_antiga: prevDist, distancia_nova: newDist, created_at: (new Date()).toISOString(), nova_ordem: Array.isArray(newOrderIds) ? newOrderIds : [] }];
-                        const { data: logData, error: logErr } = await supabase.from('logs_roteirizacao').insert(payload);
-                        if (logErr) console.error('recalcRotaForMotorista: falha ao gravar log_roteirizacao', logErr);
-                        else console.log('recalcRotaForMotorista: log_roteirizacao gravado', logData);
-                        // refresh local logs preview
-                        try { await fetchLogsForMotorista(String(motoristaId)); } catch (e) { /* ignore */ }
-                    } catch (e) { console.error('recalcRotaForMotorista: exceção ao gravar log_roteirizacao', e); }
+                    if (!allOk) {
+                        console.error('recalcRotaForMotorista: nem todas atualizações foram concluídas com sucesso. Log de auditoria não será gravado.');
+                        try { alert('Atenção: algumas atualizações falharam. Verifique os logs.'); } catch (e) { }
+                    } else {
+                        try {
+                            const prevDist = Number(previousDistanceKm) || null;
+                            const newDist = Number((drawResult && drawResult.meters ? drawResult.meters / 1000 : (estimatedDistanceKm || null))) || null;
+                            const payload = [{ motorista_id: motoristaId, distancia_antiga: prevDist, distancia_nova: newDist, created_at: (new Date()).toISOString(), nova_ordem: Array.isArray(newOrderIds) ? newOrderIds : [] }];
+                            const { data: logData, error: logErr } = await supabase.from('logs_roteirizacao').insert(payload);
+                            if (logErr) { console.error('recalcRotaForMotorista: falha ao gravar log_roteirizacao', logErr); try { alert('Falha ao gravar log de auditoria: ' + (logErr && logErr.message ? logErr.message : JSON.stringify(logErr))); } catch (e) { } }
+                            else { console.log('recalcRotaForMotorista: log_roteirizacao gravado', logData); }
+                            // refresh local logs preview
+                            try { await fetchLogsForMotorista(String(motoristaId)); } catch (e) { /* ignore */ }
+                        } catch (e) { console.error('recalcRotaForMotorista: exceção ao gravar log_roteirizacao', e); }
+                    }
                 }
             } catch (e) { /* ignore */ }
 
