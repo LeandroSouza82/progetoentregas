@@ -339,6 +339,7 @@ function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
+    const [menuOpen, setMenuOpen] = useState(false);
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
     // Componente isolado para a tela de aprovação do motorista
@@ -1133,7 +1134,7 @@ function App() {
                         <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
                     </div>
 
-                    <nav style={{ display: 'flex', gap: '8px' }}>
+                    <nav className="header-nav">
                         {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
                             <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
                                 padding: '10px 18px',
@@ -1150,6 +1151,21 @@ function App() {
                             </button>
                         ))}
                     </nav>
+
+                    {/* Hamburger menu for mobile */}
+                    <button className="hamburger" onClick={() => setMenuOpen(true)} aria-label="Abrir menu">☰</button>
+
+                    {/* Drawer menu (mobile) */}
+                    {menuOpen && (
+                        <div className="header-drawer" role="dialog" aria-modal="true">
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
+                                    <button key={tab} onClick={() => { setAbaAtiva(tab); setMenuOpen(false); }} style={{ padding: '12px 16px', textAlign: 'left', background: abaAtiva === tab ? 'rgba(255,255,255,0.04)' : 'transparent', border: 'none', color: theme.textMain, borderRadius: '8px', cursor: 'pointer', fontWeight: 700 }}>{tab}</button>
+                                ))}
+                                <button onClick={() => setMenuOpen(false)} style={{ padding: '10px', border: 'none', background: '#ef4444', color: '#fff', borderRadius: '8px', cursor: 'pointer' }}>Fechar</button>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div style={{ flex: 1 }} />
