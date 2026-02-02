@@ -1431,7 +1431,10 @@ function App() {
                             const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
                             const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
                             if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
-                            if (secs > 0) setEstimatedTimeSec(secs);
+                            if (secs > 0) {
+                                setEstimatedTimeSec(secs);
+                                try { setEstimatedTimeText(formatDuration(secs)); } catch (e) { /* ignore */ }
+                            }
                             // If for some reason legs missing, fallback to haversine on overview_path (but legs preferred)
                             if ((!legs || legs.length === 0) && res.routes?.[0]?.overview_path) {
                                 try {
@@ -1516,6 +1519,16 @@ function App() {
             let drawResult = null;
             try {
                 drawResult = await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
+                // Immediately reflect distance/time on UI from Google response (don't wait DB)
+                try {
+                    if (drawResult && typeof drawResult.meters === 'number') {
+                        setEstimatedDistanceKm(Number((drawResult.meters / 1000).toFixed(1)));
+                    }
+                    if (drawResult && typeof drawResult.secs === 'number') {
+                        setEstimatedTimeSec(drawResult.secs);
+                        try { setEstimatedTimeText(formatDuration(drawResult.secs)); } catch (e) { }
+                    }
+                } catch (e) { /* ignore UI update errors */ }
             } finally {
                 try { setDistanceCalculating(false); } catch (e) { }
             }
@@ -1525,24 +1538,26 @@ function App() {
             let allOk = true;
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
-                    for (let i = 0; i < optimized.length; i++) {
-                        const item = optimized[i];
+                    for (const [i, item] of optimized.entries()) {
                         const pid = item && item.id;
                         if (!pid) continue;
                         newOrderIds.push(pid);
                         try {
-                            const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                            const ordemValue = Number(i + 1);
+                            const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: ordemValue }).eq('id', pid);
                             if (error) {
                                 allOk = false;
                                 console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
+                                try { alert('Erro ao gravar ordem_logistica para id ' + pid + ': ' + (error && error.message ? error.message : String(error))); } catch (e) { }
                                 // continue to next item
                                 continue;
                             } else {
-                                console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: Number(i + 1), returned: updData });
+                                console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: ordemValue, returned: updData });
                             }
                         } catch (err) {
                             allOk = false;
                             console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
+                            try { alert('Exceção ao gravar ordem_logistica para id ' + pid + ': ' + (err && err.message ? err.message : String(err))); } catch (e) { }
                             // continue to next item
                             continue;
                         }
