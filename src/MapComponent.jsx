@@ -1,5 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import useGoogleMapsLoader from './useGoogleMapsLoader';
+
+// Singleton map holder (keeps the Google Map instance alive across mounts)
+let GLOBAL_GOOGLE_MAP = null;
 
 // Componente reutilizável que monta um mapa Google Maps JS puro
 export default function MapComponent({
@@ -11,7 +14,17 @@ export default function MapComponent({
 }) {
     const containerRef = useRef(null);
     const mapRef = useRef(null);
-    const { loaded, error } = useGoogleMapsLoader({ apiKey: (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '' });
+    // capture API key explicitly so we can avoid loading when missing
+    const apiKey = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
+    const { loaded, error } = useGoogleMapsLoader({ apiKey });
+
+    // memoized options to avoid re-creating on simple prop changes
+    const mapOptions = useMemo(() => ({
+        center: { lat: Number(center.lat), lng: Number(center.lng) },
+        zoom: Number(zoom),
+        mapTypeControl: false,
+        streetViewControl: false
+    }), [center.lat, center.lng, zoom]);
 
     useEffect(() => {
         if (error) {
@@ -20,28 +33,41 @@ export default function MapComponent({
     }, [error]);
 
     useEffect(() => {
+        // Only proceed when loader is ready and container exists
         if (!loaded) return;
         if (!containerRef.current) return;
-        if (mapRef.current) return; // já inicializado
 
+        // If a global map exists, reattach it to current container (avoid re-creating)
+        if (GLOBAL_GOOGLE_MAP) {
+            try {
+                const existingDiv = GLOBAL_GOOGLE_MAP.getDiv && GLOBAL_GOOGLE_MAP.getDiv();
+                if (existingDiv && existingDiv !== containerRef.current) {
+                    // move the map DOM node into the new container (cheap)
+                    try { containerRef.current.appendChild(existingDiv); } catch (e) { }
+                }
+                mapRef.current = GLOBAL_GOOGLE_MAP;
+                try { onLoad(GLOBAL_GOOGLE_MAP); } catch (e) { }
+                return; // reuse existing map
+            } catch (e) {
+                // If reattach fails, fall through to create a fresh one
+            }
+        }
+
+        // If no global map exists, create it once and cache globally
         try {
-            const map = new window.google.maps.Map(containerRef.current, {
-                center: { lat: Number(center.lat), lng: Number(center.lng) },
-                zoom: Number(zoom),
-                mapTypeControl: false,
-                streetViewControl: false
-            });
+            const map = new window.google.maps.Map(containerRef.current, mapOptions);
+            GLOBAL_GOOGLE_MAP = map;
             mapRef.current = map;
             try { onLoad(map); } catch (e) { /* swallow */ }
         } catch (e) {
             try { onError(e); } catch (ee) { }
         }
 
+        // Intentionally do not destroy GLOBAL_GOOGLE_MAP on unmount to keep instance alive
         return () => {
-            // Não destruímos o script globalmente — apenas liberamos a referência
             mapRef.current = null;
         };
-    }, [loaded, containerRef.current]);
+    }, [loaded, mapOptions, apiKey]);
 
     if (!loaded) {
         return (

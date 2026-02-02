@@ -1091,11 +1091,17 @@ function App() {
         (async () => {
             setLoadingFrota(true);
             try {
+                // Only attempt to import maps library when we have a valid API key
+                const key = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
+                if (!key || String(key).trim().length === 0) {
+                    setMapsLoadError(true);
+                    return;
+                }
                 const lib = await import('@vis.gl/react-google-maps');
                 if (!mounted) return;
                 setMapsLib(lib || null);
             } catch (e) {
-                console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e);
+                try { console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e); } catch (err) { }
                 if (!mounted) return;
                 setFrota([]);
                 setMapsLoadError(true);
@@ -2145,7 +2151,8 @@ function App() {
                                     (mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
                                         (() => {
                                             const MapComp = mapsLib.Map;
-                                            return (
+                                            // Memoize the map view to avoid remounting the Map component on unrelated state updates
+                                            const mapView = React.useMemo(() => (
                                                 <ErrorBoundary>
                                                     <MapComp
                                                         defaultCenter={mapCenterState}
@@ -2156,7 +2163,8 @@ function App() {
                                                         onLoad={(m) => {
                                                             try {
                                                                 const inst = (m && (m.map || m.__map || m)) || m;
-                                                                mapRef.current = inst;
+                                                                // Preserve first instance to avoid re-instantiation (singleton-like behavior)
+                                                                if (!mapRef.current) mapRef.current = inst;
                                                             } catch (e) { /* ignore */ }
                                                         }}
                                                     >
@@ -2169,7 +2177,9 @@ function App() {
                                                         <DeliveryMarkers list={orderedRota} mapsLib={mapsLib} />
                                                     </MapComp>
                                                 </ErrorBoundary>
-                                            );
+                                            ), [mapsLib, mapCenterState, zoomLevel, entregasEmEspera && entregasEmEspera.length]);
+
+                                            return mapView;
                                         })()
                                     ) : (
                                         // fallback seguro: evita piscar enquanto frota não carregou

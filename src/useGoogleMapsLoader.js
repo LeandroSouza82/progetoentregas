@@ -7,6 +7,12 @@ export default function useGoogleMapsLoader({ apiKey } = {}) {
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
+        // Do not attempt to load Google Maps if API key is missing or empty
+        if (!apiKey || String(apiKey).trim().length === 0) {
+            setLoaded(false);
+            setError(new Error('Google Maps API key missing')); // explicit error for caller
+            return;
+        }
         if (window.google && window.google.maps) {
             setLoaded(true);
             return;
@@ -26,11 +32,12 @@ export default function useGoogleMapsLoader({ apiKey } = {}) {
             existing.addEventListener('load', onLoad);
             existing.addEventListener('error', onError);
 
-            // If the existing script didn't include the Places library, inject a lightweight supplemental script that includes it.
+            // If the existing script didn't include the Places library, inject a lightweight supplemental script that includes only the needed libraries (places,geometry)
             const hasPlaces = (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places) ? true : false;
             if (!hasPlaces) {
-                console.warn('Existing Google Maps script found but Places library not available. Injecting supplemental script with &libraries=places');
-                const src2 = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places&language=pt-BR&region=BR`;
+                // do not spam console in production — log once
+                try { console.info('Existing Google Maps script found but Places library not available. Injecting supplemental script with &libraries=places,geometry'); } catch (e) { }
+                const src2 = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places,geometry&language=pt-BR&region=BR`;
                 const s2 = document.createElement('script');
                 s2.setAttribute('data-google-maps-api-places', '1');
                 s2.setAttribute('loading', 'async');
@@ -73,7 +80,7 @@ export default function useGoogleMapsLoader({ apiKey } = {}) {
 
         // If no existing script, inject one (rare if index.html already contains it)
         // Ensure we explicitly load the Places library and set language/region for consistent behavior
-        const src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places&language=pt-BR&region=BR`;
+        const src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places,geometry&language=pt-BR&region=BR`;
         const s = document.createElement('script');
         s.setAttribute('data-google-maps-api', '1');
         s.setAttribute('loading', 'async');
