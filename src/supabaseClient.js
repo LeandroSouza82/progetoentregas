@@ -6,8 +6,8 @@ let supabase = null;
 let HAS_SUPABASE_CREDENTIALS = false;
 let subscribeToTable = null;
 
-// Node/mock path when localStorage is available (test scripts set global.localStorage)
-if (typeof localStorage !== 'undefined') {
+// Node/mock path when running without window (test scripts set global.localStorage)
+if (typeof window === 'undefined') {
     // minimal mock similar to motorista/src/supabaseClient.js
     function storageKey(table) { return `mock_${table}`; }
     function readTable(table) {
@@ -17,7 +17,7 @@ if (typeof localStorage !== 'undefined') {
     function applyFilters(items, filters) { if (!filters || filters.length === 0) return items; return items.filter(item => filters.every(([field, value]) => String(item[field]) === String(value))); }
 
     function createQuery(table) {
-        let op = null; let updateObj = null; const filters = []; let orderSpec = null;
+        let op = null; let updateObj = null; const filters = []; let orderSpec = null; let limitCount = null;
         return {
             select(cols) { return this; },
             insert: async (rows) => { const all = readTable(table); const toInsert = rows.map(r => ({ id: Date.now() + Math.floor(Math.random() * 1000), ...r })); const next = all.concat(toInsert); writeTable(table, next); return { data: toInsert, error: null }; },
@@ -25,6 +25,7 @@ if (typeof localStorage !== 'undefined') {
             update(obj) { op = 'update'; updateObj = obj; return this; },
             eq(field, value) { filters.push([field, value]); return this; },
             order(field, opts) { orderSpec = { field, opts }; return this; },
+            limit(n) { limitCount = Number(n); return this; },
             async _exec() {
                 const all = readTable(table);
                 let matched = applyFilters(all, filters);
@@ -36,6 +37,7 @@ if (typeof localStorage !== 'undefined') {
                         return 0;
                     });
                 }
+                if (limitCount != null) matched = matched.slice(0, limitCount);
                 if (op === 'delete') { const remaining = all.filter(i => !matched.includes(i)); writeTable(table, remaining); return { data: matched, error: null }; }
                 if (op === 'update') { const updated = all.map(i => matched.includes(i) ? { ...i, ...updateObj } : i); writeTable(table, updated); const returned = updated.filter(i => matched.some(m => m.id === i.id)); return { data: returned, error: null }; }
                 return { data: matched, error: null };

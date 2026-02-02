@@ -25,6 +25,40 @@ export default function useGoogleMapsLoader({ apiKey } = {}) {
             const onError = (e) => setError(e || new Error('Google Maps failed to load'));
             existing.addEventListener('load', onLoad);
             existing.addEventListener('error', onError);
+
+            // If the existing script didn't include the Places library, inject a lightweight supplemental script that includes it.
+            const hasPlaces = (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places) ? true : false;
+            if (!hasPlaces) {
+                console.warn('Existing Google Maps script found but Places library not available. Injecting supplemental script with &libraries=places');
+                const src2 = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places&language=pt-BR&region=BR`;
+                const s2 = document.createElement('script');
+                s2.setAttribute('data-google-maps-api-places', '1');
+                s2.setAttribute('loading', 'async');
+                s2.async = true;
+                s2.defer = true;
+                s2.src = src2;
+
+                const onLoad2 = () => setLoaded(true);
+                const onErr2 = (e) => setError(e || new Error('Google Maps (Places) failed to load'));
+
+                s2.addEventListener('load', onLoad2);
+                s2.addEventListener('error', onErr2);
+                document.head.appendChild(s2);
+
+                window.__gmapsLoaderPromise = new Promise((resolve, reject) => {
+                    s2.addEventListener('load', () => resolve(window.google && window.google.maps ? window.google.maps : null));
+                    s2.addEventListener('error', (err) => reject(err || new Error('Failed to load Google Maps (Places)')));
+                });
+                window.__gmapsLoaderPromise.catch(() => { });
+
+                return () => {
+                    existing.removeEventListener('load', onLoad);
+                    existing.removeEventListener('error', onError);
+                    s2.removeEventListener('load', onLoad2);
+                    s2.removeEventListener('error', onErr2);
+                };
+            }
+
             // mark a promise so other instances reuse
             window.__gmapsLoaderPromise = new Promise((resolve, reject) => {
                 existing.addEventListener('load', () => resolve(window.google && window.google.maps ? window.google.maps : null));
@@ -38,7 +72,8 @@ export default function useGoogleMapsLoader({ apiKey } = {}) {
         }
 
         // If no existing script, inject one (rare if index.html already contains it)
-        const src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}`;
+        // Ensure we explicitly load the Places library and set language/region for consistent behavior
+        const src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places&language=pt-BR&region=BR`;
         const s = document.createElement('script');
         s.setAttribute('data-google-maps-api', '1');
         s.setAttribute('loading', 'async');

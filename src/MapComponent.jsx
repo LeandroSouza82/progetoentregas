@@ -11,7 +11,7 @@ export default function MapComponent({
 }) {
     const containerRef = useRef(null);
     const mapRef = useRef(null);
-    const { loaded, error } = useGoogleMapsLoader({ apiKey: '' });
+    const { loaded, error } = useGoogleMapsLoader({ apiKey: (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '' });
 
     useEffect(() => {
         if (error) {

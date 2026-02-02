@@ -1,6 +1,7 @@
 import React from 'react';
 import { useRef, useState, useEffect } from 'react';
-import { supabase } from './supabaseClient';
+import supabase, { subscribeToTable } from './supabaseClient';
+import useGoogleMapsLoader from './useGoogleMapsLoader';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
 // Ícone em Data URL SVG (moto verde) definido logo no topo com fallback seguro
@@ -145,8 +146,8 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
         if (motoristaId != null) {
             // tentar buscar lat/lng atual do motorista diretamente (estado real-time)
             try {
-                const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId).limit(1);
-                const m = mdata && mdata[0] ? mdata[0] : null;
+                const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId);
+                const m = (mdata && mdata[0]) ? mdata[0] : null;
                 if (m && typeof m.esta_online !== 'undefined' && m.esta_online !== true) {
                     // driver not online — abort optimization per regra de ouro
                     return remaining;
@@ -156,7 +157,7 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
                 }
             } catch (e) { /* fallback below */ }
             if (!originLatLng) {
-                const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false }).limit(1);
+                const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false });
                 if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) {
                     originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
                 }
@@ -489,6 +490,9 @@ function App() {
     const [destinatario, setDestinatario] = useState('all');
     const [nomeCliente, setNomeCliente] = useState('');
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
+    const enderecoRef = useRef(null);
+    const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Autocomplete
+    const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
     const [recentList, setRecentList] = useState([]);
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
@@ -550,6 +554,66 @@ function App() {
     }, [mapCenterState]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
+
+    // Autocomplete (Google Places) — inicialização forçada quando a aba 'Nova Carga' está ativa
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (abaAtiva !== 'Nova Carga') return;
+
+        if (!enderecoRef.current) return;
+        let ac = null;
+        let listener = null;
+        let timer = null;
+        let attempts = 0;
+        const MAX_ATTEMPTS = 5;
+
+        const tryInit = () => {
+            attempts += 1;
+            if (!window.google || !window.google.maps || !window.google.maps.places) {
+                if (attempts >= MAX_ATTEMPTS) {
+                    console.warn('Google Maps Places não disponível após várias tentativas. Verifique a carga da library `places`.');
+                    return;
+                }
+                // tentar novamente em 500ms
+                timer = setTimeout(tryInit, 500);
+                return;
+            }
+
+            try {
+                // Garantir que o input exista
+                if (!enderecoRef.current) return;
+                ac = new window.google.maps.places.Autocomplete(enderecoRef.current, { types: ['address'], componentRestrictions: { country: 'br' } });
+                // solicitar fields mínimos para desempenho
+                ac.setFields(['formatted_address', 'geometry', 'address_components', 'name']);
+                listener = ac.addListener('place_changed', () => {
+                    try {
+                        const place = ac.getPlace();
+                        if (place && place.formatted_address) setEnderecoEntrega(place.formatted_address);
+                        else if (enderecoRef.current && enderecoRef.current.value) setEnderecoEntrega(enderecoRef.current.value);
+                        if (place && place.geometry && place.geometry.location) {
+                            const lat = place.geometry.location.lat();
+                            const lng = place.geometry.location.lng();
+                            setEnderecoCoords({ lat, lng });
+                        } else {
+                            setEnderecoCoords(null);
+                            console.warn('Place selecionado sem geometry — assegure que o usuário clique em uma sugestão do Google');
+                        }
+                    } catch (e) { console.warn('Erro ao processar place_changed', e); }
+                });
+            } catch (e) {
+                console.warn('Autocomplete init failed', e);
+            }
+        };
+
+        // inicializa imediatamente (ou em retry) — protege contra render timing
+        tryInit();
+
+        return () => {
+            clearTimeout(timer);
+            try { if (listener && typeof listener.remove === 'function') listener.remove(); else if (listener && typeof listener.unsubscribe === 'function') listener.unsubscribe(); }
+            catch (e) { }
+        };
+    }, [abaAtiva]);
 
     // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
     const carregarDados = React.useCallback(async () => {
@@ -1048,50 +1112,66 @@ function App() {
     useEffect(() => {
         if (!HAS_SUPABASE_CREDENTIALS) return;
 
-        const canal = supabase
-            .channel('rastreio-v10')
-            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas' }, (payload) => {
-                try {
-                    const rec = payload.new || payload.record || null;
-                    if (!rec || !rec.id) return;
-                    const parsed = { ...rec };
-                    if (parsed.lat != null) parsed.lat = Number(parsed.lat);
-                    if (parsed.lng != null) parsed.lng = Number(parsed.lng);
+        // handler used by both realtime channel and polling fallback
+        const handleRealtimeMotoristas = (payload) => {
+            try {
+                const rec = payload.new || payload.record || null;
+                if (!rec || !rec.id) return;
+                const parsed = { ...rec };
+                if (parsed.lat != null) parsed.lat = Number(parsed.lat);
+                if (parsed.lng != null) parsed.lng = Number(parsed.lng);
 
-                    // Atualiza por mapeamento para preservar referências de objetos
-                    setFrota(prev => {
-                        try {
-                            const arr = Array.isArray(prev) ? prev : [];
-                            const found = arr.find(m => String(m.id) === String(parsed.id));
-                            if (found) {
-                                return arr.map(m => String(m.id) === String(parsed.id) ? { ...m, ...parsed } : m);
-                            }
-                            // Se não existir, adiciona ao final
-                            return [...arr, parsed];
-                        } catch (e) {
-                            return prev || [];
-                        }
-                    });
-
-                    // If a motorista updated location and we have an active route for them, optionally recompute or refresh polyline
+                // Atualiza por mapeamento para preservar referências de objetos
+                setFrota(prev => {
                     try {
-                        if (parsed && parsed.id) {
-                            // If we have a route displayed and the vehicle moved, redraw or nudge polyline for accuracy
-                            // (lightweight: only if polyline exists)
-                            if (routePolylineRef.current && routePolylineRef.current.setPath) {
-                                // small optimization: optional real-time smoothing not implemented here
-                            }
+                        const arr = Array.isArray(prev) ? prev : [];
+                        const found = arr.find(m => String(m.id) === String(parsed.id));
+                        if (found) {
+                            return arr.map(m => String(m.id) === String(parsed.id) ? { ...m, ...parsed } : m);
                         }
-                    } catch (e) { /* ignore */ }
-                } catch (e) {
-                    console.warn('Erro no handler realtime motoristas:', e);
-                }
-            })
-            .subscribe();
+                        // Se não existir, adiciona ao final
+                        return [...arr, parsed];
+                    } catch (e) {
+                        return prev || [];
+                    }
+                });
 
-        return () => {
-            try { supabase.removeChannel(canal); } catch (e) { canal.unsubscribe && canal.unsubscribe(); }
+                // If a motorista updated location and we have an active route for them, optionally recompute or refresh polyline
+                try {
+                    if (parsed && parsed.id) {
+                        if (routePolylineRef.current && routePolylineRef.current.setPath) {
+                            // optional: nudge polyline
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+            } catch (e) {
+                console.warn('Erro no handler realtime motoristas:', e);
+            }
         };
+
+        // Prefer native Supabase realtime channel when available
+        if (supabase && typeof supabase.channel === 'function') {
+            const canal = supabase
+                .channel('rastreio-v10')
+                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas' }, handleRealtimeMotoristas)
+                .subscribe();
+
+            return () => {
+                try { supabase.removeChannel(canal); } catch (e) { canal.unsubscribe && canal.unsubscribe(); }
+            };
+        }
+
+        // Fallback: polling subscribeToTable
+        let stopPolling = null;
+        try {
+            if (typeof subscribeToTable === 'function') {
+                stopPolling = subscribeToTable('motoristas', (res) => {
+                    (res && res.data || []).forEach(r => handleRealtimeMotoristas({ new: r }));
+                }, { pollMs: 1000 });
+            }
+        } catch (e) { /* ignore */ }
+
+        return () => { try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
     }, []);
 
     // Route polyline ref (manages drawn optimized route on map)
@@ -1152,7 +1232,8 @@ function App() {
         try {
             if (!motoristaId) return;
             // Fetch motorista to ensure online and get current lat/lng
-            const { data: mdata, error: merr } = await supabase.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId).limit(1);
+            const { data: mdata, error: merr } = await supabase.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId);
+            if (merr) { console.warn('recalcRotaForMotorista: erro ao buscar motorista:', merr); return; }
             const motor = mdata && mdata[0] ? mdata[0] : null;
             if (!motor) return;
             if (motor.esta_online !== true) return; // RULE: only online drivers receive routing
@@ -1188,31 +1269,40 @@ function App() {
     // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
     useEffect(() => {
         if (!HAS_SUPABASE_CREDENTIALS) return;
-        const chan = supabase.channel('entregas-recalc')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, (payload) => {
-                try {
-                    const rec = payload.new || payload.record || null;
-                    if (!rec) return;
-                    if (rec.motorista_id) {
-                        // only recalc if motorista is online; recalc function checks that
-                        recalcRotaForMotorista(String(rec.motorista_id));
-                    }
-                } catch (e) { /* ignore */ }
-            })
-            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, (payload) => {
-                try {
-                    const rec = payload.new || payload.record || null;
-                    if (!rec) return;
-                    // Recalc on status changes that may affect route
-                    const st = String(rec.status || '').trim().toLowerCase();
-                    if (rec.motorista_id && (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
-                        recalcRotaForMotorista(String(rec.motorista_id));
-                    }
-                } catch (e) { /* ignore */ }
-            })
-            .subscribe();
 
-        return () => { try { supabase.removeChannel(chan); } catch (e) { chan.unsubscribe && chan.unsubscribe(); } };
+        const handleEntregasEvent = (payload) => {
+            try {
+                const rec = payload.new || payload.record || null;
+                if (!rec) return;
+                if (rec.motorista_id) {
+                    const st = String(rec.status || '').trim().toLowerCase();
+                    if (payload.event === 'INSERT' || (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
+                        recalcRotaForMotorista(String(rec.motorista_id));
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        };
+
+        if (supabase && typeof supabase.channel === 'function') {
+            const chan = supabase.channel('entregas-recalc')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, handleEntregasEvent)
+                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, handleEntregasEvent)
+                .subscribe();
+
+            return () => { try { supabase.removeChannel(chan); } catch (e) { chan.unsubscribe && chan.unsubscribe(); } };
+        }
+
+        // Fallback: polling
+        let stopPolling = null;
+        try {
+            if (typeof subscribeToTable === 'function') {
+                stopPolling = subscribeToTable('entregas', (res) => {
+                    (res && res.data || []).forEach(r => handleEntregasEvent({ new: r, event: 'INSERT' }));
+                }, { pollMs: 1000 });
+            }
+        } catch (e) { /* ignore */ }
+
+        return () => { try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
     }, [recalcRotaForMotorista]);
 
     // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
@@ -1260,10 +1350,33 @@ function App() {
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
-        const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
-        const lat = baseLat + (Math.random() - 0.5) * 0.04;
-        const lng = baseLng + (Math.random() - 0.5) * 0.04;
+        // Se o Google Maps/Places está carregado, exigir que o usuário selecione uma sugestão que traga coords
+        if (gmapsLoaded) {
+            if (!window.google || !window.google.maps || !window.google.maps.places) {
+                console.error('Google Maps Places não está disponível (verifique se a library `places` foi carregada)');
+                // Permitimos fallback quando a library não está disponível, mas registramos o erro.
+            }
+            if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords.lat)) || !Number.isFinite(Number(enderecoCoords.lng))) {
+                try { alert('Por favor selecione um endereço válido nas sugestões do Google para capturar coordenadas. O campo será limpo para você tentar novamente.'); } catch (err) { /* ignore */ }
+                try { setEnderecoEntrega(''); } catch (err) { /* ignore */ }
+                try { setEnderecoCoords(null); } catch (err) { /* ignore */ }
+                try { if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') enderecoRef.current.focus(); } catch (e) { }
+                return;
+            }
+        }
+
+        // Preferir coordenadas obtidas via Google Places Autocomplete. Se não houver coords, usar fallback randômico baseado no centro do mapa.
+        let lat = null;
+        let lng = null;
+        if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
+            lat = Number(enderecoCoords.lat);
+            lng = Number(enderecoCoords.lng);
+        } else {
+            const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
+            const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
+            lat = baseLat + (Math.random() - 0.5) * 0.04;
+            lng = baseLng + (Math.random() - 0.5) * 0.04;
+        }
         // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
@@ -1278,7 +1391,7 @@ function App() {
             status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
             observacoes: obsValue
         }]);
-        if (!error) { alert("✅ Salvo com sucesso!"); setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); carregarDados(); }
+        if (!error) { alert("✅ Salvo com sucesso!"); setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); carregarDados(); }
     };
 
     const excluirPedido = async (id) => {
@@ -1580,7 +1693,7 @@ function App() {
                         {/* Coluna Esquerda: Formulário */}
                         <div style={{ flex: '0 0 48%', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow }}>
                             <h2 style={{ marginTop: 0, color: theme.primary }}>Registrar Encomenda</h2>
-                            <form onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            <form autoComplete="off" onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                                 <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                                     <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
                                     <select name="tipo" value={tipoEncomenda} onChange={(e) => setTipoEncomenda(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
@@ -1590,7 +1703,7 @@ function App() {
                                     </select>
                                 </label>
                                 <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
-                                <input name="endereco" placeholder="Endereço de Entrega" style={inputStyle} required value={enderecoEntrega} onChange={(e) => setEnderecoEntrega(e.target.value)} />
+                                <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); }} />
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                             </form>
@@ -1605,7 +1718,7 @@ function App() {
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
                                     recentList?.map((it, idx) => (
-                                        <div key={idx} onClick={() => { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
+                                        <div key={idx} onClick={() => { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoCoords(null); }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
                                             <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
                                             <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
                                         </div>

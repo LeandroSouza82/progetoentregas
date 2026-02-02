@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import supabase from './supabaseClient';
+import supabase, { subscribeToTable } from '../../src/supabaseClient';
 
 export default function AppMotorista() {
     // Sessão do motorista (persistida)
@@ -329,60 +329,113 @@ export default function AppMotorista() {
         const channels = [];
 
         try {
-            if (id) {
-                const chanId = `motorista-updates-id-${id}`;
-                const chId = supabase.channel(chanId).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `id=eq.${id}` }, (payload) => {
-                    try {
-                        const rec = payload.new || payload.record || null;
-                        if (!rec) return;
+            // Prefer native realtime if available
+            if (supabase && typeof supabase.channel === 'function') {
+                if (id) {
+                    const chanId = `motorista-updates-id-${id}`;
+                    const chId = supabase.channel(chanId).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `id=eq.${id}` }, (payload) => {
+                        try {
+                            const rec = payload.new || payload.record || null;
+                            if (!rec) return;
 
-                        // Sincroniza flag de aprovação
-                        if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
-                            const updated = { ...(loggedIn || {}), aprovado: true };
-                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                            try { setLoggedIn(updated); } catch (e) { }
-                            try { setStatus('Online (aprovado)'); } catch (e) { }
-                            try { carregarRota(); } catch (e) { }
+                            // Sincroniza flag de aprovação
+                            if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                                const updated = { ...(loggedIn || {}), aprovado: true };
+                                try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                try { setLoggedIn(updated); } catch (e) { }
+                                try { setStatus('Online (aprovado)'); } catch (e) { }
+                                try { carregarRota(); } catch (e) { }
+                            }
+
+                            // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
+                            if (typeof rec.esta_online !== 'undefined' && loggedIn && String(loggedIn.id) === String(rec.id)) {
+                                const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true };
+                                try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                try { setLoggedIn(updated); } catch (e) { }
+                                try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
+                            }
+                        } catch (e) { /* ignore */ }
+                    }).subscribe();
+                    channels.push(chId);
+                }
+
+                if (email) {
+                    const chanEmail = `motorista-updates-email-${email}`;
+                    const chEmail = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
+                        try {
+                            const rec = payload.new || payload.record || null;
+                            if (!rec) return;
+
+                            if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                                const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
+                                try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                try { setLoggedIn(updated); } catch (e) { }
+                                try { setStatus('Online (aprovado)'); } catch (e) { }
+                                try { carregarRota(); } catch (e) { }
+                            }
+
+                            // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
+                            if (typeof rec.esta_online !== 'undefined') {
+                                const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true, id: rec.id || (loggedIn && loggedIn.id) };
+                                try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                try { setLoggedIn(updated); } catch (e) { }
+                                try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
+                            }
+
+                        } catch (e) { /* ignore */ }
+                    }).subscribe();
+                    channels.push(chEmail);
+                }
+            } else {
+                // fallback polling: subscribeToTable if available
+                try {
+                    if (typeof subscribeToTable === 'function') {
+                        if (id) {
+                            const stop = subscribeToTable('motoristas', (res) => {
+                                (res && res.data || []).filter(r => String(r.id) === String(id)).forEach(r => {
+                                    // emulate payload format
+                                    const rec = r;
+                                    if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                                        const updated = { ...(loggedIn || {}), aprovado: true };
+                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                        try { setLoggedIn(updated); } catch (e) { }
+                                        try { setStatus('Online (aprovado)'); } catch (e) { }
+                                        try { carregarRota(); } catch (e) { }
+                                    }
+                                    if (typeof rec.esta_online !== 'undefined' && loggedIn && String(loggedIn.id) === String(rec.id)) {
+                                        const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true };
+                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                        try { setLoggedIn(updated); } catch (e) { }
+                                        try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
+                                    }
+                                });
+                            }, { pollMs: 1500 });
+                            channels.push({ stop });
                         }
 
-                        // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
-                        if (typeof rec.esta_online !== 'undefined' && loggedIn && String(loggedIn.id) === String(rec.id)) {
-                            const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true };
-                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                            try { setLoggedIn(updated); } catch (e) { }
-                            try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
+                        if (email) {
+                            const stopE = subscribeToTable('motoristas', (res) => {
+                                (res && res.data || []).filter(r => String(r.email) === String(email)).forEach(r => {
+                                    const rec = r;
+                                    if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
+                                        const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
+                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                        try { setLoggedIn(updated); } catch (e) { }
+                                        try { setStatus('Online (aprovado)'); } catch (e) { }
+                                        try { carregarRota(); } catch (e) { }
+                                    }
+                                    if (typeof rec.esta_online !== 'undefined') {
+                                        const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true, id: rec.id || (loggedIn && loggedIn.id) };
+                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
+                                        try { setLoggedIn(updated); } catch (e) { }
+                                        try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
+                                    }
+                                });
+                            }, { pollMs: 1500 });
+                            channels.push({ stop: stopE });
                         }
-                    } catch (e) { /* ignore */ }
-                }).subscribe();
-                channels.push(chId);
-            }
-
-            if (email) {
-                const chanEmail = `motorista-updates-email-${email}`;
-                const chEmail = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
-                    try {
-                        const rec = payload.new || payload.record || null;
-                        if (!rec) return;
-
-                        if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
-                            const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
-                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                            try { setLoggedIn(updated); } catch (e) { }
-                            try { setStatus('Online (aprovado)'); } catch (e) { }
-                            try { carregarRota(); } catch (e) { }
-                        }
-
-                        // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
-                        if (typeof rec.esta_online !== 'undefined') {
-                            const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true, id: rec.id || (loggedIn && loggedIn.id) };
-                            try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                            try { setLoggedIn(updated); } catch (e) { }
-                            try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
-                        }
-
-                    } catch (e) { /* ignore */ }
-                }).subscribe();
-                channels.push(chEmail);
+                    }
+                } catch (e) { /* ignore */ }
             }
         } catch (e) { /* ignore */ }
 

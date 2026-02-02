@@ -18,6 +18,7 @@ a {
   color: #646cff;
   text-decoration: inherit;
 }
+
 a:hover {
   color: #535bf2;
 }
@@ -46,9 +47,11 @@ button {
   cursor: pointer;
   transition: border-color 0.25s;
 }
+
 button:hover {
   border-color: #646cff;
 }
+
 button:focus,
 button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
@@ -59,10 +62,45 @@ button:focus-visible {
     color: #213547;
     background-color: #ffffff;
   }
+
   a:hover {
     color: #747bff;
   }
+
   button {
     background-color: #f9f9f9;
   }
+}
+
+/* Google Places Autocomplete — ensure dropdown is visible on top of the dashboard */
+.pac-container {
+  z-index: 99999 !important;
+  display: block !important;
+  background-color: #ffffff !important;
+  color: #000 !important;
+  border: 1px solid #ccc !important;
+  border-radius: 8px !important;
+  font-family: sans-serif !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12) !important;
+  max-width: 100%;
+}
+
+.pac-item {
+  padding: 10px !important;
+  cursor: pointer !important;
+}
+
+.pac-item:hover {
+  background-color: #f0f0f0 !important;
+}
+
+.pac-item .pac-matched {
+  color: #000 !important;
+  font-weight: 700 !important;
+}
+
+/* Ensure dropdown width matches our layout up to the dashboard max width */
+.pac-container,
+.pac-container * {
+  box-sizing: border-box !important;
 }
