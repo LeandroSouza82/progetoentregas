@@ -286,40 +286,40 @@ const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLev
     });
 }, (prev, next) => prev.frota === next.frota && prev.mapsLib === next.mapsLib && prev.zoomLevel === next.zoomLevel);
 
-// Linha da tabela de motorista memoizada: só re-renderiza quando a referência do objeto mudar
+// Linha da tabela de motorista memoizada (modo 'Gestão'): mostra apenas NOME | EMAIL | ENDEREÇO | AÇÕES
 const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme, onApprove, onReject }) {
-    const isOnline = Boolean(m.esta_online);
-    const dotColor = isOnline ? '#10b981' : '#ef4444';
-    const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
-    const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
-    const total = entregasMot.length;
-    const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
-    const tipoPrincipal = (entregasMot.find(e => e.tipo && String(e.tipo).trim().length > 0) || {}).tipo || null;
-    const tipoColor = tipoPrincipal ? (tipoPrincipal === 'recolha' ? '#fb923c' : (tipoPrincipal === 'outros' ? '#c084fc' : '#60a5fa')) : null;
-    const verbByTipo = (t) => { const tt = String(t || '').trim().toLowerCase(); if (tt === 'entrega') return 'Entregando'; if (tt === 'recolha') return 'Recolhendo'; if (tt === 'outros' || tt === 'outro') return 'Ativo'; return 'Em serviço'; };
+    // Mostrar apenas dados reais do Supabase: nome, email e telefone
+    const email = m.email || null;
+    const telefone = (m.telefone && String(m.telefone).trim().length > 0) ? m.telefone : null;
+
+    // Prepara mensagem de ativação contendo o ID do motorista (link de ativação)
+    const activationUrl = (typeof window !== 'undefined' ? `${window.location.origin}/aprovar?id=${m.id}` : `/aprovar?id=${m.id}`);
+    const waMessage = `Olá! Para confirmar seu cadastro no V10 e ser aprovado agora, clique neste link: ${activationUrl}`;
 
     return (
-        <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
-            <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
+        <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>
+            <td style={{ padding: '15px 10px' }}>
                 <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
             </td>
-            <td>
-                <span style={{ padding: '6px 10px', borderRadius: '12px', background: 'transparent', color: (total > 0 ? (tipoColor || (isOnline ? '#10b981' : 'rgba(239,68,68,0.6)')) : (isOnline ? '#10b981' : 'rgba(239,68,68,0.6)')), fontSize: '12px', fontWeight: 700, textShadow: isOnline ? '0 1px 6px rgba(16,185,129,0.35)' : 'none', opacity: isOnline ? 1 : 0.6 }}>
-                    {total > 0 ? `${verbByTipo(tipoPrincipal)} ${feitas}/${total}` : (isOnline ? 'Disponível' : 'Offline')}
-                </span>
+
+            <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px' }}>{email || 'Sem email'}</td>
+
+            <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px' }}>
+                {telefone ? (
+                    <a
+                        href={`https://api.whatsapp.com/send?phone=${encodeURIComponent(String(m.telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(waMessage)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#60a5fa', textDecoration: 'none', fontWeight: 700 }}
+                        onClick={(e) => { e.stopPropagation && e.stopPropagation(); }}
+                    >
+                        {m.telefone}
+                    </a>
+                ) : 'Sem telefone'}
             </td>
-            <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
-            <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
-            <td style={{ padding: '10px' }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0f172a', color: '#fff', padding: '6px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: 700 }}>
-                    <span style={{ color: '#10b981' }}>{feitas}</span>
-                    <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
-                    <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
-                </span>
-            </td>
+
             { (onApprove || onReject) && (
-                <td style={{ padding: '10px', display: 'flex', gap: '8px' }}>
+                <td style={{ padding: '10px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                     {onApprove && (
                         <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) {} }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
                     )}
@@ -341,6 +341,40 @@ function App() {
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
+
+    // Estado para mostrar mensagens de aprovação via rota (/aprovar?id=...)
+    const [approvalMessage, setApprovalMessage] = useState(null);
+
+    useEffect(() => {
+        // Detecta rota de aprovação: /aprovar?id=UUID
+        try {
+            if (typeof window === 'undefined') return;
+            const pathname = window.location.pathname || '';
+            if (!pathname.startsWith('/aprovar')) return;
+            const params = new URLSearchParams(window.location.search);
+            const id = params.get('id');
+            if (!id) {
+                setApprovalMessage('Link inválido. ID ausente.');
+                return;
+            }
+            (async () => {
+                try {
+                    const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', id);
+                    if (error) {
+                        setApprovalMessage('Falha ao ativar cadastro: ' + (error.message || JSON.stringify(error)));
+                    } else {
+                        setApprovalMessage('Parabéns! Seu cadastro foi ativado. Abra o App V10 para trabalhar.');
+                        // Remover query para evitar re-execução em refresh
+                        try { window.history.replaceState({}, document.title, '/'); } catch (e) { /* ignore */ }
+                    }
+                } catch (e) {
+                    setApprovalMessage('Erro ao processar ativação.');
+                }
+            })();
+        } catch (e) { /* ignore */ }
+        // rodar apenas no mount
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Estados do Supabase
     const [entregasEmEspera, setEntregasEmEspera] = useState([]); // agora vem de `entregas`
@@ -1104,6 +1138,14 @@ function App() {
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
+            {approvalMessage && (
+                <div style={{ position: 'fixed', top: 100, left: 0, right: 0, display: 'flex', justifyContent: 'center', zIndex: 1400 }}>
+                    <div style={{ background: '#06314b', color: '#fff', padding: '16px 20px', borderRadius: '10px', boxShadow: '0 10px 30px rgba(0,0,0,0.6)', maxWidth: '720px', textAlign: 'center' }}>
+                        {approvalMessage}
+                    </div>
+                </div>
+            )}
+
             <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
 
 
@@ -1383,24 +1425,27 @@ function App() {
 
                 {/* GESTÃO DE MOTORISTAS */}
                 {abaAtiva === 'Gestão de Motoristas' && (
-                    <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
+                    <div style={{ background: 'transparent', padding: '30px', borderRadius: '16px', boxShadow: theme.shadow, width: '100%' }}>
                         <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
                         <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
-                                <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
-                            <thead>
-                                <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
-                                    <th style={{ padding: '10px' }}>NOME</th>
-                                    <th style={{ padding: '10px' }}>EMAIL</th>
-                                    <th style={{ padding: '10px' }}>AÇÕES</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {motoristasPendentes.map(m => (
-                                    <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
-                                ))}
-                            </tbody>
-                        </table>
+                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
+                                <thead>
+                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
+                                        <th style={{ padding: '10px' }}>NOME</th>
+                                        <th style={{ padding: '10px' }}>EMAIL</th>
+                                        <th style={{ padding: '10px' }}>TELEFONE</th>
+                                        <th style={{ padding: '10px', textAlign: 'right' }}>AÇÕES</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {motoristasPendentes.map(m => (
+                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 )}
 
