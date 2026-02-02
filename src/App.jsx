@@ -185,8 +185,16 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
 
     // Use DirectionsService.optimizeWaypoints exclusively (no DistanceMatrix)
+    // Avoid calling Google if another routing is in progress — return heuristic fallback
+    if (routingInProgressRef.current) {
+        try { console.warn('otimizarRotaComGoogle: routing in progress, using local heuristic fallback'); } catch (e) { }
+        const localOrder = otimizarRota(originLatLng, remaining);
+        return localOrder;
+    }
+
     let orderedIndices = null;
     try {
+        routingInProgressRef.current = true;
         if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
         const directionsService = new window.google.maps.DirectionsService();
         const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
@@ -203,6 +211,11 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
             const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
             if (meters > 0) try { setEstimatedDistanceKm(Number((meters / 1000).toFixed(1))); } catch (e) { }
             if (secs > 0) try { setEstimatedTimeSec(secs); setEstimatedTimeText(formatDuration(secs)); } catch (e) { }
+            // cache preview result for small window
+            try {
+                const hash = JSON.stringify((remaining || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
+                lastRouteCacheRef.current.set('preview|' + hash, { optimizedOrder: Array.isArray(wpOrder) ? wpOrder : null, drawResult: { meters, secs }, timestamp: Date.now() });
+            } catch (e) { /* ignore cache issues */ }
         } catch (e) { /* ignore */ }
     } catch (e) {
         console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e);
@@ -210,6 +223,8 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
         const localOrder = otimizarRota(originLatLng, remaining);
         try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
         return localOrder;
+    } finally {
+        routingInProgressRef.current = false;
     }
 
 
@@ -410,6 +425,8 @@ function App() {
     const draftPolylineRef = useRef(null);
     const draftOptimizeTimerRef = useRef(null);
     const lastDraftHashRef = useRef(null);
+    const inputIdleRef = useRef(true);
+    const inputIdleTimerRef = useRef(null);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     // Distance and driver-select mode state
@@ -495,6 +512,8 @@ function App() {
     const retryTimerRef = useRef(null);
     const retryCountRef = useRef(0); // counts consecutive retry attempts to avoid infinite loops
     const routingInProgressRef = useRef(false); // prevents concurrent heavy route computations
+    const lastRouteCacheRef = useRef(new Map()); // cache per motoristaId => { hash, result, timestamp }
+    const motoristaDebounceMapRef = useRef(new Map()); // per-motorista debounce timers for realtime events
     const lastFrotaRef = useRef([]);
 
     // Cleanup on unmount for any pending retry
@@ -1330,7 +1349,7 @@ function App() {
                             const newOrdered = wpOrder.map(i => orderedList[i]);
 
                             // Log the computed order IDs for debugging
-                            try { console.log('drawRouteOnMap: waypoint_order result IDs:', newOrdered.map(n => n && n.id)); } catch (e) { }
+                            // waypoint_order computed — suppressed verbose logging for stability
 
                             // Update UI state with the new order (do NOT persist here) — persistence is handled in recalcRotaForMotorista
                             try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
@@ -1339,7 +1358,7 @@ function App() {
 
                             // Store wpOrderIds to include in possible return
                             const wpOrderIds = newOrdered.map(p => p && p.id);
-                            try { console.log('drawRouteOnMap: wpOrderIds prepared', wpOrderIds); } catch (e) { }
+                            // wpOrderIds prepared (logging suppressed to avoid spamming console)
                             // Set distance/time from response legs if available
                             try {
                                 const legs = res.routes?.[0]?.legs || [];
@@ -1455,10 +1474,32 @@ function App() {
             const remainingForDriver = remData || [];
             if (!remainingForDriver || remainingForDriver.length === 0) return;
 
+            // Cache guard: avoid recalculating if remaining set hasn't changed recently
+            try {
+                const hash = JSON.stringify((remainingForDriver || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
+                const cacheKey = String(motoristaId) + '|' + hash;
+                const cached = lastRouteCacheRef.current.get(cacheKey);
+                const MAX_CACHE_AGE_MS = 60 * 1000; // 60s
+                if (cached && (Date.now() - (cached.timestamp || 0) < MAX_CACHE_AGE_MS)) {
+                    // reuse cached result to avoid calling Google again
+                    try {
+                        if (cached.drawResult) {
+                            if (cached.drawResult.meters) setEstimatedDistanceKm(Number((cached.drawResult.meters / 1000).toFixed(1)));
+                            if (cached.drawResult.secs) { setEstimatedTimeSec(cached.drawResult.secs); setEstimatedTimeText(formatDuration(cached.drawResult.secs)); }
+                        }
+                        if (cached.optimized && Array.isArray(cached.optimized)) {
+                            const optimizedWithOrder = (cached.optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
+                            setRotaAtiva(optimizedWithOrder);
+                        }
+                        try { return; } catch (e) { }
+                    } catch (e) { /* ignore cache read issues */ }
+                }
+            } catch (e) { /* ignore hashing issues */ }
+
             // Compute optimized order using company HQ as final destination and respecting driver position via motoristaId
             try { setDistanceCalculating(true); } catch (e) { }
             // Log IDs being sent to Google for traceability
-            try { console.log('recalcRotaForMotorista: enviando ao Google IDs:', (remainingForDriver||[]).map(r => r && r.id)); } catch (e) { }
+            // IDs being sent to Google (verbose logging suppressed for stability)
             let optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
             // Safety: avoid processing extremely large routes in one go to preserve browser stability
             try {
@@ -1486,6 +1527,12 @@ function App() {
                         try { setEstimatedTimeText(formatDuration(drawResult.secs)); } catch (e) { }
                     }
                 } catch (e) { /* ignore UI update errors */ }
+                // cache final result per motorista and remaining hash
+                try {
+                    const hash2 = JSON.stringify((remainingForDriver || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
+                    const cacheKey2 = String(motoristaId) + '|' + hash2;
+                    lastRouteCacheRef.current.set(cacheKey2, { optimized, drawResult, timestamp: Date.now() });
+                } catch (e) { /* ignore cache set */ }
             } finally {
                 try { setDistanceCalculating(false); } catch (e) { }
             }
@@ -1510,7 +1557,7 @@ function App() {
                                     failedUpdates.push({ id: u.id, error });
                                     console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', u.id, error && error.message ? error.message : error);
                                 } else {
-                                    console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: u.id, ordem_logistica: u.ordem, returned: updData });
+                                    // successful update — no verbose console logging to avoid log pressure
                                 }
                             } catch (err) {
                                 allOk = false;
@@ -1615,7 +1662,14 @@ function App() {
                 if (rec.motorista_id) {
                     const st = String(rec.status || '').trim().toLowerCase();
                     if (payload.event === 'INSERT' || (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
-                        recalcRotaForMotorista(String(rec.motorista_id));
+                        // debounce per motorista to avoid flood-triggering recalc repeatedly
+                        try {
+                            const mid = String(rec.motorista_id);
+                            const existing = motoristaDebounceMapRef.current.get(mid);
+                            if (existing) clearTimeout(existing);
+                            const t = setTimeout(() => { try { recalcRotaForMotorista(mid); } catch (e) { /* ignore */ } }, 800);
+                            motoristaDebounceMapRef.current.set(mid, t);
+                        } catch (e) { try { recalcRotaForMotorista(String(rec.motorista_id)); } catch (e2) { /* ignore */ } }
                     }
                 }
             } catch (e) { /* ignore */ }
@@ -1702,6 +1756,8 @@ function App() {
                 } else if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.Geocoder) {
                     // Attempt Geocoder fallback for pasted addresses
                     try {
+                        // wait briefly for input idle (so we don't geocode on every keystroke)
+                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
                         const geocoder = new window.google.maps.Geocoder();
                         const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
                         if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
@@ -2111,7 +2167,10 @@ function App() {
                                     </select>
                                 </label>
                                 <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
-                                <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); }} />
+                                <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
+                                            try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
+                                            try { inputIdleRef.current = false; clearTimeout(inputIdleTimerRef.current); inputIdleTimerRef.current = setTimeout(() => { inputIdleRef.current = true; }, 500); } catch (e) { }
+                                        }} />
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                             </form>
