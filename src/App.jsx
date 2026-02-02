@@ -737,7 +737,7 @@ function App() {
             return new Promise((resolve) => {
                 predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
                             if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
-                    else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places'); setPredictions([]); resolve([]); }
+                    else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setPredictions([]); resolve([]); }
                     else if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') { markGoogleQuotaExceeded('Places', '⚠️ API do Google não autorizada para Places. Use o histórico e cole o endereço manualmente.'); setPredictions([]); resolve([]); }
                     else { setPredictions([]); resolve([]); }
                 });
@@ -768,7 +768,7 @@ function App() {
                             setEnderecoCoords(null);
                         }
                     }
-                } catch (e) { if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) markGoogleQuotaExceeded('PlaceDetails'); setEnderecoCoords(null); }
+                } catch (e) { if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) markGoogleQuotaExceeded('PlaceDetails', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setEnderecoCoords(null); }
             }
             // clear suggestions
             try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
@@ -1852,29 +1852,68 @@ function App() {
                 if (enderecoFromHistory) {
                     // History is sovereign — accept the address without forcing Google validation
                     try { console.info('adicionarAosPendentes: address from history accepted without geocode'); } catch (e) { }
-                } else if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.Geocoder) {
-                    // Attempt Geocoder fallback for pasted addresses
+                } else if (typeof window !== 'undefined') {
+                    // Prefer history coords from Supabase before calling Google Geocoder
                     try {
-                        // wait briefly for input idle (so we don't geocode on every keystroke)
-                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
-                        const geocoder = new window.google.maps.Geocoder();
-                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
-                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
-                            const loc = geoRes.results[0].geometry.location;
-                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                        } else {
-                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
-                            // Do not clear the field; let the user edit or pick a suggestion
-                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                try { enderecoRef.current.focus(); } catch (e) { }
+                        if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
+                            const { data: hist, error: histErr } = await supabase.from('entregas').select('lat,lng').ilike('endereco', `%${enderecoEntrega}%`).limit(1);
+                            if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
+                                setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
+                            } else {
+                                // No coords in history: if Google quota blocked, activate safety mode and inform user
+                                if (googleQuotaExceededRef.current) {
+                                    markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
+                                    try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar o endereço colado porque as APIs do Google estão indisponíveis. Por favor, verifique o endereço ou selecione do Histórico.'); } catch (e) { }
+                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                        try { enderecoRef.current.focus(); } catch (e) { }
+                                    }
+                                    return;
+                                }
+
+                                // Google Geocoder allowed — attempt to geocode
+                                if (window.google && window.google.maps && window.google.maps.Geocoder) {
+                                    try {
+                                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
+                                        const geocoder = new window.google.maps.Geocoder();
+                                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
+                                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
+                                            const loc = geoRes.results[0].geometry.location;
+                                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                        } else {
+                                            if (geoRes && geoRes.status === 'OVER_QUERY_LIMIT') {
+                                                markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
+                                                try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar — quota excedida.'); } catch (e) { }
+                                                if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                                    try { enderecoRef.current.focus(); } catch (e) { }
+                                                }
+                                                return;
+                                            }
+                                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
+                                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                                try { enderecoRef.current.focus(); } catch (e) { }
+                                            }
+                                            return;
+                                        }
+                                    } catch (err) {
+                                        console.warn('adicionarAosPendentes: geocoder error', err);
+                                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
+                                        return;
+                                    }
+                                } else {
+                                    // Geocoder not available and no history coords
+                                    try { alert('Geocoding não disponível. Selecione um endereço do Histórico ou cole um endereço que já esteja registrado com coordenadas.'); } catch (e) { }
+                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                        try { enderecoRef.current.focus(); } catch (e) { }
+                                    }
+                                    return;
+                                }
                             }
-                            return;
                         }
-                    } catch (err) {
-                        console.warn('adicionarAosPendentes: geocoder error', err);
-                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
-                        return;
+                    } catch (e) {
+                        // If the Supabase lookup fails, fall back to existing behavior but be conservative
+                        try { console.warn('adicionarAosPendentes: supabase history lookup failed, falling back to geocoder', e); } catch (err) { }
                     }
+                }
                 } else {
                     // Google Geocoder not available; fall back to randomized coords (existing behavior)
                     console.warn('Geocoder not available; using randomized fallback coordinates');
@@ -2327,18 +2366,30 @@ function App() {
                                             try {
                                                 if (it && (it.lat != null && it.lng != null)) {
                                                     setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
-                                                } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
-                                                    const geocoder = new window.google.maps.Geocoder();
-                                                    const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
-                                                    if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
-                                                        const loc = geo.results[0].geometry.location;
-                                                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                                } else {
+                                                    // If history entry lacks coords, prefer not to call Google when quota blocked
+                                                    if (it && (it.lat == null || it.lng == null)) {
+                                                        if (googleQuotaExceededRef.current) {
+                                                            // Keep history accepted but without coords
+                                                            setEnderecoCoords(null);
+                                                            try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
+                                                        } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
+                                                            try {
+                                                                const geocoder = new window.google.maps.Geocoder();
+                                                                const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
+                                                                if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
+                                                                    const loc = geo.results[0].geometry.location;
+                                                                    setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                                                } else {
+                                                                    setEnderecoCoords(null);
+                                                                }
+                                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
+                                                        } else {
+                                                            setEnderecoCoords(null);
+                                                        }
                                                     } else {
-                                                        // allow history even if geocode fails (history is sovereign)
                                                         setEnderecoCoords(null);
                                                     }
-                                                } else {
-                                                    setEnderecoCoords(null);
                                                 }
                                             } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
                                         }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
