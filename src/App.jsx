@@ -1008,7 +1008,7 @@ function App() {
         const MarkerComp = mapsLib && mapsLib.AdvancedMarker ? mapsLib.AdvancedMarker : ({ children }) => <div>{children}</div>;
         return (
             <MarkerComp key={m.id} position={{ lat: Number(displayPos.lat), lng: Number(displayPos.lng) }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', zIndex: 100001 }}>
                     <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
                         {m.nome || 'Entregador'}
                     </div>
@@ -1017,6 +1017,39 @@ function App() {
             </MarkerComp>
         );
     };
+
+    // Helper: map type to color
+    function colorForType(tipo) {
+        const t = String(tipo || '').trim().toLowerCase();
+        if (t === 'recolha') return '#fb923c'; // laranja
+        if (t === 'outros' || t === 'outro') return '#c084fc'; // roxo
+        return '#2563eb'; // azul (entrega default)
+    }
+
+    function capitalize(s) { return String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1); }
+
+    // Delivery markers: numbered pins with color and small label showing type
+    const DeliveryMarkers = React.memo(function DeliveryMarkers({ list = [], mapsLib }) {
+        if (!mapsLib || !mapsLib.AdvancedMarker) return null;
+        return (list || []).map((p, idx) => {
+            const lat = Number(p.lat);
+            const lng = Number(p.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            const num = p.ordem || (idx + 1);
+            const tipo = String(p.tipo || 'Entrega');
+            const color = colorForType(tipo);
+            const MarkerComp = mapsLib.AdvancedMarker;
+            return (
+                <MarkerComp key={`entrega-${p.id || idx}`} position={{ lat, lng }}>
+                    <div style={{ transform: 'translate(-50%,-110%)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                        <div style={{ backgroundColor: 'rgba(0,0,0,0.75)', color: '#fff', padding: '4px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700, marginBottom: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>{capitalize(tipo)}</div>
+                        <div style={{ width: 36, height: 36, borderRadius: '50%', background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 14, boxShadow: '0 4px 10px rgba(0,0,0,0.25)' }}>{String(num)}</div>
+                    </div>
+                </MarkerComp>
+            );
+        });
+    });
+
 
     // (MapControls removed — using single `BotoesMapa` inside <Map>)
 
@@ -1641,6 +1674,7 @@ function App() {
                                                     >
                                                         <BotoesMapa />
                                                         <MarkerList frota={frota} mapsLib={mapsLib} zoomLevel={zoomLevel} onSelect={setSelectedMotorista} />
+                                                        <DeliveryMarkers list={orderedRota} mapsLib={mapsLib} />
                                                     </MapComp>
                                                 </ErrorBoundary>
                                             );
