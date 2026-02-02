@@ -129,24 +129,43 @@ const otimizarRota = (pontoPartida, listaEntregas) => {
     return rotaOrdenada;
 };
 
-// Otimiza rota usando Google Directions API com optimizeWaypoints
-// Retorna a lista de entregas reordenada conforme waypoint_order
+// Otimiza rota usando Google Distance Matrix API + heuristic (nearest neighbor + 2-opt) quando disponível
+// Retorna a lista de entregas reordenada conforme otimização de menor distância
 async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = null) {
     // Filtrar apenas entregas ativas com status 'pendente' (sanitizado)
-    const remaining = (listaEntregas || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente');
+    const remaining = (listaEntregas || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente' || String(p.status || '').trim().toLowerCase() === 'em_rota');
     if (!remaining || remaining.length === 0) return [];
-    // Determinar origem dinâmica: se houver motoristaId, buscar última entrega concluída
-    let originLatLng;
+
+    // Config: limite de entregas por ciclo antes de retornar à sede
+    const ROUTE_CYCLE_LIMIT = Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10);
+
+    // Determinar origem dinâmica: prefere lat/lng do motorista atual (se fornecido) -> última entrega concluída -> pontoPartida (empresa)
+    let originLatLng = null;
     try {
         if (motoristaId != null) {
-            const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false }).limit(1);
-            if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) {
-                originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
+            // tentar buscar lat/lng atual do motorista diretamente (estado real-time)
+            try {
+                const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId).limit(1);
+                const m = mdata && mdata[0] ? mdata[0] : null;
+                if (m && typeof m.esta_online !== 'undefined' && m.esta_online !== true) {
+                    // driver not online — abort optimization per regra de ouro
+                    return remaining;
+                }
+                if (m && m.lat != null && m.lng != null) {
+                    originLatLng = { lat: Number(m.lat), lng: Number(m.lng) };
+                }
+            } catch (e) { /* fallback below */ }
+            if (!originLatLng) {
+                const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false }).limit(1);
+                if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) {
+                    originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
+                }
             }
         }
     } catch (e) {
-        console.warn('otimizarRotaComGoogle: falha ao buscar última entrega concluída', e);
+        console.warn('otimizarRotaComGoogle: falha ao buscar última entrega concluída ou estado do motorista', e);
     }
+
     // Se não determinamos origin a partir do motorista, derive de pontoPartida (empresa)
     if (!originLatLng) {
         if (pontoPartida && typeof pontoPartida === 'object' && 'lat' in pontoPartida && 'lng' in pontoPartida) {
@@ -158,88 +177,153 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
         }
     }
 
-    if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) {
-        // fallback para algoritmo local quando Google não disponível
-        const local = otimizarRota(pontoPartida, remaining);
-        // Persistir ordem_entrega localmente também
-        try {
-            for (let i = 0; i < local.length; i++) {
-                const pid = local[i].id;
-                if (!pid) continue;
-                await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
-            }
-        } catch (e) { /* non-blocking */ }
-        return local;
+    // Helper: compute Distance Matrix between points using Google Maps JS API
+    async function computeDistanceMatrix(origins, destinations) {
+        return new Promise((resolve, reject) => {
+            try {
+                if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DistanceMatrixService) {
+                    reject(new Error('DistanceMatrixService not available'));
+                    return;
+                }
+                const service = new window.google.maps.DistanceMatrixService();
+                service.getDistanceMatrix({ origins, destinations, travelMode: window.google.maps.TravelMode.DRIVING, unitSystem: window.google.maps.UnitSystem.METRIC }, (response, status) => {
+                    if (status !== 'OK') return reject(new Error('DistanceMatrix failed: ' + status));
+                    try {
+                        const rows = response.rows || [];
+                        const matrix = rows.map(r => (r.elements || []).map(e => (e && e.distance && typeof e.distance.value === 'number') ? e.distance.value : Infinity));
+                        resolve(matrix);
+                    } catch (e) { reject(e); }
+                });
+            } catch (e) { reject(e); }
+        });
     }
 
-    return new Promise((resolve, reject) => {
-        try {
-            const directionsService = new window.google.maps.DirectionsService();
-
-            const waypoints = remaining.map(p => ({ location: { lat: Number(p.lat), lng: Number(p.lng) }, stopover: true }));
-
-            // Não chamar Google se não houver waypoints válidos
-            if (!waypoints || waypoints.length === 0) {
-                console.warn('otimizarRotaComGoogle: nenhum waypoint válido para otimizar');
-                resolve(remaining);
-                return;
+    // Nearest neighbor heuristic + optional 2-opt improvement
+    function nearestNeighborOrder(distMatrix) {
+        const n = distMatrix.length - 1; // first row is from origin
+        const visited = new Array(n).fill(false);
+        const order = [];
+        let current = 0; // origin index 0
+        while (order.length < n) {
+            let best = -1;
+            let bestDist = Infinity;
+            for (let i = 1; i <= n; i++) {
+                if (visited[i - 1]) continue;
+                const d = distMatrix[current][i] || Infinity;
+                if (d < bestDist) { bestDist = d; best = i; }
             }
-
-            const request = {
-                origin: originLatLng,
-                destination: originLatLng,
-                travelMode: window.google.maps.TravelMode.DRIVING,
-                waypoints,
-                optimizeWaypoints: true
-            };
-
-            directionsService.route(request, async (result, status) => {
-                try {
-                    const hasRoutes = Array.isArray(result?.routes) && result.routes.length > 0;
-                    if (status === 'OK' && hasRoutes) {
-                        const wpOrder = result?.routes?.[0]?.waypoint_order;
-                        let ordered = remaining;
-                        if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) {
-                            ordered = wpOrder.map(i => remaining[i]);
-                        }
-
-                        // Atualizar ordem_entrega no Supabase para as entregas restantes
-                        try {
-                            for (let i = 0; i < ordered.length; i++) {
-                                const pedido = ordered[i];
-                                const pid = pedido.id;
-                                if (!pid) continue;
-                                const { error: ordErr } = await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
-                                if (ordErr) console.error('otimizarRotaComGoogle: erro atualizando ordem_entrega', ordErr.message || ordErr);
-                            }
-                        } catch (e) {
-                            console.error('otimizarRotaComGoogle: falha ao persistir ordem_entrega', e && e.message ? e.message : e);
-                        }
-
-                        resolve(ordered);
-                        return;
-                    }
-
-                    if (status === 'ZERO_RESULTS') {
-                        // Sem rota possível, retorna lista original
-                        resolve(remaining);
-                        return;
-                    }
-
-                    // Outros status: fallback conservador para lista original
-                    console.warn('DirectionsService retornou status:', status, 'result:', result);
-                    try { alert('Aviso: otimização de rota indisponível no momento. Usando ordem conservadora.'); } catch (e) { }
-                    resolve(remaining);
-                } catch (e) {
-                    console.error('otimizarRotaComGoogle: erro no callback do DirectionsService', e);
-                    try { alert('Erro ao otimizar rota com Google Maps. Mantendo ordem atual.'); } catch (e2) { }
-                    resolve(remaining);
-                }
-            });
-        } catch (e) {
-            reject(e);
+            if (best === -1) break;
+            visited[best - 1] = true;
+            order.push(best - 1); // map back to remaining index
+            current = best;
         }
-    });
+        return order;
+    }
+
+    function twoOpt(route, distMatrix) {
+        const n = route.length;
+        if (n < 3) return route;
+        let improved = true;
+        while (improved) {
+            improved = false;
+            for (let i = 0; i < n - 1; i++) {
+                for (let k = i + 1; k < n; k++) {
+                    const a = (i === 0 ? 0 : route[i - 1] + 1);
+                    const b = route[i] + 1;
+                    const c = route[k] + 1;
+                    const d = (k + 1 === n ? 0 : route[k + 1] + 1);
+                    const currentDist = (distMatrix[a] && distMatrix[a][b] ? distMatrix[a][b] : Infinity) + (distMatrix[c] && distMatrix[c][d] ? distMatrix[c][d] : Infinity);
+                    const newDist = (distMatrix[a] && distMatrix[a][c] ? distMatrix[a][c] : Infinity) + (distMatrix[b] && distMatrix[b][d] ? distMatrix[b][d] : Infinity);
+                    if (newDist + 1e-6 < currentDist) {
+                        route = route.slice(0, i).concat(route.slice(i, k + 1).reverse(), route.slice(k + 1));
+                        improved = true;
+                    }
+                }
+            }
+        }
+        return route;
+    }
+
+    // If DistanceMatrix available, compute matrix: origins=[origin] + waypoints, destinations=waypoints+ [origin]
+    const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+
+    let orderedIndices = null;
+    try {
+        const origins = [originLatLng].concat(waypoints);
+        const destinations = waypoints.concat([originLatLng]);
+        const matrix = await computeDistanceMatrix(origins, destinations);
+        // matrix shape: origins.length x destinations.length
+        // create a square matrix with indices mapped: index 0 origin, 1..n waypoints, n+1 origin dest
+        // We'll build a square matrix of size (n+1)x(n+1) where last column represents return to origin
+        const n = waypoints.length;
+        const square = Array.from({ length: n + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => {
+            if (i === 0) return matrix[0][j < n ? j : n];
+            if (i >= 1 && i <= n) return matrix[i][j < n ? j : n];
+            return Infinity;
+        }));
+
+        // nearest neighbor starting from origin index 0
+        let nnOrder = nearestNeighborOrder(square);
+        // 2-opt improvement
+        nnOrder = twoOpt(nnOrder, square);
+        orderedIndices = nnOrder; // indices correspond to remaining array positions (0..n-1)
+
+    } catch (e) {
+        console.warn('otimizarRotaComGoogle: DistanceMatrix failed, falling back to DirectionsService optimizeWaypoints', e);
+    }
+
+    // If we couldn't compute via matrix, fallback to DirectionsService.optimizeWaypoints
+    if (!orderedIndices) {
+        try {
+            if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
+            const directionsService = new window.google.maps.DirectionsService();
+            const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
+            const request = { origin: originLatLng, destination: originLatLng, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
+            const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
+            const wpOrder = res.routes?.[0]?.waypoint_order || null;
+            if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) orderedIndices = wpOrder;
+        } catch (e) {
+            console.warn('otimizarRotaComGoogle: fallback directions optimize failed', e);
+            // last resort: local nearest neighbor by coord distance
+            const localOrder = otimizarRota(originLatLng, remaining);
+            try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid); } } catch (e) { }
+            return localOrder;
+        }
+    }
+
+    // Apply cycle rule: if remaining count > ROUTE_CYCLE_LIMIT, plan a return to HQ (pontoPartida) after first chunk
+    const includeHQ = remaining.length > ROUTE_CYCLE_LIMIT;
+
+    // Build ordered list
+    const ordered = orderedIndices.map(idx => remaining[idx]);
+
+    // If include HQ, we will limit first chunk and set HQ insertion for map only (we persist ordem_entrega sequentially)
+    if (includeHQ) {
+        // Persist ordem_entrega with HQ virtual waypoint inserted after the first chunk
+        try {
+            // First chunk
+            for (let i = 0; i < ordered.length; i++) {
+                const pedido = ordered[i];
+                const pid = pedido.id;
+                if (!pid) continue;
+                const ordem = i + 1;
+                await supabase.from('entregas').update({ ordem_entrega: Number(ordem) }).eq('id', pid);
+            }
+        } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_entrega com HQ', e); }
+        return ordered; // Map drawing logic will insert HQ waypoint visually
+    }
+
+    // Persist ordem_entrega when normal
+    try {
+        for (let i = 0; i < ordered.length; i++) {
+            const pedido = ordered[i];
+            const pid = pedido.id;
+            if (!pid) continue;
+            await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+        }
+    } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_entrega', e); }
+
+    return ordered;
 }
 
 // ErrorBoundary para evitar que falhas no componente do mapa quebrem o app
@@ -989,6 +1073,17 @@ function App() {
                             return prev || [];
                         }
                     });
+
+                    // If a motorista updated location and we have an active route for them, optionally recompute or refresh polyline
+                    try {
+                        if (parsed && parsed.id) {
+                            // If we have a route displayed and the vehicle moved, redraw or nudge polyline for accuracy
+                            // (lightweight: only if polyline exists)
+                            if (routePolylineRef.current && routePolylineRef.current.setPath) {
+                                // small optimization: optional real-time smoothing not implemented here
+                            }
+                        }
+                    } catch (e) { /* ignore */ }
                 } catch (e) {
                     console.warn('Erro no handler realtime motoristas:', e);
                 }
@@ -999,6 +1094,115 @@ function App() {
             try { supabase.removeChannel(canal); } catch (e) { canal.unsubscribe && canal.unsubscribe(); }
         };
     }, []);
+
+    // Route polyline ref (manages drawn optimized route on map)
+    const routePolylineRef = useRef(null);
+
+    // Draw route on map: prefer DirectionsService to get a smooth polyline, otherwise connect points
+    async function drawRouteOnMap(origin, orderedList = [], includeHQ = false, pontoPartida = null) {
+        try {
+            // Clean previous polyline
+            try { if (routePolylineRef.current) { routePolylineRef.current.setMap(null); routePolylineRef.current = null; } } catch (e) { }
+            if (!mapRef.current) return;
+
+            // Build waypoints array
+            const waypts = orderedList.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+            // If includeHQ true, insert pontoPartida after first chunk (visual only)
+            if (includeHQ && pontoPartida) {
+                // place HQ after first ROUTE_CYCLE_LIMIT waypoints
+                const limit = Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10);
+                if (waypts.length > limit) {
+                    // splice HQ into place
+                    waypts.splice(limit, 0, { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) });
+                }
+            }
+
+            // Try DirectionsService to get overview_path
+            if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.DirectionsService) {
+                try {
+                    const directionsService = new window.google.maps.DirectionsService();
+                    const dsWaypoints = waypts.map(w => ({ location: w, stopover: true }));
+                    const request = { origin, destination: origin, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: false };
+                    const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
+                    const path = res.routes?.[0]?.overview_path || null;
+                    if (path && path.length > 0) {
+                        const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
+                        routePolylineRef.current = poly;
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('drawRouteOnMap: DirectionsService failed, falling back to straight path', e);
+                }
+            }
+
+            // Fallback: straight line through ordered points
+            const path = [origin].concat(waypts).concat([origin]);
+            if (path && path.length > 1 && window.google && window.google.maps) {
+                const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
+                routePolylineRef.current = poly;
+            }
+        } catch (e) {
+            console.warn('drawRouteOnMap failed:', e);
+        }
+    }
+
+    // Recalculate route for a specific motorista (used on new recolhas and manual trigger)
+    const recalcRotaForMotorista = React.useCallback(async (motoristaId) => {
+        try {
+            if (!motoristaId) return;
+            // Fetch motorista to ensure online and get current lat/lng
+            const { data: mdata, error: merr } = await supabase.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId).limit(1);
+            const motor = mdata && mdata[0] ? mdata[0] : null;
+            if (!motor) return;
+            if (motor.esta_online !== true) return; // RULE: only online drivers receive routing
+            if (motor.lat == null || motor.lng == null) return; // need position
+
+            // Fetch remaining deliveries for this motorista
+            const { data: remData } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).in('status', ['pendente', 'em_rota']);
+            const remainingForDriver = remData || [];
+            if (!remainingForDriver || remainingForDriver.length === 0) return;
+
+            // Compute optimized order based on current location
+            const origin = { lat: Number(motor.lat), lng: Number(motor.lng) };
+            const optimized = await otimizarRotaComGoogle(origin, remainingForDriver, motoristaId);
+
+            // Draw on map (include HQ if necessary)
+            const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
+            await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState);
+        } catch (e) {
+            console.warn('recalcRotaForMotorista failed:', e);
+        }
+    }, [pontoPartida]);
+
+    // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
+    useEffect(() => {
+        if (!HAS_SUPABASE_CREDENTIALS) return;
+        const chan = supabase.channel('entregas-recalc')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, (payload) => {
+                try {
+                    const rec = payload.new || payload.record || null;
+                    if (!rec) return;
+                    if (rec.motorista_id) {
+                        // only recalc if motorista is online; recalc function checks that
+                        recalcRotaForMotorista(String(rec.motorista_id));
+                    }
+                } catch (e) { /* ignore */ }
+            })
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, (payload) => {
+                try {
+                    const rec = payload.new || payload.record || null;
+                    if (!rec) return;
+                    // Recalc on status changes that may affect route
+                    const st = String(rec.status || '').trim().toLowerCase();
+                    if (rec.motorista_id && (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
+                        recalcRotaForMotorista(String(rec.motorista_id));
+                    }
+                } catch (e) { /* ignore */ }
+            })
+            .subscribe();
+
+        return () => { try { supabase.removeChannel(chan); } catch (e) { chan.unsubscribe && chan.unsubscribe(); } };
+    }, [recalcRotaForMotorista]);
 
     // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
     useEffect(() => {
@@ -1176,6 +1380,8 @@ function App() {
             setAbaAtiva('Visão Geral');
             await carregarDados();
             alert('Rota enviada para ' + (driver.nome || 'motorista') + ' com sucesso.');
+            // Recalcular e desenhar rota otimizada para o motorista designado
+            try { await recalcRotaForMotorista(String(motoristaIdVal)); } catch (e) { console.warn('Falha ao recalcular rota após assignDriver:', e); }
         } catch (e) {
             console.warn('Erro em assignDriver:', e);
         } finally {
