@@ -119,23 +119,15 @@ function InternalMobileApp() {
                 .from('entregas')
                 .select('*')
                 .eq('status', 'Em Rota')
-                .order('ordem', { ascending: true }); // Ordena pela sequência definida pelo dispatcher (ordem TSP)
+                    .order('ordem_logistica', { ascending: true }); // Ordena pela sequência persistida (ordem_logistica)
 
-            // Em caso do backend/mock não suportar 'ordem', faremos fallback client-side abaixo
-
-            // compatibilidade com mock (res.data) ou com retorno direto
-            const data = res && res.data ? res.data : res;
-            const error = res && res.error ? res.error : null;
+            // Em caso do backend/mock não suportar 'ordem_logistica', faremos fallback client-side abaixo
 
             console.log('[motorista] carregarRota: resultado', { dataPreview: Array.isArray(data) ? data.slice(0, 5) : data, error });
 
-            // Se os itens vierem sem 'ordem', ordena perto->longe usando campo 'ordem' fallback para 'id'
+            // Fallback: ordena preferindo 'ordem_logistica' quando presente/maior que zero, senão usa 'ordem' ou id
             let finalData = Array.isArray(data) ? data.slice() : [];
-            if (finalData.length > 0 && finalData.every(d => d.ordem === undefined)) {
-                finalData.sort((a, b) => (a.id || 0) - (b.id || 0));
-            } else {
-                finalData.sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
-            }
+            finalData.sort((a, b) => (Number(a.ordem_logistica) && Number(a.ordem_logistica) > 0 ? Number(a.ordem_logistica) : (Number(a.ordem) || a.id || 0)) - (Number(b.ordem_logistica) && Number(b.ordem_logistica) > 0 ? Number(b.ordem_logistica) : (Number(b.ordem) || b.id || 0)));
 
             if (!error && finalData) {
                 setEntregas(finalData);
@@ -459,7 +451,7 @@ function InternalMobileApp() {
                                         const lat = parseFloat(p.lat);
                                         const lng = parseFloat(p.lng);
                                         if (isNaN(lat) || isNaN(lng)) return null;
-                                        const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica))) ? Number(p.ordem_logistica) : (p.ordem || (i + 1));
+                                        const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (p.ordem || (i + 1));
                                         const tipo = String(p.tipo || 'Entrega');
                                         const color = (tipo === 'recolha') ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#2563eb');
                                         return (

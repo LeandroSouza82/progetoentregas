@@ -1111,7 +1111,7 @@ function App() {
             const lat = Number(p.lat);
             const lng = Number(p.lng);
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica))) ? Number(p.ordem_logistica) : (p.ordem || (idx + 1));
+            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (p.ordem || (idx + 1));
             const tipo = String(p.tipo || 'Entrega');
             const color = colorForType(tipo);
             const MarkerComp = mapsLib.AdvancedMarker;
@@ -1392,12 +1392,30 @@ function App() {
             const remainingForDriver = remData || [];
             if (!remainingForDriver || remainingForDriver.length === 0) return;
 
-            // Compute optimized order based on current location
-            const optimized = await otimizarRotaComGoogle(origin, remainingForDriver, motoristaId);
+            // Compute optimized order using company HQ as final destination and respecting driver position via motoristaId
+            const optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
 
-            // Draw on map (include HQ if necessary)
+            // Draw on map (include HQ if necessary). Always pass company HQ as the destination to keep base as final point
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            await drawRouteOnMap(origin, optimized, includeHQ, pontoPartida || mapCenterState, motoristaId);
+            await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
+
+            // Persist ordem_logistica per item (índice + 1) — cirúrgico, garante que DB reflita exatamente a ordem retornada pelo Google
+            try {
+                if (Array.isArray(optimized) && motoristaId != null) {
+                    for (let i = 0; i < optimized.length; i++) {
+                        const pid = optimized[i] && optimized[i].id;
+                        if (!pid) continue;
+                        try {
+                            const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                            if (ordErr) console.error('recalcRotaForMotorista: erro atualizando ordem_logistica:', ordErr && ordErr.message ? ordErr.message : ordErr);
+                        } catch (e) {
+                            console.error('recalcRotaForMotorista: erro na requisição ordem_logistica:', e && e.message ? e.message : e);
+                        }
+                    }
+                    // Best-effort: refresh data so other components see updated ordem_logistica
+                    try { await carregarDados(); } catch (err) { /* non-blocking */ }
+                }
+            } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
@@ -1405,8 +1423,6 @@ function App() {
                 setRotaAtiva(optimizedWithOrder);
                 const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
                 if (foundDriver) setMotoristaDaRota(foundDriver);
-                // Best-effort: refresh data so other components see updated ordem_logistica
-                try { await carregarDados(); } catch (err) { /* non-blocking */ }
             } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
@@ -1829,7 +1845,7 @@ function App() {
                                                 const color = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#60a5fa');
                                                 return (
                                                     <li key={p.id} style={{ marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                                                        <strong style={{ marginRight: '6px', color: theme.textLight }}>{(p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica))) ? Number(p.ordem_logistica) : (i + 1)}.</strong>
+                                                        <strong style={{ marginRight: '6px', color: theme.textLight }}>{(p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (i + 1)}.</strong>
                                                         <span style={{ color, fontWeight: 600 }}>{p.cliente}</span>
                                                     </li>
                                                 );
