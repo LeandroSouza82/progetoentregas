@@ -178,121 +178,40 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
         }
     }
 
-    // Helper: compute Distance Matrix between points using Google Maps JS API
-    async function computeDistanceMatrix(origins, destinations) {
-        return new Promise((resolve, reject) => {
-            try {
-                if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DistanceMatrixService) {
-                    reject(new Error('DistanceMatrixService not available'));
-                    return;
-                }
-                const service = new window.google.maps.DistanceMatrixService();
-                service.getDistanceMatrix({ origins, destinations, travelMode: window.google.maps.TravelMode.DRIVING, unitSystem: window.google.maps.UnitSystem.METRIC }, (response, status) => {
-                    if (status !== 'OK') return reject(new Error('DistanceMatrix failed: ' + status));
-                    try {
-                        const rows = response.rows || [];
-                        const matrix = rows.map(r => (r.elements || []).map(e => (e && e.distance && typeof e.distance.value === 'number') ? e.distance.value : Infinity));
-                        resolve(matrix);
-                    } catch (e) { reject(e); }
-                });
-            } catch (e) { reject(e); }
-        });
-    }
-
-    // Nearest neighbor heuristic + optional 2-opt improvement
-    function nearestNeighborOrder(distMatrix) {
-        const n = distMatrix.length - 1; // first row is from origin
-        const visited = new Array(n).fill(false);
-        const order = [];
-        let current = 0; // origin index 0
-        while (order.length < n) {
-            let best = -1;
-            let bestDist = Infinity;
-            for (let i = 1; i <= n; i++) {
-                if (visited[i - 1]) continue;
-                const d = distMatrix[current][i] || Infinity;
-                if (d < bestDist) { bestDist = d; best = i; }
-            }
-            if (best === -1) break;
-            visited[best - 1] = true;
-            order.push(best - 1); // map back to remaining index
-            current = best;
-        }
-        return order;
-    }
-
-    function twoOpt(route, distMatrix) {
-        const n = route.length;
-        if (n < 3) return route;
-        let improved = true;
-        while (improved) {
-            improved = false;
-            for (let i = 0; i < n - 1; i++) {
-                for (let k = i + 1; k < n; k++) {
-                    const a = (i === 0 ? 0 : route[i - 1] + 1);
-                    const b = route[i] + 1;
-                    const c = route[k] + 1;
-                    const d = (k + 1 === n ? 0 : route[k + 1] + 1);
-                    const currentDist = (distMatrix[a] && distMatrix[a][b] ? distMatrix[a][b] : Infinity) + (distMatrix[c] && distMatrix[c][d] ? distMatrix[c][d] : Infinity);
-                    const newDist = (distMatrix[a] && distMatrix[a][c] ? distMatrix[a][c] : Infinity) + (distMatrix[b] && distMatrix[b][d] ? distMatrix[b][d] : Infinity);
-                    if (newDist + 1e-6 < currentDist) {
-                        route = route.slice(0, i).concat(route.slice(i, k + 1).reverse(), route.slice(k + 1));
-                        improved = true;
-                    }
-                }
-            }
-        }
-        return route;
-    }
+    // Distance Matrix removed: we now rely exclusively on DirectionsService.optimizeWaypoints for routing to avoid additional billing and permissions issues.
+    // Nearest-neighbor and 2-opt helpers were removed to ensure we don't accidentally call DistanceMatrix.
 
     // If DistanceMatrix available, compute matrix: origins=[origin] + waypoints, destinations=waypoints+ [origin]
     const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
 
+    // Use DirectionsService.optimizeWaypoints exclusively (no DistanceMatrix)
     let orderedIndices = null;
     try {
-        const origins = [originLatLng].concat(waypoints);
-        const destinations = waypoints.concat([originLatLng]);
-        const matrix = await computeDistanceMatrix(origins, destinations);
-        // matrix shape: origins.length x destinations.length
-        // create a square matrix with indices mapped: index 0 origin, 1..n waypoints, n+1 origin dest
-        // We'll build a square matrix of size (n+1)x(n+1) where last column represents return to origin
-        const n = waypoints.length;
-        const square = Array.from({ length: n + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => {
-            if (i === 0) return matrix[0][j < n ? j : n];
-            if (i >= 1 && i <= n) return matrix[i][j < n ? j : n];
-            return Infinity;
-        }));
-
-        // nearest neighbor starting from origin index 0
-        let nnOrder = nearestNeighborOrder(square);
-        // 2-opt improvement
-        nnOrder = twoOpt(nnOrder, square);
-        orderedIndices = nnOrder; // indices correspond to remaining array positions (0..n-1)
-
-    } catch (e) {
-        console.warn('otimizarRotaComGoogle: DistanceMatrix failed, falling back to DirectionsService optimizeWaypoints', e);
-    }
-
-    // If we couldn't compute via matrix, fallback to DirectionsService.optimizeWaypoints
-    if (!orderedIndices) {
+        if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
+        const directionsService = new window.google.maps.DirectionsService();
+        const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
+        // Destination MUST be the company base (pontoPartida param) or mapCenter fallback
+        const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : (mapCenterState || DEFAULT_MAP_CENTER);
+        const request = { origin: originLatLng, destination: baseCoord, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
+        const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
+        const wpOrder = res.routes?.[0]?.waypoint_order || null;
+        if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) orderedIndices = wpOrder;
+        // Extract KM/time and set UI immediately from legs
         try {
-            if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
-            const directionsService = new window.google.maps.DirectionsService();
-            const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
-            // Destination MUST be the company base (pontoPartida param) or mapCenter fallback
-            const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : (mapCenterState || DEFAULT_MAP_CENTER);
-            const request = { origin: originLatLng, destination: baseCoord, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
-            const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
-            const wpOrder = res.routes?.[0]?.waypoint_order || null;
-            if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) orderedIndices = wpOrder;
-        } catch (e) {
-            console.warn('otimizarRotaComGoogle: fallback directions optimize failed', e);
-            // last resort: local nearest neighbor by coord distance
-            const localOrder = otimizarRota(originLatLng, remaining);
-            try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
-            return localOrder;
-        }
+            const legs = res.routes?.[0]?.legs || [];
+            const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
+            const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
+            if (meters > 0) try { setEstimatedDistanceKm(Number((meters / 1000).toFixed(1))); } catch (e) { }
+            if (secs > 0) try { setEstimatedTimeSec(secs); setEstimatedTimeText(formatDuration(secs)); } catch (e) { }
+        } catch (e) { /* ignore */ }
+    } catch (e) {
+        console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e);
+        // last resort: local nearest neighbor by coord distance
+        const localOrder = otimizarRota(originLatLng, remaining);
+        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
+        return localOrder;
     }
+
 
     // Apply cycle rule: if remaining count > ROUTE_CYCLE_LIMIT, plan a return to HQ (pontoPartida) after first chunk
     const includeHQ = remaining.length > ROUTE_CYCLE_LIMIT;
@@ -489,6 +408,8 @@ function App() {
     const [draftPoint, setDraftPoint] = useState(null);
     const [draftPreview, setDraftPreview] = useState([]);
     const draftPolylineRef = useRef(null);
+    const draftOptimizeTimerRef = useRef(null);
+    const lastDraftHashRef = useRef(null);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     // Distance and driver-select mode state
@@ -571,6 +492,8 @@ function App() {
     // Fetch control refs to avoid concurrent fetches and manage retries
     const fetchInProgressRef = useRef(false);
     const retryTimerRef = useRef(null);
+    const retryCountRef = useRef(0); // counts consecutive retry attempts to avoid infinite loops
+    const routingInProgressRef = useRef(false); // prevents concurrent heavy route computations
     const lastFrotaRef = useRef([]);
 
     // Cleanup on unmount for any pending retry
@@ -717,31 +640,38 @@ function App() {
     // Draft preview optimization: compute suggested order for entregasEmEspera + draftPoint (visual only)
     useEffect(() => {
         let mounted = true;
-        (async () => {
+        const list = Array.isArray(entregasEmEspera) ? entregasEmEspera.slice() : [];
+        if (draftPoint) list.push(draftPoint);
+        const hash = JSON.stringify({ ids: (list || []).map(p => p && (p.id || (p.lat + ',' + p.lng) || p.endereco || '')), draftId: draftPoint ? draftPoint.id : null });
+        if (lastDraftHashRef.current === hash) return () => { mounted = false; };
+        lastDraftHashRef.current = hash;
+
+        clearTimeout(draftOptimizeTimerRef.current);
+        draftOptimizeTimerRef.current = setTimeout(async () => {
             try {
-                const list = Array.isArray(entregasEmEspera) ? entregasEmEspera.slice() : [];
-                if (draftPoint) list.push(draftPoint);
+                if (!mounted) return;
                 if (!list || list.length === 0) {
                     setDraftPreview([]);
                     return;
                 }
                 const origin = pontoPartida || mapCenterState || DEFAULT_MAP_CENTER;
+                try { setDistanceCalculating(true); } catch (e) { }
                 const optimized = await otimizarRotaComGoogle(origin, list, null);
                 if (!mounted) return;
                 setDraftPreview((optimized && optimized.length > 0) ? optimized : list);
                 // Compute estimated distance for preview (non-persistent)
                 try {
-                    setDistanceCalculating(true);
                     const pts = (optimized && optimized.length > 0) ? optimized : list;
                     const dist = computeRouteDistanceKm(origin, pts, pontoPartida || mapCenterState || DEFAULT_MAP_CENTER);
                     setEstimatedDistanceKm(Number(dist.toFixed(1)));
-                } catch (e) { /* ignore */ } finally { setDistanceCalculating(false); }
+                } catch (e) { /* ignore */ } finally { try { setDistanceCalculating(false); } catch (e) { } }
             } catch (e) {
                 console.warn('draftPreview: erro ao calcular pré-roteiro', e);
                 if (mounted) setDraftPreview([]);
             }
-        })();
-        return () => { mounted = false; };
+        }, 700);
+
+        return () => { mounted = false; clearTimeout(draftOptimizeTimerRef.current); };
     }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState, gmapsLoaded]);
 
     // Função de carregamento de dados (declarada cedo para evitar ReferenceError)
@@ -760,6 +690,24 @@ function App() {
         fetchInProgressRef.current = true;
         setLoadingFrota(true);
 
+        // Retry control to avoid infinite retry loops that exhaust resources
+        const MAX_CARREGAR_RETRIES = 5;
+        const scheduleRetry = (delayMs = 5000) => {
+            try {
+                if (!retryTimerRef.current) {
+                    retryCountRef.current = (retryCountRef.current || 0) + 1;
+                    if (retryCountRef.current > MAX_CARREGAR_RETRIES) {
+                        console.error('carregarDados: exceeded max retry attempts — stopping further retries to preserve resources');
+                        return;
+                    }
+                    retryTimerRef.current = setTimeout(() => {
+                        retryTimerRef.current = null;
+                        carregarDados();
+                    }, delayMs);
+                }
+            } catch (e) { /* ignore */ }
+        };
+
         // motoristas reais
         try {
             let q = supabase.from('motoristas').select('*');
@@ -767,13 +715,8 @@ function App() {
             const { data: motoristas, error: motorErr } = await q;
             if (motorErr) {
                 console.warn('carregarDados: erro ao buscar motoristas', motorErr);
-                // Schedule retry if not already scheduled
-                if (!retryTimerRef.current) {
-                    retryTimerRef.current = setTimeout(() => {
-                        retryTimerRef.current = null;
-                        carregarDados();
-                    }, 5000);
-                }
+                // Schedule capped retry to avoid infinite loops
+                scheduleRetry(5000);
                 // Preserve last known valid frota
                 setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
             } else {
@@ -802,15 +745,13 @@ function App() {
                 lastFrotaRef.current = merged;
                 // clear any pending retry
                 if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+                // reset retry counter on success
+                try { retryCountRef.current = 0; } catch (e) { }
             }
         } catch (e) {
             console.warn('Erro carregando motoristas:', e);
-            if (!retryTimerRef.current) {
-                retryTimerRef.current = setTimeout(() => {
-                    retryTimerRef.current = null;
-                    carregarDados();
-                }, 5000);
-            }
+            // schedule capped retry
+            scheduleRetry(5000);
             // keep previous frota
             setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
         } finally {
@@ -833,14 +774,15 @@ function App() {
                 // fallback local sort if server didn't order
                 const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : list;
                 setEntregasEmEspera(sorted);
+                // reset retry counter on success
+                try { retryCountRef.current = 0; } catch (e) { }
             }
         } catch (e) {
             console.warn('Erro carregando entregas (filtro de status):', e);
             // preserve previous entregasEmEspera if available
             setEntregasEmEspera(prev => (prev && prev.length) ? prev : []);
-            if (!retryTimerRef.current) {
-                retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; carregarDados(); }, 5000);
-            }
+            // schedule capped retry
+            scheduleRetry(5000);
         }
 
         // total de entregas
@@ -852,9 +794,8 @@ function App() {
             console.warn('Erro contando entregas:', e);
             // don't reset total to 0 on transient errors
             // leave current value
-            if (!retryTimerRef.current) {
-                retryTimerRef.current = setTimeout(() => { retryTimerRef.current = null; carregarDados(); }, 5000);
-            }
+            // schedule capped retry
+            scheduleRetry(5000);
         }
 
         // avisos do gestor
@@ -895,7 +836,7 @@ function App() {
             } else {
                 setRecentList([]);
             }
-        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); }
+        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); scheduleRetry(5000); }
         setLoadingFrota(false);
     }, []);
 
@@ -1479,6 +1420,13 @@ function App() {
     const recalcRotaForMotorista = React.useCallback(async (motoristaId) => {
         try {
             if (!motoristaId) return;
+            // Prevent concurrent routing operations to avoid resource exhaustion (ERR_INSUFFICIENT_RESOURCES)
+            if (routingInProgressRef.current) {
+                console.warn('recalcRotaForMotorista: route calculation already in progress; skipping');
+                try { setMensagemGeral('Roteamento em andamento — aguarde o término antes de reexecutar.'); } catch (e) { }
+                return;
+            }
+            routingInProgressRef.current = true;
             // capture previous distance for audit
             const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
             // Fetch motorista to ensure online and get current lat/lng
@@ -1509,7 +1457,14 @@ function App() {
             try { setDistanceCalculating(true); } catch (e) { }
             // Log IDs being sent to Google for traceability
             try { console.log('recalcRotaForMotorista: enviando ao Google IDs:', (remainingForDriver||[]).map(r => r && r.id)); } catch (e) { }
-            const optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
+            let optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
+            // Safety: avoid processing extremely large routes in one go to preserve browser stability
+            try {
+                if (Array.isArray(optimized) && optimized.length > 200) {
+                    try { setMensagemGeral('Rota muito longa — processando primeiros 200 pontos para estabilidade.'); } catch (e) { }
+                    optimized = optimized.slice(0, 200);
+                }
+            } catch (e) { /* ignore */ }
             try { setDistanceCalculating(false); } catch (e) { }
 
             // Draw on map (include HQ if necessary). Always pass company HQ as the destination to keep base as final point
@@ -1533,39 +1488,50 @@ function App() {
                 try { setDistanceCalculating(false); } catch (e) { }
             }
 
-            // Persist ordem_logistica per item (índice + 1) — sequentially, continue on errors
+            // Persist ordem_logistica per item (batched to avoid blocking UI and resource exhaustion)
             let newOrderIds = [];
             let allOk = true;
+            const failedUpdates = [];
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
-                    for (const [i, item] of optimized.entries()) {
-                        const pid = item && item.id;
-                        if (!pid) continue;
-                        newOrderIds.push(pid);
-                        try {
-                            const ordemValue = Number(i + 1);
-                            const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: ordemValue }).eq('id', pid);
-                            if (error) {
+                    const BATCH_SIZE = 10;
+                    const updates = (optimized || []).map((item, i) => ({ id: item && item.id, ordem: Number(i + 1) })).filter(u => u.id);
+                    for (let start = 0; start < updates.length; start += BATCH_SIZE) {
+                        const batch = updates.slice(start, start + BATCH_SIZE);
+                        // perform batch updates in parallel, but await the batch to yield to the event loop
+                        await Promise.all(batch.map(async (u) => {
+                            newOrderIds.push(u.id);
+                            try {
+                                const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: u.ordem }).eq('id', u.id);
+                                if (error) {
+                                    allOk = false;
+                                    failedUpdates.push({ id: u.id, error });
+                                    console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', u.id, error && error.message ? error.message : error);
+                                } else {
+                                    console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: u.id, ordem_logistica: u.ordem, returned: updData });
+                                }
+                            } catch (err) {
                                 allOk = false;
-                                console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
-                                try { alert('Erro ao gravar ordem_logistica para id ' + pid + ': ' + (error && error.message ? error.message : String(error))); } catch (e) { }
-                                // continue to next item
-                                continue;
-                            } else {
-                                console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: ordemValue, returned: updData });
+                                failedUpdates.push({ id: u.id, error: err });
+                                console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', u.id, err && err.message ? err.message : err);
                             }
-                        } catch (err) {
-                            allOk = false;
-                            console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
-                            try { alert('Exceção ao gravar ordem_logistica para id ' + pid + ': ' + (err && err.message ? err.message : String(err))); } catch (e) { }
-                            // continue to next item
-                            continue;
-                        }
+                        }));
+                        // small pause to yield and avoid freezing the browser
+                        await new Promise(res => setTimeout(res, 150));
                     }
                     // Refresh data so other components see updated ordem_logistica
                     try { await carregarDados(); } catch (err) { /* non-blocking */ }
                 }
             } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
+            // If any updates failed, surface a non-blocking message and log details
+            try {
+                if (failedUpdates.length > 0) {
+                    const ids = failedUpdates.map(f => f.id).slice(0, 10);
+                    const msg = `Falha ao gravar ordem_logistica para ${failedUpdates.length} entregas (ex.: ${ids.join(', ')}). Verifique logs.`;
+                    try { setMensagemGeral(msg); } catch (e) { }
+                    console.warn('recalcRotaForMotorista: failedUpdates details:', failedUpdates.slice(0, 20));
+                }
+            } catch (e) { /* ignore */ }
 
             // After persistence, create an audit log entry with previous/new distances and the new order
             try {
@@ -1579,7 +1545,7 @@ function App() {
                             const newDist = Number((drawResult && drawResult.meters ? drawResult.meters / 1000 : (estimatedDistanceKm || null))) || null;
                             const payload = [{ motorista_id: motoristaId, distancia_antiga: prevDist, distancia_nova: newDist, created_at: (new Date()).toISOString(), nova_ordem: Array.isArray(newOrderIds) ? newOrderIds : [] }];
                             const { data: logData, error: logErr } = await supabase.from('logs_roteirizacao').insert(payload);
-                            if (logErr) { console.error('recalcRotaForMotorista: falha ao gravar log_roteirizacao', logErr); try { alert('Falha ao gravar log de auditoria: ' + (logErr && logErr.message ? logErr.message : JSON.stringify(logErr))); } catch (e) { } }
+                            if (logErr) { console.error('recalcRotaForMotorista: falha ao gravar log_roteirizacao', logErr); try { setMensagemGeral('Falha ao gravar log de auditoria: ' + (logErr && logErr.message ? logErr.message : JSON.stringify(logErr))); } catch (e) { } }
                             else { console.log('recalcRotaForMotorista: log_roteirizacao gravado', logData); }
                             // refresh local logs preview
                             try { await fetchLogsForMotorista(String(motoristaId)); } catch (e) { /* ignore */ }
@@ -1618,6 +1584,9 @@ function App() {
             } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
+        } finally {
+            // release routing lock with a small grace period
+            try { setTimeout(() => { routingInProgressRef.current = false; }, 400); } catch (e) { routingInProgressRef.current = false; }
         }
     }, [pontoPartida, mapCenterState]);
 
