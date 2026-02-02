@@ -339,7 +339,6 @@ function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
-    const [menuOpen, setMenuOpen] = useState(false);
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
     // Componente isolado para a tela de aprovação do motorista
@@ -414,6 +413,40 @@ function App() {
 
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
+    const mapContainerRef = useRef(null);
+
+    // Ensure Google Maps resizes after the container height changes
+    useEffect(() => {
+        if (!mapContainerRef.current) return;
+        let ro = null;
+        let t = null;
+        const notifyResize = () => {
+            try {
+                if (!mapRef.current) return;
+                if (typeof window !== 'undefined' && window.google && window.google.maps && typeof window.google.maps.event.trigger === 'function') {
+                    window.google.maps.event.trigger(mapRef.current, 'resize');
+                } else if (mapRef.current && typeof mapRef.current.setCenter === 'function') {
+                    mapRef.current.setCenter && mapRef.current.setCenter(mapCenterState);
+                }
+            } catch (e) { /* ignore */ }
+        };
+
+        if (typeof ResizeObserver !== 'undefined') {
+            ro = new ResizeObserver(() => {
+                clearTimeout(t);
+                t = setTimeout(() => notifyResize(), 150);
+            });
+            ro.observe(mapContainerRef.current);
+        } else {
+            // Fallback: listen to window resize
+            const onWin = () => { clearTimeout(t); t = setTimeout(() => notifyResize(), 150); };
+            window.addEventListener('resize', onWin);
+            ro = { disconnect: () => window.removeEventListener('resize', onWin) };
+        }
+
+        return () => { try { if (ro && typeof ro.disconnect === 'function') ro.disconnect(); } catch (e) { } ; clearTimeout(t); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mapCenterState]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
     const [zoomLevel, setZoomLevel] = useState(13);
@@ -1134,7 +1167,7 @@ function App() {
                         <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
                     </div>
 
-                    <nav className="header-nav">
+                    <nav style={{ display: 'flex', gap: '8px' }}>
                         {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
                             <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
                                 padding: '10px 18px',
@@ -1151,21 +1184,6 @@ function App() {
                             </button>
                         ))}
                     </nav>
-
-                    {/* Hamburger menu for mobile */}
-                    <button className="hamburger" onClick={() => setMenuOpen(true)} aria-label="Abrir menu">☰</button>
-
-                    {/* Drawer menu (mobile) */}
-                    {menuOpen && (
-                        <div className="header-drawer" role="dialog" aria-modal="true">
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
-                                    <button key={tab} onClick={() => { setAbaAtiva(tab); setMenuOpen(false); }} style={{ padding: '12px 16px', textAlign: 'left', background: abaAtiva === tab ? 'rgba(255,255,255,0.04)' : 'transparent', border: 'none', color: theme.textMain, borderRadius: '8px', cursor: 'pointer', fontWeight: 700 }}>{tab}</button>
-                                ))}
-                                <button onClick={() => setMenuOpen(false)} style={{ padding: '10px', border: 'none', background: '#ef4444', color: '#fff', borderRadius: '8px', cursor: 'pointer' }}>Fechar</button>
-                            </div>
-                        </div>
-                    )}
                 </div>
 
                 <div style={{ flex: 1 }} />
@@ -1187,7 +1205,7 @@ function App() {
             {/* 2. ÁREA DE CONTEÚDO */}
 
 
-            <main style={{ maxWidth: '1450px', width: '100%', margin: '0 auto', padding: '20px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
@@ -1201,8 +1219,8 @@ function App() {
                 {abaAtiva === 'Visão Geral' && (
                     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
 
-                        {/* MAPA EM CARD (DIMINUÍDO E ELEGANTE) */}
-                        <div style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px' }}>
+                        {/* MAPA EM CARD (DIMINUÍDO, REDIMENSIONÁVEL E ELEGANTE) */}
+                        <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'auto', minHeight: '400px', maxHeight: '800px', position: 'relative' }}>
                             <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
                                 {
                                     // Se a lib do maps foi carregada com sucesso, renderiza o mapa dentro de ErrorBoundary
@@ -1241,6 +1259,9 @@ function App() {
                                 {/* Map controls consolidated: single `BotoesMapa` is rendered INSIDE the <Map> */}
 
                                 {/* Floating refresh button removed; use single `BotoesMapa` inside the <Map> */}
+
+                                {/* Resize handle indicator */}
+                                <div style={{ position: 'absolute', bottom: 8, right: 12, width: 36, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 6, cursor: 'ns-resize', display: 'inline-block', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }} title="Arraste para redimensionar a altura do mapa" />
 
                             </div>
                         </div>
@@ -1400,7 +1421,6 @@ function App() {
                                 </button>
                             </div>
                         </div>
-                        <div className="table-container" style={{ width: '100%' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
@@ -1462,7 +1482,6 @@ function App() {
                                 })}
                             </tbody>
                         </table>
-                        </div>
                     </div>
                 )}
 
@@ -1472,8 +1491,7 @@ function App() {
                         <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
                         <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
-                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto', padding: '0 20px' }}>
-                            <div className="table-container" style={{ width: '100%' }}>
+                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
                                 <thead>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
@@ -1489,7 +1507,6 @@ function App() {
                                     ))}
                                 </tbody>
                             </table>
-                            </div>
                         </div>
                     </div>
                 )}
