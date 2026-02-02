@@ -294,7 +294,8 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
 
     // Prepara mensagem de ativação contendo o ID do motorista (link de ativação)
     const activationUrl = (typeof window !== 'undefined' ? `${window.location.origin}/aprovar?id=${m.id}` : `/aprovar?id=${m.id}`);
-    const waMessage = `Olá! Para confirmar seu cadastro no V10 e ser aprovado agora, clique neste link: ${activationUrl}`;
+    // Formato com quebras de linha para garantir que o link fique em linha separada
+    const waMessage = `Olá! Recebemos seu cadastro no V10.\n\nPara ser aprovado agora, clique no link abaixo:\n\n${activationUrl}`;
 
     return (
         <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>
