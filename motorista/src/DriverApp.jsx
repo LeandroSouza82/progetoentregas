@@ -707,7 +707,7 @@ export default function AppMotorista() {
             ) : (
                 entregas.map((e, i) => (
                     <div key={e.id || i} style={mCard}>
-                        <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {i + 1}</div>
+                        <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {(tarefaAtual && tarefaAtual.ordem_logistica) ? tarefaAtual.ordem_logistica : (i + 1)}</div>
                         <div style={{ fontSize: '20px', margin: '5px 0' }}>{e.cliente || 'Cliente'}</div>
                         <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>📍 {e.endereco || 'Endereço não informado'}</div>
                         <button

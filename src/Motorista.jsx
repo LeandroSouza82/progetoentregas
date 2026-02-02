@@ -33,10 +33,10 @@ export default function AppMotorista() {
     async function carregarEntregas() {
       try {
         let q = supabase.from('entregas').select('*').eq('motorista_id', motoristaId).eq('status', 'em_rota');
-        if (q && typeof q.order === 'function') q = q.order('ordem_entrega', { ascending: true });
+        if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
         const { data, error } = await q;
         if (!error && isMounted) {
-          const sorted = Array.isArray(data) ? data.slice().sort((a, b) => (Number(a.ordem_entrega) || 0) - (Number(b.ordem_entrega) || 0)) : [];
+          const sorted = Array.isArray(data) ? data.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : [];
           setEntregas(sorted);
         }
       } catch (e) { console.warn('Erro carregando entregas:', e); }
@@ -63,8 +63,8 @@ export default function AppMotorista() {
                   let next;
                   if (exists) next = prev.map(p => p.id === rec.id ? { ...p, ...rec } : p);
                   else next = [...prev, rec];
-                  // ensure ordering by ordem_entrega if available
-                  return next.slice().sort((a, b) => (Number(a.ordem_entrega) || 0) - (Number(b.ordem_entrega) || 0));
+                  // ensure ordering by ordem_logistica if available
+                  return next.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0));
                 });
               } else {
                 setEntregas(prev => prev.filter(e => e.id !== rec.id));
@@ -111,7 +111,7 @@ export default function AppMotorista() {
       ) : (
         entregas.map((e, i) => (
           <div key={e.id} style={mCard}>
-            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {i + 1}</div>
+            <div style={{ color: '#00e676', fontWeight: 'bold', fontSize: '12px' }}>PARADA {(e.ordem_logistica != null) ? e.ordem_logistica : (i + 1)}</div>
             <div style={{ fontSize: '20px', margin: '5px 0' }}>{e.cliente}</div>
             <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>📍 {e.endereco}</div>
             <button onClick={() => { concluirEntrega(e.id); }} style={mBtn}>

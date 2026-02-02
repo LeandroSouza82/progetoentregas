@@ -289,7 +289,7 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
             console.warn('otimizarRotaComGoogle: fallback directions optimize failed', e);
             // last resort: local nearest neighbor by coord distance
             const localOrder = otimizarRota(originLatLng, remaining);
-            try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid); } } catch (e) { }
+            try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
             return localOrder;
         }
     }
@@ -300,9 +300,9 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     // Build ordered list
     const ordered = orderedIndices.map(idx => remaining[idx]);
 
-    // If include HQ, we will limit first chunk and set HQ insertion for map only (we persist ordem_entrega sequentially)
+    // If include HQ, we will limit first chunk and set HQ insertion for map only (we persist ordem_logistica sequentially)
     if (includeHQ) {
-        // Persist ordem_entrega with HQ virtual waypoint inserted after the first chunk
+        // Persist ordem_logistica with HQ virtual waypoint inserted after the first chunk
         try {
             if (motoristaId != null) {
                 for (let i = 0; i < ordered.length; i++) {
@@ -310,24 +310,24 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
                     const pid = pedido.id;
                     if (!pid) continue;
                     const ordem = i + 1;
-                    await supabase.from('entregas').update({ ordem_entrega: Number(ordem) }).eq('id', pid);
+                    await supabase.from('entregas').update({ ordem_logistica: Number(ordem) }).eq('id', pid);
                 }
             }
-        } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_entrega com HQ', e); }
+        } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_logistica com HQ', e); }
         return ordered; // Map drawing logic will insert HQ waypoint visually
     }
 
-    // Persist ordem_entrega when normal (only if motoristaId is provided - preview mode should NOT persist)
+    // Persist ordem_logistica when normal (only if motoristaId is provided - preview mode should NOT persist)
     try {
         if (motoristaId != null) {
             for (let i = 0; i < ordered.length; i++) {
                 const pedido = ordered[i];
                 const pid = pedido.id;
                 if (!pid) continue;
-                await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
+                await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
             }
         }
-    } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_entrega', e); }
+    } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_logistica', e); }
     return ordered;
 }
 
@@ -759,8 +759,8 @@ function App() {
         try {
             let q = supabase.from('entregas').select('*');
             if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
-            // Prefer server-side ordering by ordem_entrega when supported
-            if (q && typeof q.order === 'function') q = q.order('ordem_entrega', { ascending: true });
+            // Prefer server-side ordering by ordem_logistica when supported
+            if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
             const { data: entregasPend, error: entregasErr } = await q;
             if (entregasErr) {
                 console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
@@ -768,7 +768,7 @@ function App() {
             } else {
                 const list = entregasPend || [];
                 // fallback local sort if server didn't order
-                const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_entrega) || 0) - (Number(b.ordem_entrega) || 0)) : list;
+                const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : list;
                 setEntregasEmEspera(sorted);
             }
         } catch (e) {
@@ -1111,7 +1111,7 @@ function App() {
             const lat = Number(p.lat);
             const lng = Number(p.lng);
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-            const num = (p.ordem_entrega != null && Number.isFinite(Number(p.ordem_entrega))) ? Number(p.ordem_entrega) : (p.ordem || (idx + 1));
+            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica))) ? Number(p.ordem_logistica) : (p.ordem || (idx + 1));
             const tipo = String(p.tipo || 'Entrega');
             const color = colorForType(tipo);
             const MarkerComp = mapsLib.AdvancedMarker;
@@ -1319,22 +1319,22 @@ function App() {
                     if (Array.isArray(wpOrder) && wpOrder.length === waypts.length && orderedList && orderedList.length === waypts.length) {
                         try {
                             const newOrdered = wpOrder.map(i => orderedList[i]);
-                            // Persist ordem_entrega for motorista (if provided)
+                            // Persist ordem_logistica for motorista (if provided)
                             if (motoristaId != null) {
                                 for (let i = 0; i < newOrdered.length; i++) {
                                     const pid = newOrdered[i] && newOrdered[i].id ? newOrdered[i].id : null;
                                     if (!pid) continue;
                                     try {
-                                        await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
-                                    } catch (e) { console.warn('Erro atualizando ordem_entrega via waypoint_order:', e); }
+                                        await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                                    } catch (e) { console.warn('Erro atualizando ordem_logistica via waypoint_order:', e); }
                                 }
-                                // Refresh data so UI and motorista app pick up the new ordem_entrega
+                                // Refresh data so UI and motorista app pick up the new ordem_logistica
                                 try { await carregarDados(); } catch (e) { }
                                 // Update local state
-                                try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_entrega: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
+                                try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
                             } else {
                                 // preview mode: update local draft preview only
-                                try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_entrega: Number(idx + 1) }))); } catch (e) { }
+                                try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1) }))); } catch (e) { }
                             }
                             // use overview_path for polyline below
                         } catch (e) { console.warn('Erro ao aplicar waypoint_order:', e); }
@@ -1401,11 +1401,11 @@ function App() {
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
-                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_entrega: Number(i + 1), motorista_id: motoristaId }));
+                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
                 setRotaAtiva(optimizedWithOrder);
                 const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
                 if (foundDriver) setMotoristaDaRota(foundDriver);
-                // Best-effort: refresh data so other components see updated ordem_entrega
+                // Best-effort: refresh data so other components see updated ordem_logistica
                 try { await carregarDados(); } catch (err) { /* non-blocking */ }
             } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
         } catch (e) {
@@ -1630,7 +1630,7 @@ function App() {
                 for (let i = 0; i < rotaOtimizada.length; i++) {
                     const pedido = rotaOtimizada[i];
                     const pid = pedido.id;
-                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_entrega: i + 1, motorista_id: motoristaIdVal, id: pid };
+                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_logistica: i + 1, motorista_id: motoristaIdVal, id: pid };
                 }
 
                 // Only close modal and clear selection if update succeeded
@@ -1639,16 +1639,16 @@ function App() {
                     setSelectedMotorista(null);
                 }
             }
-            // Persist ordem_entrega per entrega (cada pedido precisa da sua ordem específica)
+            // Persist ordem_logistica per entrega (cada pedido precisa da sua ordem específica)
             try {
                 for (let i = 0; i < rotaOtimizada.length; i++) {
                     const pid = rotaOtimizada[i].id;
                     if (pid === undefined || pid === null) continue;
                     try {
-                        const { error: ordErr } = await supabase.from('entregas').update({ ordem_entrega: Number(i + 1) }).eq('id', pid);
-                        if (ordErr) console.error('Erro atualizando ordem_entrega:', ordErr && ordErr.message, ordErr && ordErr.hint);
+                        const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                        if (ordErr) console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
                     } catch (e) {
-                        console.error('Erro na requisição ordem_entrega:', e && e.message);
+                        console.error('Erro na requisição ordem_logistica:', e && e.message);
                     }
                 }
             } catch (e) { /* non-blocking */ }
@@ -1829,7 +1829,7 @@ function App() {
                                                 const color = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#60a5fa');
                                                 return (
                                                     <li key={p.id} style={{ marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                                                        <strong style={{ marginRight: '6px', color: theme.textLight }}>{i + 1}.</strong>
+                                                        <strong style={{ marginRight: '6px', color: theme.textLight }}>{(p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica))) ? Number(p.ordem_logistica) : (i + 1)}.</strong>
                                                         <span style={{ color, fontWeight: 600 }}>{p.cliente}</span>
                                                     </li>
                                                 );
