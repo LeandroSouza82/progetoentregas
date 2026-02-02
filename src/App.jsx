@@ -1753,6 +1753,26 @@ function App() {
     // Use explicit aprovado boolean to split lists
     const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
     const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
+
+    // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
+    async function handleDriverSelect(m) {
+        if (!m || !m.id) return;
+        if (driverSelectMode === 'dispatch') {
+            return assignDriver(m);
+        }
+        // reoptimize path for selected driver (no send)
+        setDispatchLoading(true);
+        try {
+            await recalcRotaForMotorista(String(m.id));
+            try { alert('✅ Rota re-otimizada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
+        } catch (e) {
+            console.warn('handleDriverSelect (reopt) failed:', e);
+            try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+        } finally {
+            setDispatchLoading(false);
+        }
+    }
+
     // Se estivermos na página de aprovação (/aprovar), renderiza a tela exclusiva
     try {
         if (typeof window !== 'undefined' && window.location.pathname === '/aprovar') {
@@ -2146,24 +2166,6 @@ function App() {
 
             {/* Driver selection modal (componente minimalista) */}
 
-            // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
-            async function handleDriverSelect(m) {
-                if (!m || !m.id) return;
-                if (driverSelectMode === 'dispatch') {
-                    return assignDriver(m);
-                }
-                // reoptimize path for selected driver (no send)
-                setDispatchLoading(true);
-                try {
-                    await recalcRotaForMotorista(String(m.id));
-                    try { alert('✅ Rota re-otimizada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
-                } catch (e) {
-                    console.warn('handleDriverSelect (reopt) failed:', e);
-                    try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
-                } finally {
-                    setDispatchLoading(false);
-                }
-            }
 
             <DriverSelectModal
                 visible={showDriverSelect}
