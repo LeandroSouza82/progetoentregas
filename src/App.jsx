@@ -225,15 +225,19 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
             } catch (e) { /* ignore cache issues */ }
         } catch (e) { /* ignore */ }
     } catch (e) {
-        if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) {
+        const es = String(e || '');
+        if (es.includes && es.includes('OVER_QUERY_LIMIT')) {
             // Google quota reached — mark and fallback silently
             markGoogleQuotaExceeded('Directions');
+        } else if (es.includes && (es.includes('REQUEST_DENIED') || es.includes('API_NOT_ALLOWED'))) {
+            // API key not authorized for Directions
+            markGoogleQuotaExceeded('Directions', '⚠️ Chave do Google não autorizada para Directions. Verifique as restrições de API no Google Cloud Console. Usando histórico/heurística local.');
         } else {
-            console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e);
+            try { console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e); } catch (err) { }
         }
         // last resort: local nearest neighbor by coord distance
         const localOrder = otimizarRota(originLatLng, remaining);
-        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e) { }
+        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e2) { }
         return localOrder;
     } finally {
         routingInProgressRef.current = false;
@@ -391,16 +395,19 @@ function App() {
         } catch (e) { /* ignore */ }
     }, []);
 
-    // Marca o bloqueio de quota de forma idempotente
-    function markGoogleQuotaExceeded(source) {
+    // Marca o bloqueio de quota / autorização de forma idempotente
+    function markGoogleQuotaExceeded(source, customMessage) {
         try {
             if (googleQuotaExceededRef.current) return;
             const today = new Date().toISOString().slice(0,10);
             localStorage.setItem('googleQuotaExceededAt', today);
             setGoogleQuotaExceeded(true);
             googleQuotaExceededRef.current = true;
-            setQuotaBannerMessage('⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.');
-            // não spam no console
+            // Allow custom message for different failure modes
+            const defaultMsg = '⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.';
+            const msg = customMessage || defaultMsg;
+            setQuotaBannerMessage(msg);
+            try { console.info('Google blocked:', source); } catch (e) { }
         } catch (e) { /* ignore */ }
     }
 
@@ -544,6 +551,15 @@ function App() {
     const predictionTimerRef = useRef(null);
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
     const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
+
+    // If loader reports error (e.g., API key not authorized or script blocked), surface a manager-facing banner
+    useEffect(() => {
+        try {
+            if (!gmapsError) return;
+            const msg = (gmapsError && gmapsError.message && (String(gmapsError.message).includes('not authorized') || String(gmapsError.message).includes('API key'))) ? '⚠️ Google Maps não autorizado para o projeto atual. Verifique as restrições de API no Google Cloud Console.' : '⚠️ Falha ao carregar Google Maps: serviço indisponível.';
+            markGoogleQuotaExceeded('Loader', msg);
+        } catch (e) { }
+    }, [gmapsError]);
     const [recentList, setRecentList] = useState([]);
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
@@ -720,8 +736,9 @@ function App() {
             if (!predictionServiceRef.current) { setPredictions([]); return; }
             return new Promise((resolve) => {
                 predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
-                    if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
+                            if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
                     else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places'); setPredictions([]); resolve([]); }
+                    else if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') { markGoogleQuotaExceeded('Places', '⚠️ API do Google não autorizada para Places. Use o histórico e cole o endereço manualmente.'); setPredictions([]); resolve([]); }
                     else { setPredictions([]); resolve([]); }
                 });
             });
@@ -747,6 +764,7 @@ function App() {
                             setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
                         } else {
                             if (details && details.stat === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('PlaceDetails');
+                            if (details && (details.stat === 'REQUEST_DENIED' || details.stat === 'API_NOT_ALLOWED')) markGoogleQuotaExceeded('PlaceDetails', '⚠️ API do Google não autorizada para Place Details. Use Histórico ou cole o endereço manualmente.');
                             setEnderecoCoords(null);
                         }
                     }
@@ -1033,8 +1051,13 @@ function App() {
                 if (window.google && window.google.maps && window.google.maps.Geocoder) {
                     const geocoder = new window.google.maps.Geocoder();
                     const results = await new Promise((resolve, reject) => {
-                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
-                            if (status === 'OK') resolve(res); else reject(status);
+                                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
+                            if (status === 'OK') resolve(res);
+                            else {
+                                if (status === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('Geocoder');
+                                if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') markGoogleQuotaExceeded('Geocoder', '⚠️ Geocoder do Google não autorizado. Use fallback Nominatim.');
+                                reject(status);
+                            }
                         });
                     });
                     let city = '';
@@ -1105,6 +1128,11 @@ function App() {
                 if (!mounted) return;
                 setFrota([]);
                 setMapsLoadError(true);
+                // If the import fails because the API is not authorized, mark the app as blocked to provide a clear banner to managers
+                try {
+                    const msg = (e && e.message && (String(e.message).includes('Unauthorized') || String(e.message).includes('not authorized'))) ? '⚠️ Google Maps carregado, mas a chave não está autorizada para esta API. Verifique as restrições.' : null;
+                    if (msg) markGoogleQuotaExceeded('Loader', msg);
+                } catch (err) { }
             }
         })();
         return () => { mounted = false; };

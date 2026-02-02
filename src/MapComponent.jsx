@@ -55,7 +55,15 @@ export default function MapComponent({
 
         // If no global map exists, create it once and cache globally
         try {
-            const map = new window.google.maps.Map(containerRef.current, mapOptions);
+            // Ensure map is plain 2D road map with no tilt / 3D params
+            const opts = Object.assign({}, mapOptions);
+            try { opts.tilt = 0; } catch (e) { }
+            try { opts.mapTypeId = window.google && window.google.maps && window.google.maps.MapTypeId ? window.google.maps.MapTypeId.ROADMAP : opts.mapTypeId; } catch (e) { }
+
+            const map = new window.google.maps.Map(containerRef.current, opts);
+            // Force tilt to 0 to avoid any 3D perspective on some mapIds
+            try { if (typeof map.setTilt === 'function') map.setTilt(0); } catch (e) { }
+
             GLOBAL_GOOGLE_MAP = map;
             mapRef.current = map;
             try { onLoad(map); } catch (e) { /* swallow */ }
