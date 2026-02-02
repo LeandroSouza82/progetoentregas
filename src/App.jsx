@@ -1172,8 +1172,10 @@ function App() {
             const lat = Number(p.lat);
             const lng = Number(p.lng);
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (p.ordem || (idx + 1));
+            // Use ordem_logistica exclusively for numbering on the map. If not set (>0) show empty.
+            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : '';
             const tipo = String(p.tipo || 'Entrega');
+            // If ordem_logistica is zero or not set, we deliberately show blank on the map to enforce DB as SSoT
             const color = colorForType(tipo);
             const MarkerComp = mapsLib.AdvancedMarker;
             return (
@@ -1424,14 +1426,14 @@ function App() {
                     if (path && path.length > 0) {
                         const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
                         routePolylineRef.current = poly;
-                                // If legs are available, compute precise distance and time
+                        // If legs are available, compute precise distance and time and return them (traffic-aware)
                         try {
                             const legs = res.routes?.[0]?.legs || [];
                             const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
                             const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
                             if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
                             if (secs > 0) setEstimatedTimeSec(secs);
-                            // If for some reason legs missing, fallback to haversine on overview_path
+                            // If for some reason legs missing, fallback to haversine on overview_path (but legs preferred)
                             if ((!legs || legs.length === 0) && res.routes?.[0]?.overview_path) {
                                 try {
                                     const ov = res.routes[0].overview_path || [];
@@ -1440,8 +1442,9 @@ function App() {
                                     if (meters2 > 0) setEstimatedDistanceKm(Number((meters2 / 1000).toFixed(1)));
                                 } catch (e) { /* ignore */ }
                             }
+                            return { meters: meters || 0, secs: secs || 0 };
                         } catch (e) { /* ignore */ }
-                        return;
+                        return { meters: 0, secs: 0 };
                     }
                 } catch (e) {
                     console.warn('drawRouteOnMap: DirectionsService failed, falling back to straight path', e);
@@ -1454,12 +1457,13 @@ function App() {
                 const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
                 routePolylineRef.current = poly;
                 try {
-                    // compute haversine sum
+                    // compute haversine sum (only fallback when no legs info available)
                     let meters = 0;
                     for (let i = 1; i < path.length; i++) {
                         meters += haversineKm(path[i - 1], path[i]) * 1000;
                     }
                     if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
+                    return { meters: meters || 0, secs: 0 };
                 } catch (e) { /* ignore */ }
             }
         } catch (e) {
@@ -1504,27 +1508,46 @@ function App() {
 
             // Draw on map (include HQ if necessary). Always pass company HQ as the destination to keep base as final point
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
+            // ensure UI shows calculating while we call Directions
+            try { setDistanceCalculating(true); } catch (e) { }
+            const drawResult = await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
+            try { setDistanceCalculating(false); } catch (e) { }
 
-            // Persist ordem_logistica per item (índice + 1) — cirúrgico, garante que DB reflita exatamente a ordem retornada pelo Google
+            // Persist ordem_logistica per item (índice + 1) — use sequential for..of to guarantee write order and logging
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
-                    const updates = optimized.map((item, i) => {
+                    for (let i = 0; i < optimized.length; i++) {
+                        const item = optimized[i];
                         const pid = item && item.id;
-                        if (!pid) return null;
-                        return supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                    }).filter(Boolean);
-
-                    if (updates.length > 0) {
-                        // execute in parallel and await completion so we know when the last update finished
-                        const results = await Promise.all(updates.map(p => p.catch ? p.catch(err => ({ error: err })) : p));
-                        const anyErr = results.find(r => r && r.error);
-                        if (anyErr) console.error('recalcRotaForMotorista: alguns updates falharam:', anyErr);
-                        // Best-effort: refresh data so other components see updated ordem_logistica
-                        try { await carregarDados(); } catch (err) { /* non-blocking */ }
+                        if (!pid) continue;
+                        try {
+                            const { error } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                            if (error) {
+                                console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', pid, error && error.message ? error.message : error);
+                            } else {
+                                console.log('recalcRotaForMotorista: ordem_logistica gravada', { id: pid, ordem_logistica: Number(i + 1) });
+                            }
+                        } catch (err) {
+                            console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', pid, err && err.message ? err.message : err);
+                        }
                     }
+                    // Refresh data so other components see updated ordem_logistica
+                    try { await carregarDados(); } catch (err) { /* non-blocking */ }
                 }
             } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
+
+            // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
+            try {
+                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
+                setRotaAtiva(optimizedWithOrder);
+                const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
+                if (foundDriver) setMotoristaDaRota(foundDriver);
+                // ensure visual feedback: set distance/time from draw result if available
+                try {
+                    if (drawResult && drawResult.meters) setEstimatedDistanceKm(Number((drawResult.meters / 1000).toFixed(1)));
+                    if (drawResult && drawResult.secs) setEstimatedTimeSec(drawResult.secs);
+                } catch (e) { /* ignore */ }
+            } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {

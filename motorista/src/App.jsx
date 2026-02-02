@@ -451,7 +451,8 @@ function InternalMobileApp() {
                                         const lat = parseFloat(p.lat);
                                         const lng = parseFloat(p.lng);
                                         if (isNaN(lat) || isNaN(lng)) return null;
-                                        const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (p.ordem || (i + 1));
+                                        // Use ordem_logistica exclusively for pin numbering on mobile
+                                        const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : '';
                                         const tipo = String(p.tipo || 'Entrega');
                                         const color = (tipo === 'recolha') ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#2563eb');
                                         return (
