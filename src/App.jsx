@@ -1260,7 +1260,17 @@ function App() {
 
             // Draw on map (include HQ if necessary)
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            await drawRouteOnMap(origin, optimized, includeHQ, puntoPartida || mapCenterState);
+            await drawRouteOnMap(origin, optimized, includeHQ, pontoPartida || mapCenterState);
+
+            // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
+            try {
+                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_entrega: Number(i + 1), motorista_id: motoristaId }));
+                setRotaAtiva(optimizedWithOrder);
+                const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
+                if (foundDriver) setMotoristaDaRota(foundDriver);
+                // Best-effort: refresh data so other components see updated ordem_entrega
+                try { await carregarDados(); } catch (err) { /* non-blocking */ }
+            } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
         }

@@ -32,8 +32,13 @@ export default function AppMotorista() {
 
     async function carregarEntregas() {
       try {
-        const { data, error } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).eq('status', 'em_rota');
-        if (!error && isMounted) setEntregas(data || []);
+        let q = supabase.from('entregas').select('*').eq('motorista_id', motoristaId).eq('status', 'em_rota');
+        if (q && typeof q.order === 'function') q = q.order('ordem_entrega', { ascending: true });
+        const { data, error } = await q;
+        if (!error && isMounted) {
+          const sorted = Array.isArray(data) ? data.slice().sort((a, b) => (Number(a.ordem_entrega) || 0) - (Number(b.ordem_entrega) || 0)) : [];
+          setEntregas(sorted);
+        }
       } catch (e) { console.warn('Erro carregando entregas:', e); }
     }
 
@@ -55,8 +60,11 @@ export default function AppMotorista() {
               if (rec.status === 'em_rota') {
                 setEntregas(prev => {
                   const exists = prev.find(p => p.id === rec.id);
-                  if (exists) return prev.map(p => p.id === rec.id ? { ...p, ...rec } : p);
-                  return [...prev, rec];
+                  let next;
+                  if (exists) next = prev.map(p => p.id === rec.id ? { ...p, ...rec } : p);
+                  else next = [...prev, rec];
+                  // ensure ordering by ordem_entrega if available
+                  return next.slice().sort((a, b) => (Number(a.ordem_entrega) || 0) - (Number(b.ordem_entrega) || 0));
                 });
               } else {
                 setEntregas(prev => prev.filter(e => e.id !== rec.id));
