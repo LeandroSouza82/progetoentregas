@@ -849,6 +849,7 @@ function App() {
 
     // SmoothMarker: mantém posição exibida localmente para permitir transições CSS suaves
     const SmoothMarker = ({ m }) => {
+        if (m.esta_online !== true || m.lat == null || m.lng == null) return null;
         const [displayPos, setDisplayPos] = useState({ lat: Number(m.lat) || 0, lng: Number(m.lng) || 0 });
         useEffect(() => {
             // Ao receber novas coordenadas do Supabase, atualiza gradualmente o estado exibido
@@ -1005,7 +1006,7 @@ function App() {
         const map = mapRef.current;
         const pontos = [
             ...orderedRota.map(p => [p.lat, p.lng]),
-            ...((frota || []).map(m => [m.lat, m.lng]))
+            ...((frota || []).filter(m => m.esta_online === true && m.lat != null && m.lng != null).map(m => [m.lat, m.lng]))
         ].filter(pt => pt && pt.length >= 2 && !isNaN(Number(pt[0])) && !isNaN(Number(pt[1])));
         if (!pontos || pontos.length === 0) return;
         const bounds = new window.google.maps.LatLngBounds();
@@ -1267,7 +1268,7 @@ function App() {
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
                     <CardKPI titulo="TOTAL DE ENTREGAS" valor={totalEntregas} cor={theme.accent} />
-                    <CardKPI titulo="MOTORISTAS ONLINE" valor={frota.filter(m => m.esta_online).length} cor={theme.success} />
+                    <CardKPI titulo="MOTORISTAS ONLINE" valor={frota.filter(m => m.esta_online === true).length} cor={theme.success} />
                     <CardKPI titulo="ROTA ATIVA" valor={rotaAtiva.length > 0 ? 'EM ANDAMENTO' : 'AGUARDANDO'} cor={theme.primary} />
                 </div>
 
@@ -1329,7 +1330,7 @@ function App() {
                                 <div>
                                     <div style={{ padding: '15px', background: '#e0e7ff', borderRadius: '12px', marginBottom: '20px', color: theme.primary }}>
                                         <strong>🚛 Motorista:</strong> {motoristaDaRota.nome}<br />
-                                        <strong>🔌 Status:</strong> {motoristaDaRota.esta_online ? 'Online' : 'Offline'}
+                                        <strong>🔌 Status:</strong> {motoristaDaRota.esta_online === true ? 'Online' : 'Offline'}
                                         {motoristaDaRota.lat && motoristaDaRota.lng && (<div><strong>📍</strong> {motoristaDaRota.lat.toFixed ? `${motoristaDaRota.lat.toFixed(4)}, ${motoristaDaRota.lng.toFixed(4)}` : `${motoristaDaRota.lat}, ${motoristaDaRota.lng}`}</div>)}
                                     </div>
                                     <h4 style={{ margin: '10px 0' }}>Próximas Entregas:</h4>
@@ -1489,7 +1490,7 @@ function App() {
                             </thead>
                             <tbody>
                                 {motoristasAtivos.map(m => {
-                                    const isOnline = Boolean(m.esta_online);
+                                    const isOnline = m.esta_online === true;
                                     const dotColor = isOnline ? '#10b981' : '#ef4444';
                                     const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
                                     const nameStyle = isOnline ? { color: '#10b981', fontWeight: 700, textShadow: '0 1px 6px rgba(16,185,129,0.25)' } : { color: '#9ca3af', fontWeight: 400, opacity: 0.9 };
