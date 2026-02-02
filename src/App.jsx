@@ -478,6 +478,7 @@ function App() {
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const enderecoRef = useRef(null);
     const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Autocomplete
+    const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
     const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
     const [recentList, setRecentList] = useState([]);
     const [user, setUser] = useState(null);
@@ -600,8 +601,9 @@ function App() {
                 listener = ac.addListener('place_changed', () => {
                     try {
                         const place = ac.getPlace();
-                        if (place && place.formatted_address) setEnderecoEntrega(place.formatted_address);
-                        else if (enderecoRef.current && enderecoRef.current.value) setEnderecoEntrega(enderecoRef.current.value);
+                        if (place && place.formatted_address) setEnderecoEntrega(place.formatted_address); else if (enderecoRef.current && enderecoRef.current.value) setEnderecoEntrega(enderecoRef.current.value);
+                        // mark this as NOT from history (it came from Google Autocomplete)
+                        try { setEnderecoFromHistory(false); } catch (e) { }
                         if (place && place.geometry && place.geometry.location) {
                             const lat = place.geometry.location.lat();
                             const lng = place.geometry.location.lng();
@@ -1692,12 +1694,36 @@ function App() {
                 console.error('Google Maps Places não está disponível (verifique se a library `places` foi carregada)');
                 // Permitimos fallback quando a library não está disponível, mas registramos o erro.
             }
+            // If coords are not set (user pasted address / didn't click suggestion)
             if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords.lat)) || !Number.isFinite(Number(enderecoCoords.lng))) {
-                try { alert('Por favor selecione um endereço válido nas sugestões do Google para capturar coordenadas. O campo será limpo para você tentar novamente.'); } catch (err) { /* ignore */ }
-                try { setEnderecoEntrega(''); } catch (err) { /* ignore */ }
-                try { setEnderecoCoords(null); } catch (err) { /* ignore */ }
-                try { if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') enderecoRef.current.focus(); } catch (e) { }
-                return;
+                if (enderecoFromHistory) {
+                    // History is sovereign — accept the address without forcing Google validation
+                    try { console.info('adicionarAosPendentes: address from history accepted without geocode'); } catch (e) { }
+                } else if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.Geocoder) {
+                    // Attempt Geocoder fallback for pasted addresses
+                    try {
+                        const geocoder = new window.google.maps.Geocoder();
+                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
+                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
+                            const loc = geoRes.results[0].geometry.location;
+                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                        } else {
+                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
+                            // Do not clear the field; let the user edit or pick a suggestion
+                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                try { enderecoRef.current.focus(); } catch (e) { }
+                            }
+                            return;
+                        }
+                    } catch (err) {
+                        console.warn('adicionarAosPendentes: geocoder error', err);
+                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
+                        return;
+                    }
+                } else {
+                    // Google Geocoder not available; fall back to randomized coords (existing behavior)
+                    console.warn('Geocoder not available; using randomized fallback coordinates');
+                }
             }
         }
 
@@ -1729,7 +1755,7 @@ function App() {
         }]);
         if (!error) {
             alert("✅ Salvo com sucesso!");
-            setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null);
+            setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); setEnderecoFromHistory(false);
             // clear draft preview point after persisting
             setDraftPoint(null);
             try { carregarDados(); } catch (e) { }
@@ -2085,7 +2111,7 @@ function App() {
                                     </select>
                                 </label>
                                 <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
-                                <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); }} />
+                                <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); }} />
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                             </form>
@@ -2100,7 +2126,26 @@ function App() {
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
                                     recentList?.map((it, idx) => (
-                                        <div key={idx} onClick={() => { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoCoords(null); }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
+                                        <div key={idx} onClick={async () => {
+                                            try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
+                                            try {
+                                                if (it && (it.lat != null && it.lng != null)) {
+                                                    setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
+                                                } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
+                                                    const geocoder = new window.google.maps.Geocoder();
+                                                    const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
+                                                    if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
+                                                        const loc = geo.results[0].geometry.location;
+                                                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                                    } else {
+                                                        // allow history even if geocode fails (history is sovereign)
+                                                        setEnderecoCoords(null);
+                                                    }
+                                                } else {
+                                                    setEnderecoCoords(null);
+                                                }
+                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
+                                        }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
                                             <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
                                             <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
                                         </div>
