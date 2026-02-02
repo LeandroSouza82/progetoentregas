@@ -279,7 +279,7 @@ const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLev
                     <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
                         {motorista.nome || 'Entregador'}
                     </div>
-                    <img src="/bicicleta-de-entrega.png" alt="Entregador" onError={(e)=>{ try { e.target.onerror=null; e.target.src = motoristaIconUrl; } catch(_) { } }} onError={(e)=>{ try { e.target.onerror=null; e.target.src = motoristaIconUrl; } catch(_) { } }} style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" onError={(e)=>{ try { e.target.onerror=null; e.target.src = motoristaIconUrl; } catch(_) { } }} style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
                 </div>
             </MarkerComp>
         );
