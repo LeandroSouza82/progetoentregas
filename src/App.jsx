@@ -1316,58 +1316,8 @@ function App() {
         }
     }, [rotaFinalizada, frota, mapCenterState]);
 
-    // DESABILITADO: Ajuste de bounds (dependia do Google Maps)
-    // Com Leaflet, o mapa ajusta automaticamente ou use map.fitBounds() manualmente
-    /*
-    React.useEffect(() => {
-        if (!mapRef.current || !mapsLib?.LatLngBounds) return;
-        
-        const timer = setTimeout(() => {
-            try {
-                const bounds = new mapsLib.LatLngBounds();
-                let hasMarkers = false;
-
-                // Adicionar entregas aos bounds
-                [...(entregasEmEspera || []), ...(orderedRota || [])].forEach(entrega => {
-                    if (entrega.lat && entrega.lng && isValidSC(Number(entrega.lat), Number(entrega.lng))) {
-                        bounds.extend({ lat: Number(entrega.lat), lng: Number(entrega.lng) });
-                        hasMarkers = true;
-                    }
-                });
-
-                // Adicionar motoristas online aos bounds
-                (frota || []).forEach(motorista => {
-                    if (motorista.aprovado === true && motorista.esta_online === true && motorista.lat && motorista.lng && isValidSC(Number(motorista.lat), Number(motorista.lng))) {
-                        // bounds.extend({ lat: Number(motorista.lat), lng: Number(motorista.lng) });
-                        hasMarkers = true;
-                    }
-                });
-
-                // if (hasMarkers) mapRef.current.fitBounds(bounds, { padding: 50 });
-            } catch (e) { console.warn('Erro ao ajustar bounds', e); }
-        }, 1000);
-
-        return () => clearTimeout(timer);
-    }, [entregasEmEspera, orderedRota, frota]);
-    */
-                    if (motorista.esta_online && motorista.lat && motorista.lng && isValidSC(Number(motorista.lat), Number(motorista.lng))) {
-                        bounds.extend({ lat: Number(motorista.lat), lng: Number(motorista.lng) });
-                        hasMarkers = true;
-                    }
-                });
-
-                // Ajustar mapa se houver marcadores
-                if (hasMarkers && mapRef.current.fitBounds) {
-                    mapRef.current.fitBounds(bounds);
-                    console.log('🗺️ Mapa ajustado para mostrar todos os marcadores');
-                }
-            } catch (e) {
-                console.warn('Erro ao ajustar bounds do mapa:', e);
-            }
-        }, 1000); // Aguardar 1 segundo para renderização
-
-        return () => clearTimeout(timer);
-    }, [entregasEmEspera, orderedRota, frota]);
+    // REMOVIDO: Ajuste automático de bounds (dependia do Google Maps LatLngBounds)
+    // Com Leaflet, pode ser implementado usando map.fitBounds() se necessário
 
     // Center for map: force Santa Catarina as requested
     const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
