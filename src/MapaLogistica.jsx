@@ -8,7 +8,8 @@ const isValidSC = (lat, lng) => {
     if (lat == null || lng == null) return false;
     const latN = Number(lat); const lngN = Number(lng);
     if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return false;
-    return (latN < -25.0 && latN > -30.0 && lngN < -54.0 && lngN > -48.0);
+    // ✅ Santo Amaro da Imperatriz: Lat até -28.20
+    return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
 function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false }) {
@@ -16,10 +17,43 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     // build marker lists
     // Memoize markers to avoid re-computation each render
-    const entregaMarkers = React.useMemo(() => (entregas || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng))).map(e => ({ id: e.id, lat: Number(e.lat), lng: Number(e.lng), label: (e.ordem_logistica && Number(e.ordem_logistica) > 0) ? String(Number(e.ordem_logistica)) : null, title: e.cliente || e.endereco })), [entregas]);
+    // ❌ TRAVA FÍSICA: Filtrar coordenadas inválidas (0,0) ou nulas
+    const entregaMarkers = React.useMemo(() => (entregas || [])
+        .filter(e => {
+            if (!e || e.lat == null || e.lng == null) return false;
+            const lat = Number(e.lat);
+            const lng = Number(e.lng);
+            // ❌ EXTERMINAR pinos em (0,0) ou coordenadas inválidas
+            if (lat === 0 || lng === 0) return false;
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+            return isValidSC(lat, lng);
+        })
+        .map(e => ({
+            id: e.id,
+            lat: Number(e.lat),
+            lng: Number(e.lng),
+            label: (e.ordem_logistica && Number(e.ordem_logistica) > 0) ? String(Number(e.ordem_logistica)) : null,
+            title: e.cliente || e.endereco
+        })), [entregas]);
 
     // Show any passed fleet items that have valid SC coords — do not hide the moto if offline; ensures a stable, fixed icon
-    const frotaMarkers = React.useMemo(() => (frota || []).filter(m => m && m.lat != null && m.lng != null && isValidSC(Number(m.lat), Number(m.lng))).map(m => ({ id: m.id, lat: Number(m.lat), lng: Number(m.lng), title: ((m && (m.nome || '') ? (String(m.nome).trim() + (m.sobrenome ? ' ' + String(m.sobrenome).trim() : '')).trim() : 'Motorista')) })), [frota]);
+    // ❌ TRAVA FÍSICA: Filtrar motoristas com coordenadas inválidas (0,0)
+    const frotaMarkers = React.useMemo(() => (frota || [])
+        .filter(m => {
+            if (!m || m.lat == null || m.lng == null) return false;
+            const lat = Number(m.lat);
+            const lng = Number(m.lng);
+            // ❌ EXTERMINAR pinos em (0,0)
+            if (lat === 0 || lng === 0) return false;
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+            return isValidSC(lat, lng);
+        })
+        .map(m => ({
+            id: m.id,
+            lat: Number(m.lat),
+            lng: Number(m.lng),
+            title: ((m && (m.nome || '') ? (String(m.nome).trim() + (m.sobrenome ? ' ' + String(m.sobrenome).trim() : '')).trim() : 'Motorista'))
+        })), [frota]);
 
     // On load: center or fit bounds
     const handleLoad = (m) => {

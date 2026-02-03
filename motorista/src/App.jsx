@@ -150,10 +150,11 @@ function InternalMobileApp() {
             // Debug raw entregas for mapping issues
             try { console.log('[motorista] Entregas Brutas:', res && res.data); } catch (e) { }
 
-            // Filter to relevant statuses for driver view (case-insensitive): Em Rota, pendente, aguardando
+            // Regra: Motorista deve ver apenas entregas com status 'em_rota'
             const raw = Array.isArray(res.data) ? res.data.slice() : (res.data || []);
             const filtered = raw.filter(p => {
-                try { const s = String(p && (p.status || '')).trim().toLowerCase(); return s === 'em rota' || s === 'em_rota' || s === 'pendente' || s === 'aguardando' || s === 'em_rota'; } catch (e) { return false; }
+                const s = String(p?.status || '').trim().toLowerCase();
+                return s === 'em_rota' || s === 'em rota';
             });
 
             // Fallback ordering: ordem_logistica > ordem > id

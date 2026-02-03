@@ -4,60 +4,95 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap } fro
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import supabase, { subscribeToTable, onSupabaseReady, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, buscarTodasEntregas } from './supabaseClient';
-import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, geocodeNominatim, searchNominatim, getOSRMRoute } from './geoUtils';
+import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, getOSRMRoute } from './geoUtils';
+import { 
+    isValidSC, 
+    fetchPredictions as getMapboxPredictions, 
+    geocodeMapbox, 
+    geocodePhoton, 
+    geocodeNominatim 
+} from './services/GeocodingService';
 
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
 // ===== CONFIGURAÇÕES E UTILIDADES =====
 
-// Santa Catarina bounds (validação de coordenadas)
-const isValidSC = (lat, lng) => {
-    if (lat == null || lng == null) return false;
-    const latN = Number(lat); const lngN = Number(lng);
-    if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return false;
-    // Santa Catarina: lat entre -25 e -30, lng entre -48 e -54
-    return (latN < -25.0 && latN > -30.0 && lngN > -54.0 && lngN < -48.0);
-};
-
 // Coordenadas padrão (Florianópolis - sede)
 const DEFAULT_MAP_CENTER = { lat: -27.5969, lng: -48.5495 };
 
-// Ícones Leaflet customizados
-function createNumberedIcon(number, color = '#2563eb') {
-    const n = number || '';
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><circle cx='18' cy='18' r='18' fill='${color}' stroke='%23fff' stroke-width='3'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='16' fill='%23fff' font-family='Arial' font-weight='800'>${n}</text></svg>`;
-    const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-    return L.icon({
-        iconUrl: url,
-        iconSize: [36, 36],
-        iconAnchor: [18, 36],
-        popupAnchor: [0, -36]
+// Ícones Leaflet customizados - Pinos em formato de gota (Google Maps style)
+// VERSÃO INLINE: Não depende de CSS externo, tudo renderizado via inline styles
+function createPinIcon(tipo, status) {
+    const tipoLower = String(tipo || 'entrega').toLowerCase().trim();
+    const statusLower = String(status || '').toLowerCase().trim();
+
+    // Determinar cor baseado no STATUS primeiro, depois TIPO
+    let color = '#2196F3'; // Azul Material Design - Entrega
+    let isConcluido = false;
+    let isFalha = false;
+
+    // Status tem prioridade sobre tipo
+    if (statusLower === 'concluida' || statusLower === 'concluída' || statusLower === 'entregue' || statusLower === 'finalizada' || statusLower === 'concluido') {
+        color = '#4CAF50'; // Verde Material Design - Concluído
+        isConcluido = true;
+    } else if (statusLower === 'falha' || statusLower === 'erro' || statusLower === 'cancelada' || statusLower === 'cancelado') {
+        color = '#F44336'; // Vermelho Material Design - Falha
+        isFalha = true;
+    } else {
+        // Definir por tipo
+        if (tipoLower === 'recolha') {
+            color = '#FF9800'; // Laranja Material Design - Recolha
+        } else if (tipoLower === 'outros' || tipoLower === 'outro') {
+            color = '#9C27B0'; // Lilás Material Design - Outros
+        } else {
+            color = '#2196F3'; // Azul Material Design - Entrega padrão
+        }
+    }
+
+    // HTML inline - formato de gota REAL sem dependências externas
+    // Se concluído: mostrar CHECK (✓) branco no centro
+    // Se falha: mostrar X vermelho no centro
+    // Senão: círculo branco padrão
+    const centerSymbol = isConcluido
+        ? `<div style="color: white; font-size: 16px; font-weight: bold; transform: rotate(45deg);">✓</div>`
+        : isFalha
+            ? `<div style="color: white; font-size: 14px; font-weight: bold; transform: rotate(45deg);">×</div>`
+            : `<div style="width: 12px; height: 12px; background: white; border-radius: 50%; transform: rotate(45deg);"></div>`;
+
+    const html = `
+        <div style="
+            background-color: ${color};
+            width: 30px;
+            height: 30px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        ">
+            ${centerSymbol}
+        </div>
+    `;
+
+    return L.divIcon({
+        html: html,
+        className: 'custom-pin-wrapper', // Classe vazia para não herdar estilos
+        iconSize: [30, 30],
+        iconAnchor: [15, 30], // Metade da largura, altura total
+        popupAnchor: [0, -30]
     });
 }
 
-function createMotoristaIcon(name = '', heading = 0, color = '#10b981') {
-    const label = String(name || '').trim();
-    // Ícone de moto/carrinha estilizado
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'>
-        <g transform='translate(24 24)'>
-            <circle cx='0' cy='0' r='22' fill='${color}' stroke='%23fff' stroke-width='3'/>
-            <!-- Moto icon -->
-            <g transform='translate(-12, -8) scale(0.6)'>
-                <circle cx='8' cy='20' r='4' fill='%23fff'/>
-                <circle cx='32' cy='20' r='4' fill='%23fff'/>
-                <path d='M 10,12 L 18,8 L 22,10 L 24,8 L 28,10 L 30,12 L 26,18 L 14,18 Z' fill='%23fff'/>
-                <rect x='18' y='10' width='8' height='8' fill='%23fff'/>
-            </g>
-        </g>
-    </svg>`;
-    const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-    return L.icon({
-        iconUrl: url,
-        iconSize: [48, 48],
-        iconAnchor: [24, 48],
-        popupAnchor: [0, -48]
-    });
-}
+// Ícone do motorista - moto de entrega (arquivo local correto)
+const bikeIcon = L.icon({
+    iconUrl: '/bicicleta-de-entrega.png',
+    iconSize: [35, 35],
+    iconAnchor: [17, 17],
+    className: 'marker-motorista-limpo',
+    popupAnchor: [0, -17]
+});
 
 // Simple scheduler (DESABILITADO para evitar loops)
 function scheduleRetry(ms = 5000) {
@@ -395,6 +430,18 @@ function App() {
     const [nomeGestor, setNomeGestor] = useState(null);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
+    const [isGeocoding, setIsGeocoding] = useState(false); // Estado de loading para geocodificação
+
+    // VERIFICAÇÃO CRUZADA: Estados para modal de escolha de cidade
+    const [showCityChoiceModal, setShowCityChoiceModal] = useState(false);
+    const [cityChoiceOptions, setCityChoiceOptions] = useState([]);
+    const [pendingAddressData, setPendingAddressData] = useState(null);
+
+    // FUZZY SEARCH: Estados para sugestões de correção
+    const [addressSuggestion, setAddressSuggestion] = useState(null);
+
+    // Estado para mensagens de erro de geocodificação visíveis na tela
+    const [geocodingError, setGeocodingError] = useState(null);
 
     // Initial fetch: load entregas once on mount (minimal logging)
     React.useEffect(() => {
@@ -407,11 +454,18 @@ function App() {
 
                 if (mounted) {
                     setEntregas(normalized);
-                    setEntregasEmEspera(normalized);
+                    // FILTRO CRÍTICO: Na Central de Despacho, mostrar apenas o que está pendente e sem motorista
+                    const apenasPendentes = normalized.filter(e => {
+                        const status = String(e.status || '').toLowerCase().trim();
+                        const semMotorista = (e.motorista_id === null || e.motorista_id === undefined || String(e.motorista_id) === 'null');
+                        const isAguardando = status === 'pendente' || status === 'aguardando' || status === '' || status === 'null' || status === 'aguardando despacho';
+                        return semMotorista && isAguardando;
+                    });
+                    setEntregasEmEspera(apenasPendentes);
                     setAllEntregas(normalized);
                     setTotalEntregas(normalized.length);
                     console.log('✅ Entregas carregadas com sucesso:', normalized.length);
-                    console.log('✅ ESTADO entregasEmEspera agora:', normalized);
+                    console.log('✅ ESTADO entregasEmEspera (filtrado):', apenasPendentes.length);
                 }
 
                 // Carregar motoristas também
@@ -536,17 +590,67 @@ function App() {
     const [historySuggestions, setHistorySuggestions] = useState([]);
     const searchTimeoutRef = useRef(null); // debounce para Nominatim
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history
-    const [recentList, setRecentList] = useState([]);
+
+    // Inicializar recentList com dados do localStorage (se existirem)
+    const [recentList, setRecentList] = useState(() => {
+        try {
+            const stored = localStorage.getItem('adecell_historico_entregas');
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    console.log('🔄 Histórico carregado do localStorage na inicialização:', parsed.length, 'itens');
+                    return parsed;
+                }
+            }
+        } catch (err) {
+            console.warn('⚠️ Erro ao carregar histórico do localStorage:', err);
+        }
+        return [];
+    });
+
+    const [historicoFilter, setHistoricoFilter] = useState(''); // Filtro de pesquisa do histórico
     const [allEntregas, setAllEntregas] = useState([]); // raw entregas from DB (no filters)
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
     const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
+    const rotaFinalizadaAudioTocadoRef = useRef(false); // Flag para garantir execução única do áudio
 
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
     const mapContainerRef = useRef(null);
 
+    // ===== PERSISTÊNCIA DO HISTÓRICO NO LOCALSTORAGE =====
+    // useEffect para sincronizar recentList com localStorage automaticamente
+    useEffect(() => {
+        if (recentList && recentList.length > 0) {
+            try {
+                // Limitar a 15 endereços mais recentes para não sobrecarregar
+                const limited = recentList.slice(0, 15);
+                localStorage.setItem('adecell_historico_entregas', JSON.stringify(limited));
+                console.log('💾 Histórico sincronizado com localStorage:', limited.length, 'itens');
+            } catch (err) {
+                console.warn('⚠️ Erro ao sincronizar histórico com localStorage:', err);
+            }
+        }
+    }, [recentList]); // Executar sempre que recentList mudar
+
+    // Função para limpar histórico
+    const limparHistorico = () => {
+        const confirmar = confirm('🗑️ Deseja realmente limpar todo o histórico de endereços?');
+        if (confirmar) {
+            try {
+                localStorage.removeItem('adecell_historico_entregas');
+                setRecentList([]);
+                setAllEntregas([]);
+                console.log('✅ Histórico limpo com sucesso');
+                alert('✅ Histórico limpo!');
+            } catch (err) {
+                console.warn('⚠️ Erro ao limpar histórico:', err);
+                alert('❌ Erro ao limpar histórico');
+            }
+        }
+    };
 
 
     // Fetch control refs to avoid concurrent fetches and manage retries
@@ -693,7 +797,17 @@ function App() {
 
         if (!enderecoCoords || !enderecoEntrega) { setDraftPoint(null); return; }
         try {
-            setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: Number(enderecoCoords.lat), lng: Number(enderecoCoords.lng), tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
+            const lat = Number(enderecoCoords.lat);
+            const lng = Number(enderecoCoords.lng);
+
+            // VALIDAÇÃO RIGOROSA: Nunca criar draft com coordenadas inválidas
+            if (!lat || !lng || lat === 0 || lng === 0 || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+                console.warn('⚠️ Coordenadas inválidas para draft:', { lat, lng });
+                setDraftPoint(null);
+                return;
+            }
+
+            setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: lat, lng: lng, tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
         } catch (e) {
             setDraftPoint(null);
         }
@@ -770,10 +884,12 @@ function App() {
 
             searchTimeoutRef.current = setTimeout(async () => {
                 try {
-                    const results = await searchNominatim(q);
+                    // 🗺️ USAR SERVIÇO DE PREDIÇÕES (MAPBOX)
+                    const results = await getMapboxPredictions(q);
                     setPredictions(results);
+                    console.log('✅ Mapbox Autosuggest retornou:', results.length, 'sugestões');
                 } catch (e) {
-                    console.warn('Nominatim search error:', e);
+                    console.warn('⚠️ Mapbox Autosuggest error:', e);
                     setPredictions([]);
                 }
             }, 500); // 500ms debounce
@@ -783,28 +899,84 @@ function App() {
         }
     }
 
-    // NOMINATIM: ao clicar numa sugestão, usar coordenadas já retornadas
-    async function handlePredictionClick(pred) {
+    // MAPBOX AUTOSUGGEST: ao clicar numa sugestão, usar coordenadas já retornadas
+    async function handleSelect(pred) {
         try {
             setEnderecoFromHistory(false);
-            setEnderecoEntrega(pred.display_name || '');
+            const enderecoVal = pred.display_name || pred.text || pred.place_name || '';
+            setEnderecoEntrega(enderecoVal);
 
-            // Nominatim já retorna lat/lng na busca, não precisa de segunda chamada!
+            // Mapbox já retorna lat/lng na busca, não precisa de segunda chamada!
             if (pred.lat != null && pred.lng != null) {
                 const lat = Number(pred.lat);
                 const lng = Number(pred.lng);
-                console.log('✅ Coordenadas capturadas do Nominatim:', { lat, lng });
+                console.log('✅ Coordenadas capturadas do Mapbox Autosuggest:', { lat, lng });
                 setEnderecoCoords({ lat, lng });
+
+                // Colocar o pino no mapa instantaneamente (preview)
+                setDraftPoint({
+                    cliente: (nomeCliente || '').trim() || 'Cliente Novo',
+                    endereco: enderecoVal,
+                    lat: lat,
+                    lng: lng,
+                    tipo: String(tipoEncomenda || 'Entrega').trim(),
+                    id: `draft-${Date.now()}`
+                });
             } else {
-                console.warn('Predição sem coordenadas válidas');
+                console.warn('⚠️ Predição sem coordenadas válidas');
                 setEnderecoCoords(null);
+                setDraftPoint(null);
             }
         } catch (e) {
-            console.warn('handlePredictionClick error:', e);
+            console.warn('handleSelect error:', e);
             setEnderecoCoords(null);
+            setDraftPoint(null);
         }
         try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
     }
+
+    // FUNÇÃO: Salvar nova posição quando marcador for arrastado
+    const handleMarkerDrag = React.useCallback(async (entregaId, newLat, newLng) => {
+        try {
+            console.log(`📍 Marcador arrastado - ID: ${entregaId}, Nova posição: [${newLat}, ${newLng}]`);
+
+            const sb = supabaseRef.current || supabase;
+            if (!sb || typeof sb.from !== 'function') {
+                console.error('❌ Supabase não disponível para salvar posição');
+                return;
+            }
+
+            // Validar se coordenadas estão em SC
+            if (!isValidSC(newLat, newLng)) {
+                alert('⚠️ Posição inválida! O marcador deve estar dentro de Santa Catarina.');
+                await carregarDados(); // Recarregar para reverter posição
+                return;
+            }
+
+            // Atualizar coordenadas no banco de dados
+            const { error } = await sb
+                .from('entregas')
+                .update({ lat: newLat, lng: newLng })
+                .eq('id', entregaId);
+
+            if (error) {
+                console.error('❌ Erro ao salvar nova posição:', error);
+                alert('❌ Erro ao salvar nova posição do marcador.');
+                await carregarDados(); // Recarregar para reverter
+            } else {
+                console.log('✅ Nova posição salva com sucesso!');
+                // Atualizar estados locais
+                setEntregasEmEspera(prev => prev.map(e =>
+                    e.id === entregaId ? { ...e, lat: newLat, lng: newLng } : e
+                ));
+                setAllEntregas(prev => prev.map(e =>
+                    e.id === entregaId ? { ...e, lat: newLat, lng: newLng } : e
+                ));
+            }
+        } catch (err) {
+            console.error('❌ Erro ao processar arraste do marcador:', err);
+        }
+    }, []);
 
     const carregarDados = React.useCallback(async () => {
         console.log('🔵 carregarDados CHAMADO - hasLoadedOnce:', hasLoadedOnce.current);
@@ -878,10 +1050,17 @@ function App() {
         }
 
 
-        // entregas: sempre carregar todas as entregas do DB (sem filtros complexos)
+        // entregas: carregar apenas entregas PENDENTES para Central de Despacho
         try {
-            // Be explicit about returned columns to ensure cliente/endereco are present
-            let q = sb.from('entregas').select('id,cliente,endereco,lat,lng,status,ordem_logistica,motorista_id,created_at');
+            // Buscar entregas com status 'pendente', 'aguardando', 'em_rota' OU motorista_id NULL (não despachadas)
+            let q = sb.from('entregas').select('id,cliente,endereco,lat,lng,status,ordem_logistica,motorista_id,tipo,created_at');
+
+            // FILTRO CRÍTICO: status IN ('pendente','aguardando','em_rota') OU motorista_id=null OU status vazio
+            // Isso garante que todas as entregas não finalizadas apareçam no mapa
+            if (q && typeof q.or === 'function') {
+                q = q.or('status.eq.pendente,status.eq.aguardando,status.eq.em_rota,motorista_id.is.null,status.is.null');
+            }
+
             // Prefer server-side ordering by ordem_logistica when supported
             if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
             const { data: entregasPend, error: entregasErr } = await q;
@@ -891,16 +1070,36 @@ function App() {
             } else {
                 const rawList = Array.isArray(entregasPend) ? entregasPend.slice() : [];
                 // normalize motorista_id to string and ensure cliente/endereco keys exist
-                const list = rawList.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null, cliente: it.cliente || it.cli || it.customer || '', endereco: it.endereco || it.address || '' }));
+                const list = rawList.map(it => ({
+                    ...it,
+                    motorista_id: it.motorista_id != null ? String(it.motorista_id) : null,
+                    cliente: it.cliente || it.cli || it.customer || '',
+                    endereco: it.endereco || it.address || '',
+                    tipo: it.tipo || 'Entrega'
+                }));
 
-                // FORCED: do not filter — show everything while debugging
+                // Armazenar todas as entregas (para estatísticas)
                 try { setAllEntregas(Array.isArray(list) ? list.slice() : []); } catch (e) { setAllEntregas([]); }
+
+// FILTRO CRÍTICO: Na Central de Despacho, mostrar APENAS entregas com status 'pendente'
+                // e que não possuem motorista vinculado.
+                const pendentesOnly = list.filter(e => {
+                    const status = String(e.status || '').toLowerCase().trim();
+                    const semMotorista = (e.motorista_id === null || e.motorista_id === undefined || String(e.motorista_id) === 'null');
+
+                    // Regra solicitada: Filtrar APENAS por status === 'pendente'
+                    return semMotorista && status === 'pendente';
+                });
+
                 try {
-                    console.log('🟢 carregarDados: setando entregasEmEspera com', list.length, 'itens');
-                    setEntregasEmEspera(Array.isArray(list) ? list.slice() : []);
+                    console.log('🟢 carregarDados: Total carregado do banco:', list.length);
+                    console.log('🟢 carregarDados: Entregas filtradas para dashboard:', pendentesOnly.length);
+                    console.log('📊 Status das entregas:', list.map(e => ({ id: e.id, status: e.status, motorista_id: e.motorista_id })));
+                    console.log('📊 Entregas filtradas:', pendentesOnly.map(e => ({ id: e.id, cliente: e.cliente, status: e.status, motorista_id: e.motorista_id })));
+                    setEntregasEmEspera(Array.isArray(pendentesOnly) ? pendentesOnly.slice() : []);
                 } catch (e) { setEntregasEmEspera([]); }
                 // Mirror into debug entregas state so debug UI shows the data (and set hasLoadedOnce)
-                try { setEntregas(Array.isArray(list) ? list.slice() : []); hasLoadedOnce.current = true; } catch (e) { setEntregas([]); hasLoadedOnce.current = true; }
+                try { setEntregas(Array.isArray(pendentesOnly) ? pendentesOnly.slice() : []); hasLoadedOnce.current = true; } catch (e) { setEntregas([]); hasLoadedOnce.current = true; }
                 // reset retry counter on success
                 try { retryCountRef.current = 0; } catch (e) { }
             }
@@ -938,28 +1137,64 @@ function App() {
             if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
         } catch (e) { console.warn('Erro carregando configuracoes:', e); setGestorPhone(null); }
 
-        // Histórico recente
+        // Histórico recente - BUSCAR DA TABELA 'entregas'
         try {
-            let q5 = sb.from('entregas').select('cliente,endereco,created_at');
-            if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
-            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(200);
-            const { data: recent, error: recentErr } = await q5;
-            if (recentErr) { console.error('Erro na Tabela Entregas (histórico):', recentErr); setRecentList([]); }
-            else if (recent) {
+            // Buscar últimas 20 entregas com endereços
+            const { data: entregas, error: entregasErr } = await sb
+                .from('entregas')
+                .select('endereco, cliente, created_at')
+                .order('created_at', { ascending: false })
+                .limit(20);
+
+            if (entregasErr) {
+                console.error('❌ Erro ao buscar histórico de entregas:', entregasErr);
+            } else if (entregas && entregas.length > 0) {
+                // Filtrar endereços únicos (sem repetição)
                 const seen = new Set();
                 const unique = [];
-                for (const r of recent) {
-                    const key = (r.cliente || '').trim().toLowerCase();
-                    if (!key) continue;
+
+                for (const entrega of entregas) {
+                    const endereco = (entrega.endereco || '').trim();
+                    const cliente = (entrega.cliente || '').trim();
+
+                    if (!endereco) continue;
+
+                    // Usar endereço como chave única
+                    const key = endereco.toLowerCase();
                     if (seen.has(key)) continue;
+
                     seen.add(key);
-                    unique.push({ cliente: r.cliente, endereco: r.endereco });
+                    unique.push({
+                        cliente: cliente,
+                        endereco: endereco
+                    });
                 }
-                setRecentList(unique);
+
+                // Limitar a 15 itens mais recentes
+                const limited = unique.slice(0, 15);
+
+                // ✅ APENAS ATUALIZAR SE HOUVER DADOS NOVOS (evita piscar/resetar)
+                if (limited.length > 0) {
+                    setRecentList(limited);
+
+                    // Salvar no localStorage para persistência
+                    try {
+                        localStorage.setItem('adecell_historico_entregas', JSON.stringify(limited));
+                        console.log('✅ Histórico carregado da tabela entregas:', limited.length, 'endereços únicos');
+                    } catch (storageErr) {
+                        console.warn('⚠️ Erro ao salvar histórico no localStorage:', storageErr);
+                    }
+                } else {
+                    console.log('ℹ️ Banco retornou vazio - mantendo histórico atual do localStorage');
+                }
             } else {
-                setRecentList([]);
+                console.log('ℹ️ Nenhuma entrega encontrada - mantendo histórico atual');
             }
-        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); }
+        } catch (e) {
+            console.warn('⚠️ Erro ao carregar histórico de entregas:', e);
+            // Manter dados do localStorage que já foram carregados na inicialização
+        }
+
         setLoadingFrota(false);
     }, []);
 
@@ -1264,8 +1499,60 @@ function App() {
 
     // Reset do mapa quando rota é finalizada
     React.useEffect(() => {
+        // TRAVA CRÍTICA: NÃO executar durante carregamento inicial (refresh)
+        // Só permitir limpeza após dados terem sido carregados pelo menos uma vez
+        if (!hasLoadedOnce.current) {
+            console.log('⚠️ Bloqueando limpeza de mapa - carregamento inicial ainda não completou');
+            return;
+        }
+
+        // TRAVA ADICIONAL: Só limpar se houver uma rota ativa (não limpar em dashboard vazio)
+        if (!rotaAtiva || rotaAtiva.length === 0) {
+            console.log('⚠️ Bloqueando limpeza de mapa - sem rota ativa');
+            return;
+        }
+
         if (rotaFinalizada && mapRef.current) {
             console.log('🏁 Rota finalizada! Limpando mapa...');
+
+            // 🎵 GATILHO DE ÁUDIO: Tocar sucesso.mp3 APENAS UMA VEZ
+            if (!rotaFinalizadaAudioTocadoRef.current) {
+                console.log('🔊 Tocando áudio de sucesso...');
+                try {
+                    // Tentar tocar sucesso.mp3 primeiro
+                    const audioSucesso = new Audio('/sucesso.mp3');
+                    audioSucesso.onerror = () => {
+                        // Fallback para áudio existente se sucesso.mp3 não estiver disponível
+                        console.log('⚠️ sucesso.mp3 não encontrado, usando áudio padrão');
+                        audioRef.current.play().catch(err => console.warn('Áudio bloqueado:', err));
+                    };
+                    audioSucesso.play().catch(err => {
+                        console.warn('Áudio bloqueado:', err);
+                        // Tentar áudio padrão como fallback
+                        audioRef.current.play().catch(() => { });
+                    });
+
+                    // LIMPEZA TOTAL: Zerar TODOS os estados
+                    console.log('🧽 LIMPEZA TOTAL: Zerando estados e localStorage');
+
+                    setEntregasEmEspera([]);
+                    setRotaAtiva([]);
+                    setMotoristaDaRota(null);
+
+                    // Limpar localStorage para evitar pinos fantasmas no refresh
+                    try {
+                        localStorage.removeItem('adecell_historico_entregas');
+                        console.log('✅ localStorage limpo');
+                    } catch (err) {
+                        console.warn('⚠️ Erro ao limpar localStorage:', err);
+                    }
+
+                    // Marcar que áudio foi tocado para esta rota
+                    rotaFinalizadaAudioTocadoRef.current = true;
+                } catch (e) {
+                    console.warn('Erro ao tocar áudio de sucesso:', e);
+                }
+            }
 
             // Limpar estado de rota ativa após 2 segundos
             const timer = setTimeout(() => {
@@ -1275,10 +1562,13 @@ function App() {
                 setRotaAtiva([]);
                 setMotoristaDaRota(null);
 
-                // CRÍTICO: Garantir que entregasEmEspera não mantenha itens finalizados
+                // Resetar flag de áudio para próxima rota
+                rotaFinalizadaAudioTocadoRef.current = false;
+
+                // CRÍTICO: Garantir que entregasEmEspera não mantenha itens finalizados (verdes E vermelhos)
                 setEntregasEmEspera(prev => {
-                    // Remover todas as entregas que já foram concluídas
-                    const statusFinais = ['concluida', 'concluída', 'finalizada', 'entregue'];
+                    // Remover TODAS as entregas que já foram concluídas (VERDES) ou falharam (VERMELHAS)
+                    const statusFinais = ['concluida', 'concluída', 'finalizada', 'entregue', 'concluido', 'falha', 'erro', 'cancelada', 'cancelado'];
                     return prev.filter(e => {
                         const status = String(e.status || '').toLowerCase().trim();
                         return !statusFinais.includes(status);
@@ -1313,7 +1603,7 @@ function App() {
 
             return () => clearTimeout(timer);
         }
-    }, [rotaFinalizada, frota, mapCenterState]);
+    }, [rotaFinalizada, frota, mapCenterState, rotaAtiva]); // Adicionar rotaAtiva como dependência
 
     // REMOVIDO: Ajuste automático de bounds (dependia do Google Maps LatLngBounds)
     // Com Leaflet, pode ser implementado usando map.fitBounds() se necessário
@@ -1633,6 +1923,13 @@ function App() {
     const recalcRotaForMotorista = React.useCallback(async (motoristaId) => {
         try {
             if (!motoristaId) return;
+
+            // VALIDAÇÃO CRÍTICA: verificar se há entregas antes de processar
+            if (!entregasEmEspera || entregasEmEspera.length === 0) {
+                console.warn('recalcRotaForMotorista: nenhuma entrega disponível para roteirizar');
+                return;
+            }
+
             // Prevent concurrent routing operations to avoid resource exhaustion (ERR_INSUFFICIENT_RESOURCES)
             if (routingInProgressRef.current) {
                 console.warn('recalcRotaForMotorista: route calculation already in progress; skipping');
@@ -1956,62 +2253,139 @@ function App() {
         return () => clearInterval(id);
     }, []);
 
-    const adicionarAosPendentes = async (e) => {
-        e.preventDefault();
+    // ===== FUZZY SEARCH: Funções de similaridade e sugestões =====
 
-        // Coordenadas: usar se disponíveis via Nominatim
-        let lat = null;
-        let lng = null;
-        if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
-            lat = Number(enderecoCoords.lat);
-            lng = Number(enderecoCoords.lng);
+    // Calcula distância de Levenshtein (similaridade entre strings)
+    const levenshteinDistance = (str1, str2) => {
+        const s1 = str1.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const s2 = str2.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+        const len1 = s1.length;
+        const len2 = s2.length;
+        const matrix = [];
+
+        for (let i = 0; i <= len2; i++) {
+            matrix[i] = [i];
         }
 
-        // Preparar observações
-        const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
-        const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
-        const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
-
-        if (!clienteVal || !enderecoVal) {
-            alert('Preencha nome do cliente e endereço.');
-            return;
+        for (let j = 0; j <= len1; j++) {
+            matrix[0][j] = j;
         }
 
-        // IMPORTANTE: Se não tiver coordenadas, tentar geocodificar com Nominatim
-        // MAS se falhar, SALVAR MESMO ASSIM (fallback gracioso - user requirement)
-        if (lat === null || lng === null) {
-            console.log('🔍 Tentando geocodificar com Nominatim:', enderecoVal);
-
-            try {
-                const result = await geocodeNominatim(enderecoVal);
-
-                if (result && result.lat != null && result.lng != null) {
-                    lat = result.lat;
-                    lng = result.lng;
-                    console.log('✅ Endereço geocodificado com sucesso:', enderecoVal, '->', { lat, lng });
+        for (let i = 1; i <= len2; i++) {
+            for (let j = 1; j <= len1; j++) {
+                if (s2.charAt(i - 1) === s1.charAt(j - 1)) {
+                    matrix[i][j] = matrix[i - 1][j - 1];
                 } else {
-                    console.warn('⚠️ Nominatim não encontrou coordenadas - salvando com lat/lng da sede');
-                    // FALLBACK GRACIOSO: usar coordenadas da sede
-                    lat = DEFAULT_MAP_CENTER.lat;
-                    lng = DEFAULT_MAP_CENTER.lng;
+                    matrix[i][j] = Math.min(
+                        matrix[i - 1][j - 1] + 1,
+                        matrix[i][j - 1] + 1,
+                        matrix[i - 1][j] + 1
+                    );
                 }
-            } catch (geocodeError) {
-                console.warn('⚠️ Geocoding falhou, usando coordenadas da sede:', geocodeError);
-                // FALLBACK GRACIOSO: usar coordenadas da sede
-                lat = DEFAULT_MAP_CENTER.lat;
-                lng = DEFAULT_MAP_CENTER.lng;
             }
         }
 
-        // Debug: verificar estado do supabase
-        console.log('🔵 adicionarAosPendentes - supabase:', supabase, 'supabaseRef.current:', supabaseRef.current);
+        return matrix[len2][len1];
+    };
 
+    // Calcula similaridade percentual entre duas strings
+    const calcularSimilaridade = (str1, str2) => {
+        const distance = levenshteinDistance(str1, str2);
+        const maxLen = Math.max(str1.length, str2.length);
+        return maxLen === 0 ? 100 : ((maxLen - distance) / maxLen) * 100;
+    };
+
+    // Busca sugestões de ruas similares usando Nominatim
+    const buscarSugestaoSimilar = async (enderecoOriginal, bairro, cidade) => {
+        try {
+            console.log(`🔍 Buscando sugestão similar para: "${enderecoOriginal}" em ${bairro}, ${cidade}`);
+
+            // Extrair nome da rua do endereço original
+            const ruaOriginal = enderecoOriginal.split(',')[0].trim()
+                .replace(/^(rua|avenida|av|travessa|trav|alameda|estrada)\s+/i, ''); // Remove prefixos
+
+            console.log(`📍 Rua extraída para comparação: "${ruaOriginal}"`);
+
+            // Buscar especificamente por ruas/streets no bairro usando Nominatim
+            const searchQuery = `street ${bairro} ${cidade} SC`;
+            const viewbox = '-48.85,-27.85,-48.35,-27.35';
+
+            const url = `https://nominatim.openstreetmap.org/search?` +
+                `q=${encodeURIComponent(searchQuery)}` +
+                `&format=json` +
+                `&viewbox=${viewbox}` +
+                `&bounded=1` +
+                `&addressdetails=1` +
+                `&featuretype=street` +
+                `&limit=50`;
+
+            console.log(`🌐 URL Nominatim para busca de ruas: ${url}`);
+
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Adecell_Logistica_v2',
+                    'Accept-Language': 'pt-BR,pt;q=0.9'
+                }
+            });
+
+            if (!response.ok) {
+                console.warn('⚠️ Nominatim retornou erro na busca de ruas');
+                return null;
+            }
+
+            const data = await response.json();
+            console.log(`📊 Nominatim retornou ${data.length} resultados`);
+
+            // Buscar melhor correspondência
+            let melhorMatch = null;
+            let melhorSimilaridade = 0;
+
+            data.forEach(item => {
+                const ruaEncontrada = item.address?.road || item.address?.street || item.display_name?.split(',')[0];
+
+                if (ruaEncontrada) {
+                    const ruaLimpa = ruaEncontrada.replace(/^(rua|avenida|av|travessa|trav|alameda|estrada)\s+/i, '');
+                    const similaridade = calcularSimilaridade(ruaOriginal, ruaLimpa);
+
+                    console.log(`🔍 Comparando "${ruaOriginal}" vs "${ruaLimpa}": ${similaridade.toFixed(1)}%`);
+
+                    // Considerar sugestão se similaridade >= 60%
+                    if (similaridade >= 60 && similaridade > melhorSimilaridade) {
+                        melhorSimilaridade = similaridade;
+                        melhorMatch = {
+                            rua: ruaEncontrada,
+                            endereco: item.display_name,
+                            lat: parseFloat(item.lat),
+                            lng: parseFloat(item.lon),
+                            similaridade: similaridade.toFixed(1)
+                        };
+                    }
+                }
+            });
+
+            if (melhorMatch) {
+                console.log(`✨ Sugestão encontrada: "${melhorMatch.rua}" (${melhorMatch.similaridade}% similar)`);
+            } else {
+                console.warn('❌ Nenhuma rua similar encontrada (threshold 60%)');
+            }
+
+            return melhorMatch;
+        } catch (error) {
+            console.error('❌ Erro ao buscar sugestão similar:', error);
+            return null;
+        }
+    };
+
+    // Função auxiliar para salvar entrega com coordenadas
+    const salvarEntregaComCoordenadas = async (lat, lng, cliente, endereco, observacoes, tipo) => {
         const sb = supabaseRef.current || supabase;
         if (!sb || typeof sb.from !== 'function') {
-            console.error('❌ Supabase não disponível:', { sb, supabase, ref: supabaseRef.current });
+            console.error('❌ Supabase não disponível');
             alert('Banco de dados indisponível no momento. Aguarde alguns segundos e tente novamente.');
             return;
         }
+
         // Validação final: NUNCA salvar sem coordenadas válidas
         if (lat === null || lng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
             console.error('❌ BLOQUEIO: Tentativa de salvar entrega sem coordenadas válidas');
@@ -2019,25 +2393,230 @@ function App() {
             return;
         }
 
-        console.log('✅ Salvando entrega com coordenadas validadas:', { cliente: clienteVal, endereco: enderecoVal, lat, lng });
+        // VALIDAÇÃO: Verificar duplicatas (< 10 metros)
+        try {
+            const { data: existentes } = await sb.from('entregas').select('id,cliente,endereco,lat,lng');
+            if (existentes && existentes.length > 0) {
+                const TOLERANCIA_METROS = 10;
+                const duplicata = existentes.find(e => {
+                    if (!e.lat || !e.lng) return false;
+                    const distancia = haversineKm({ lat: e.lat, lng: e.lng }, { lat, lng }) * 1000;
+                    return distancia < TOLERANCIA_METROS;
+                });
+
+                if (duplicata) {
+                    const confirmar = confirm(
+                        `⚠️ ATENÇÃO: Coordenadas muito próximas!\n\n` +
+                        `Já existe entrega cadastrada a menos de ${TOLERANCIA_METROS}m deste local:\n\n` +
+                        `• Cliente: ${duplicata.cliente}\n` +
+                        `• Endereço: ${duplicata.endereco}\n\n` +
+                        `Deseja continuar mesmo assim?`
+                    );
+
+                    if (!confirmar) {
+                        console.log('⚠️ Usuário cancelou salvamento por coordenadas duplicadas');
+                        return;
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('⚠️ Não foi possível verificar duplicatas (não crítico):', err);
+        }
+
+        console.log('✅ Salvando entrega com coordenadas validadas:', { cliente, endereco, lat, lng });
+
+        // Adicionar observações diretamente
+        const observacoesFinais = observacoes;
 
         const { error } = await sb.from('entregas').insert([{
-            cliente: clienteVal,
-            endereco: enderecoVal,
-            tipo: String(tipoEncomenda || '').trim(),
+            cliente: cliente,
+            endereco: endereco,
+            tipo: String(tipo || '').trim(),
             lat: lat,
             lng: lng,
             status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
-            observacoes: obsValue
+            observacoes: observacoesFinais
         }]);
+
         if (!error) {
             alert("✅ Salvo com sucesso!");
-            setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); setEnderecoFromHistory(false);
-            // clear draft preview point after persisting
+            setNomeCliente('');
+            setEnderecoEntrega('');
+            setObservacoesGestor('');
+            setEnderecoCoords(null);
+            setEnderecoFromHistory(false);
             setDraftPoint(null);
             try { carregarDados(); } catch (e) { }
         } else {
             alert('❌ Erro ao salvar: ' + (error.message || 'Erro desconhecido'));
+        }
+    };
+
+    // Função auxiliar para continuar geocodificação após escolha de cidade
+    const continuarGeocod = async (enderecoCompleto, cidadeDetectada, clienteVal, obsValue, tipoEncomenda) => {
+        try {
+            console.log('🔍 GEOCODIFICAÇÃO CIRÚRGICA:', { enderecoCompleto, cidadeDetectada });
+            console.log('� Tentando Photon primeiro...');
+            let result = await geocodeMapbox(enderecoCompleto);
+
+            // Fallback 1: Photon se Mapbox falhar
+            if (!result) {
+                console.log('🔄 Mapbox falhou, tentando Photon...');
+                result = await geocodePhoton(enderecoCompleto);
+            }
+
+            // Fallback 2: Nominatim se Photon falhar
+            if (!result) {
+                console.log('🔄 Photon falhou, tentando Nominatim...');
+                result = await geocodeNominatim(enderecoCompleto);
+            }
+
+            let lat = null;
+            let lng = null;
+
+            if (result && result.lat != null && result.lng != null) {
+                lat = result.lat;
+                lng = result.lng;
+
+                console.log('✅ Endereço geocodificado com sucesso:', enderecoCompleto, '->', { lat, lng });
+
+                // Salvar entrega com coordenadas
+                await salvarEntregaComCoordenadas(lat, lng, clienteVal, enderecoCompleto.split(',')[0], obsValue, tipoEncomenda);
+            } else {
+                console.error('❌ Nominatim não encontrou coordenadas para:', enderecoCompleto);
+
+                // FUZZY SEARCH: Tentar buscar sugestão similar
+                const partes = enderecoCompleto.split(',');
+                const bairroDetectado = partes[partes.length - 3]?.trim();
+
+                if (cidadeDetectada && bairroDetectado) {
+                    console.log(`🔍 Tentando buscar sugestão similar...`);
+                    const sugestao = await buscarSugestaoSimilar(enderecoCompleto, bairroDetectado, cidadeDetectada);
+
+                    if (sugestao) {
+                        setAddressSuggestion({
+                            original: enderecoCompleto,
+                            sugestao: sugestao.rua,
+                            endereco: sugestao.endereco,
+                            lat: sugestao.lat,
+                            lng: sugestao.lng,
+                            similaridade: sugestao.similaridade,
+                            cliente: clienteVal,
+                            observacoes: obsValue,
+                            tipo: tipoEncomenda,
+                            alertaSemNumero
+                        });
+                        setIsGeocoding(false);
+                        setPendingAddressData(null);
+                        return; // Não mostrar alert - mostrar sugestão
+                    }
+                }
+
+                // Sem sugestão - mostrar erro visual na tela
+                console.warn('❌ Endereço não encontrado e sem sugestões similares:', enderecoCompleto);
+
+                setGeocodingError({
+                    message: `Endereço "${enderecoCompleto}" não foi encontrado`,
+                    suggestions: 'Verifique: 1) Nome da rua, 2) Número, 3) Bairro correto, 4) Cidade (Biguaçu, São José, Florianópolis, Palhoça, Santo Amaro da Imperatriz)'
+                });
+
+                setIsGeocoding(false);
+                setPendingAddressData(null);
+            }
+        } catch (error) {
+            console.error('❌ Erro na geocodificação:', error);
+            console.warn('Verifique sua conexão com a internet.');
+        } finally {
+            setIsGeocoding(false);
+            setPendingAddressData(null);
+        }
+    };
+
+    const adicionarAosPendentes = async (e) => {
+        e.preventDefault();
+
+        let lat = enderecoCoords?.lat;
+        let lng = enderecoCoords?.lng;
+
+        const obsValue = (observacoesGestor || '').trim();
+        const clienteVal = (nomeCliente || '').trim();
+        const enderecoVal = (enderecoEntrega || '').trim();
+        
+        if (!clienteVal || !enderecoVal) {
+            alert('Preencha nome do cliente e endereço.');
+            return;
+        }
+
+        setIsGeocoding(true);
+        try {
+            // Geocodificação via serviço EXTERNO se não vier do autocomplete
+            if (!lat || !lng) {
+                console.log('🔍 Geocodificando endereço via GeocodingService:', enderecoVal);
+                const result = await geocodeMapbox(enderecoVal) || 
+                               await geocodePhoton(enderecoVal) || 
+                               await geocodeNominatim(enderecoVal);
+
+                if (result) {
+                    lat = result.lat;
+                    lng = result.lng;
+                    console.log('✅ Localizado:', { lat, lng });
+                } else {
+                    setGeocodingError({
+                        message: `Endereço "${enderecoVal}" não encontrado.`,
+                        suggestions: 'Verifique o número, bairro e cidade (Florianópolis, São José, Palhoça, etc).'
+                    });
+                    setIsGeocoding(false);
+                    return;
+                }
+            }
+
+            const sb = supabaseRef.current || supabase;
+            if (!sb) return;
+
+            // VALIDAÇÃO DE DUPLICIDADE (Hoje + Pendente + <10m)
+            const hoje = new Date().toISOString().split('T')[0];
+            const { data: existentes } = await sb.from('entregas')
+                .select('id, cliente, lat, lng, created_at, status')
+                .eq('status', 'pendente')
+                .gte('created_at', hoje);
+
+            if (existentes && existentes.length > 0) {
+                const duplicata = existentes.find(ex => {
+                    const d = haversineKm({ lat: ex.lat, lng: ex.lng }, { lat, lng }) * 1000;
+                    return d < 10;
+                });
+
+                if (duplicata) {
+                    const confirmar = confirm(`⚠️ Entrega DUPLICADA hoje!\n\nJá existe uma entrega pendente para este local hoje (Cliente: ${duplicata.cliente}).\n\nDeseja cadastrar mesmo assim?`);
+                    if (!confirmar) {
+                        setIsGeocoding(false);
+                        return;
+                    }
+                }
+            }
+
+            console.log('💾 Salvando entrega...');
+            const { error } = await sb.from('entregas').insert([{
+                cliente: clienteVal,
+                endereco: enderecoVal,
+                tipo: String(tipoEncomenda || 'Entrega').trim(),
+                lat, lng,
+                status: 'pendente',
+                observacoes: obsValue
+            }]);
+
+            if (!error) {
+                alert("✅ Salvo com sucesso!");
+                setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); 
+                setEnderecoCoords(null); setDraftPoint(null);
+                carregarDados();
+            } else {
+                alert('❌ Erro ao salvar: ' + error.message);
+            }
+        } catch (err) {
+            console.error('❌ adiconarAosPendentes falhou:', err);
+        } finally {
+            setIsGeocoding(false);
         }
     };
 
@@ -2054,13 +2633,15 @@ function App() {
             return;
         }
 
-        console.log('🗑️ Excluindo entrega ID:', parsedId);
-        const { error } = await sb.from('entregas').delete().eq('id', parsedId);
+        console.log('🗑️ Cancelando entrega (Soft Delete) ID:', parsedId);
+        // Em vez de deletar fisicamente, mudamos o status para 'cancelado'
+        // Assim protegemos os dados e o pedido some do despacho pelo filtro de status
+        const { error } = await sb.from('entregas').update({ status: 'cancelado' }).eq('id', parsedId);
 
         if (error) {
-            console.error('❌ Erro ao excluir entrega:', error);
+            console.error('❌ Erro ao cancelar entrega:', error);
         } else {
-            console.log('✅ Entrega excluída com sucesso!');
+            console.log('✅ Entrega cancelada com sucesso!');
             carregarDados();
         }
     };
@@ -2162,6 +2743,14 @@ function App() {
         console.log('🔌 Status:', selectedDriver.esta_online ? 'Online ✅' : 'Offline ⚠️');
         console.log('📦 Entregas a enviar:', entregasEmEspera.length);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        // VALIDAÇÃO CRÍTICA: verificar se há entregas antes de processar
+        if (!entregasEmEspera || entregasEmEspera.length === 0) {
+            console.error('❌ Nenhuma entrega disponível para despacho');
+            alert('❌ Erro: Não há entregas disponíveis para enviar. Verifique se há pedidos pendentes na Central de Despacho.');
+            setDispatchLoading(false);
+            return;
+        }
 
         setDispatchLoading(true);
         try {
@@ -2269,8 +2858,20 @@ function App() {
 
                 // Only close modal and clear selection if update succeeded
                 if (!updErr) {
+                    console.log('✅ Bulk update bem-sucedido - sincronizando estado local...');
+                    // Forçar atualização do estado local IMEDIATAMENTE
+                    setEntregasEmEspera(prev => {
+                        const updated = prev.filter(p => !assignedIdsStr.includes(String(p.id)));
+                        console.log(`🔄 Estado local atualizado: ${prev.length} → ${updated.length} entregas`);
+                        return updated;
+                    });
                     setShowDriverSelect(false);
                     setSelectedMotorista(null);
+                } else {
+                    console.error('❌ Bulk update falhou - mantendo modal aberto');
+                    alert('❌ Erro ao atualizar entregas no banco de dados. Verifique a conexão e tente novamente.');
+                    setDispatchLoading(false);
+                    return;
                 }
             }
             // Persist ordem_logistica per entrega (cada pedido precisa da sua ordem específica)
@@ -2437,6 +3038,30 @@ function App() {
 
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+            {/* Animação CSS para sugestão fuzzy search */}
+            <style>{`
+                @keyframes slideDown {
+                    from {
+                        opacity: 0;
+                        transform: translateY(-10px);
+                    }
+                    to {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                }
+                
+                /* CSS do botão ADICIONAR À LISTA */
+                button[type="submit"] {
+                    width: 100% !important;
+                    transition: all 0.2s ease;
+                }
+                
+                button[type="submit"]:active:not(:disabled) {
+                    transform: scale(0.95) !important;
+                }
+            `}</style>
+
             {missingSupabase && (
                 <div style={{ width: '100%', background: '#7c2d12', color: '#fff', padding: '8px 12px', textAlign: 'center' }}>⚠️ Aviso: credenciais do Supabase ausentes — mostrando o modo de desenvolvimento/local. Configure <strong>VITE_SUPABASE_URL</strong> e <strong>VITE_SUPABASE_ANON_KEY</strong> em <code>.env.local</code> para habilitar dados em tempo real.</div>
             )}
@@ -2543,9 +3168,9 @@ function App() {
                                             <Marker
                                                 key={`motorista-${motorista.id}`}
                                                 position={[Number(motorista.lat), Number(motorista.lng)]}
-                                                icon={createMotoristaIcon(fullName(motorista))}
+                                                icon={bikeIcon}
                                             >
-                                                <Tooltip permanent direction="top" offset={[0, -10]}>
+                                                <Tooltip permanent direction="top" offset={[0, -20]}>
                                                     <strong>{fullName(motorista)}</strong>
                                                 </Tooltip>
                                                 <Popup>
@@ -2562,31 +3187,39 @@ function App() {
                                             const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
                                             return (entregasEmEspera || []).filter(e => {
                                                 const status = String(e.status || '').toLowerCase().trim();
-                                                const hasValidCoords = e.lat != null && e.lng != null &&
-                                                    Number.isFinite(Number(e.lat)) &&
-                                                    Number.isFinite(Number(e.lng)) &&
-                                                    isValidSC(Number(e.lat), Number(e.lng));
-                                                return !statusInvalidos.includes(status) && hasValidCoords;
+
+                                                // FILTRO RIGOROSO: NUNCA renderizar se coordenadas forem inválidas
+                                                if (!e.lat || !e.lng) return false; // null, undefined, 0, ''
+                                                if (e.lat === 0 || e.lng === 0) return false; // Coordenadas zero (oceano)
+
+                                                const lat = Number(e.lat);
+                                                const lng = Number(e.lng);
+
+                                                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+                                                if (!isValidSC(lat, lng)) return false;
+
+                                                return !statusInvalidos.includes(status);
                                             });
                                         })().map((entrega, idx) => {
                                             const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
-                                            let pinColor = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' ? '#c084fc' : '#2563eb');
+                                            const status = String(entrega.status || '').toLowerCase();
                                             const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
 
                                             return (
                                                 <Marker
                                                     key={`entrega-${entrega.id}`}
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
-                                                    icon={createNumberedIcon(num, pinColor)}
+                                                    icon={createPinIcon(tipo, status)}
+                                                    draggable={false}
                                                 >
-                                                    <Tooltip permanent direction="top" offset={[0, -10]} className="entrega-tooltip" opacity={0.95}>
-                                                        <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
+                                                    <Tooltip permanent direction="top" offset={[0, -42]} className="pin-tooltip" opacity={0.98}>
+                                                        <span style={{ fontWeight: '600', fontSize: '12px' }}>{entrega.cliente}</span>
                                                     </Tooltip>
                                                     <Popup>
                                                         <div>
                                                             <strong>{entrega.cliente}</strong><br />
                                                             {entrega.endereco}<br />
-                                                            <em style={{ color: pinColor }}>{tipo.toUpperCase()}</em>
+                                                            <em>{tipo.toUpperCase()}</em>
                                                         </div>
                                                     </Popup>
                                                 </Marker>
@@ -2594,26 +3227,34 @@ function App() {
                                         })}
 
                                         {/* Entregas ativas (rota em andamento) */}
-                                        {(entregasAtivasNoMapa || []).map((entrega, idx) => {
-                                            if (!isValidSC(Number(entrega.lat), Number(entrega.lng))) return null;
+                                        {(entregasAtivasNoMapa || []).filter(e => {
+                                            // FILTRO RIGOROSO: NUNCA renderizar coordenadas inválidas
+                                            if (!e.lat || !e.lng) return false;
+                                            if (e.lat === 0 || e.lng === 0) return false;
+                                            const lat = Number(e.lat);
+                                            const lng = Number(e.lng);
+                                            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+                                            return isValidSC(lat, lng);
+                                        }).map((entrega, idx) => {
                                             const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
-                                            let pinColor = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' ? '#c084fc' : '#10b981'); // Verde para ativas
+                                            const status = String(entrega.status || '').toLowerCase();
                                             const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
 
                                             return (
                                                 <Marker
                                                     key={`ativa-${entrega.id}`}
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
-                                                    icon={createNumberedIcon(num, pinColor)}
+                                                    icon={createPinIcon(tipo, status)}
+                                                    draggable={false}
                                                 >
-                                                    <Tooltip permanent direction="top" offset={[0, -10]} className="entrega-tooltip" opacity={0.95}>
-                                                        <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
+                                                    <Tooltip permanent direction="top" offset={[0, -42]} className="pin-tooltip" opacity={0.98}>
+                                                        <span style={{ fontWeight: '600', fontSize: '12px' }}>{entrega.cliente}</span>
                                                     </Tooltip>
                                                     <Popup>
                                                         <div>
                                                             <strong>{entrega.cliente}</strong><br />
                                                             {entrega.endereco}<br />
-                                                            <em style={{ color: pinColor }}>EM ROTA</em>
+                                                            <em>EM ROTA</em>
                                                         </div>
                                                     </Popup>
                                                 </Marker>
@@ -2691,47 +3332,346 @@ function App() {
                                 <div style={{ position: 'relative' }}>
                                     <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
                                         try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
-                                        try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
+                                        try {
+                                            clearTimeout(predictionTimerRef.current);
+                                            const q = String(e.target.value || '').trim();
+                                            if (q.length >= 3) {
+                                                predictionTimerRef.current = setTimeout(async () => { try { await fetchPredictions(q); } catch (err) { } }, 500);
+                                            } else {
+                                                setPredictions([]);
+                                            }
+                                        } catch (e) { }
                                     }} />
 
-                                    {/* Suggestions dropdown: history first, then Google predictions */}
-                                    {((historySuggestions && historySuggestions.length > 0) || (predictions && predictions.length > 0)) && (
-                                        <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
-                                            {historySuggestions && historySuggestions.map((h, idx) => (
-                                                <div key={'h-' + idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                    <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
-                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
+                                    {/* 1. Substituição do Input (Visual) conforme solicitado */}
+                                    {predictions && predictions.length > 0 && (
+                                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: 'white', color: 'black', zIndex: 99999, border: '2px solid #007bff', borderRadius: '4px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '300px', overflowY: 'auto' }}>
+                                            {predictions.map(p => (
+                                                <div key={p.id} onClick={() => handleSelect(p)} style={{ padding: '12px', cursor: 'pointer', borderBottom: '1px solid #eee' }}>
+                                                    📍 {p.place_name}
                                                 </div>
                                             ))}
-                                            {predictions && predictions.map((p, idx) => (
-                                                <div key={'p-' + idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                    <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
-                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
-                                                </div>
-                                            ))}
-
-                                            {googleUnavailable && (!predictions || predictions.length === 0) && (enderecoEntrega && String(enderecoEntrega).trim().length >= 3) && (
-                                                <div style={{ padding: '12px', color: theme.textLight, borderTop: '1px solid rgba(255,255,255,0.02)' }}>
-                                                    {`Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.`}
-                                                </div>
-                                            )}
                                         </div>
                                     )}
                                 </div>
+
+                                {/* Sugestão "Você quis dizer?" - Fuzzy Search */}
+                                {addressSuggestion && (
+                                    <div style={{
+                                        background: 'linear-gradient(135deg, rgba(255,152,0,0.12) 0%, rgba(255,152,0,0.06) 100%)',
+                                        border: '2px solid rgba(255,152,0,0.4)',
+                                        borderRadius: '12px',
+                                        padding: '16px',
+                                        marginBottom: '12px',
+                                        animation: 'slideDown 0.3s ease-out'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                                            <span style={{ fontSize: '20px' }}>💡</span>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ fontSize: '14px', fontWeight: 600, color: '#FF9800', marginBottom: '4px' }}>
+                                                    Você quis dizer?
+                                                </div>
+                                                <div style={{ fontSize: '13px', color: theme.textLight, opacity: 0.9 }}>
+                                                    Endereço digitado: <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>{addressSuggestion.original}</span>
+                                                </div>
+                                            </div>
+                                            <div style={{
+                                                background: 'rgba(76,175,80,0.2)',
+                                                color: '#4CAF50',
+                                                padding: '4px 10px',
+                                                borderRadius: '12px',
+                                                fontSize: '12px',
+                                                fontWeight: 700
+                                            }}>
+                                                {Math.round(addressSuggestion.similaridade)}% similar
+                                            </div>
+                                        </div>
+
+                                        <div style={{
+                                            background: 'rgba(255,255,255,0.08)',
+                                            padding: '12px',
+                                            borderRadius: '8px',
+                                            marginBottom: '12px',
+                                            border: '1px solid rgba(255,255,255,0.1)'
+                                        }}>
+                                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#4CAF50', marginBottom: '4px' }}>
+                                                {addressSuggestion.sugestao}
+                                            </div>
+                                            <div style={{ fontSize: '12px', color: theme.textLight, opacity: 0.8 }}>
+                                                {addressSuggestion.endereco}
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    try {
+                                                        console.log('✅ Usuário aceitou sugestão:', addressSuggestion.sugestao);
+
+                                                        // Usar coordenadas da sugestão
+                                                        await salvarEntregaComCoordenadas(
+                                                            addressSuggestion.lat,
+                                                            addressSuggestion.lng,
+                                                            addressSuggestion.cliente,
+                                                            addressSuggestion.endereco, // Endereço completo
+                                                            addressSuggestion.observacoes,
+                                                            addressSuggestion.tipo
+                                                        );
+
+                                                        // Atualizar campo de endereço com sugestão
+                                                        setEnderecoEntrega(addressSuggestion.sugestao);
+
+                                                        // Limpar sugestão
+                                                        setAddressSuggestion(null);
+                                                    } catch (err) {
+                                                        console.error('❌ Erro ao aceitar sugestão:', err);
+                                                        alert('Erro ao salvar entrega com sugestão');
+                                                    }
+                                                }}
+                                                style={{
+                                                    flex: 1,
+                                                    background: 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)',
+                                                    color: '#FFFFFF',
+                                                    border: 'none',
+                                                    borderRadius: '8px',
+                                                    padding: '12px 20px',
+                                                    fontWeight: 700,
+                                                    fontSize: '14px',
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s ease',
+                                                    boxShadow: '0 4px 10px rgba(76,175,80,0.3)'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.target.style.transform = 'translateY(-2px)';
+                                                    e.target.style.boxShadow = '0 6px 14px rgba(76,175,80,0.4)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.target.style.transform = 'translateY(0)';
+                                                    e.target.style.boxShadow = '0 4px 10px rgba(76,175,80,0.3)';
+                                                }}
+                                            >
+                                                ✓ Sim, corrigir
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    console.log('❌ Usuário rejeitou sugestão');
+                                                    setAddressSuggestion(null);
+                                                }}
+                                                style={{
+                                                    flex: 1,
+                                                    background: 'rgba(255,255,255,0.08)',
+                                                    color: theme.textLight,
+                                                    border: '1px solid rgba(255,255,255,0.15)',
+                                                    borderRadius: '8px',
+                                                    padding: '12px 20px',
+                                                    fontWeight: 600,
+                                                    fontSize: '14px',
+                                                    cursor: 'pointer',
+                                                    transition: 'all 0.2s ease'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.target.style.background = 'rgba(255,255,255,0.12)';
+                                                    e.target.style.borderColor = 'rgba(255,255,255,0.25)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.target.style.background = 'rgba(255,255,255,0.08)';
+                                                    e.target.style.borderColor = 'rgba(255,255,255,0.15)';
+                                                }}
+                                            >
+                                                × Não, manter original
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Mensagem de Erro de Geocodificação */}
+                                {geocodingError && (
+                                    <div style={{
+                                        background: 'linear-gradient(135deg, rgba(244,67,54,0.15) 0%, rgba(244,67,54,0.08) 100%)',
+                                        border: '2px solid rgba(244,67,54,0.5)',
+                                        borderRadius: '12px',
+                                        padding: '16px',
+                                        marginBottom: '12px',
+                                        animation: 'slideDown 0.3s ease-out'
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                                            <span style={{ fontSize: '20px' }}>⚠️</span>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ fontSize: '14px', fontWeight: 600, color: '#F44336', marginBottom: '4px' }}>
+                                                    {geocodingError.message}
+                                                </div>
+                                                <div style={{ fontSize: '13px', color: theme.textLight, opacity: 0.9 }}>
+                                                    {geocodingError.suggestions}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setGeocodingError(null)}
+                                            style={{
+                                                width: '100%',
+                                                background: 'rgba(255,255,255,0.1)',
+                                                color: theme.textLight,
+                                                border: '1px solid rgba(255,255,255,0.2)',
+                                                borderRadius: '8px',
+                                                padding: '10px',
+                                                fontWeight: 600,
+                                                fontSize: '13px',
+                                                cursor: 'pointer',
+                                                transition: 'all 0.2s ease'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.target.style.background = 'rgba(255,255,255,0.15)';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.target.style.background = 'rgba(255,255,255,0.1)';
+                                            }}
+                                        >
+                                            × Fechar
+                                        </button>
+                                    </div>
+                                )}
+
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
-                                <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
+
+                                {/* BOTÃO REESCRITO DO ZERO - SEM CLASSES CSS */}
+                                <button
+                                    type="submit"
+                                    disabled={isGeocoding}
+                                    style={{
+                                        width: '100%',
+                                        height: '60px',
+                                        display: 'block',
+                                        margin: '20px 0px',
+                                        backgroundColor: isGeocoding ? '#94a3b8' : '#007bff',
+                                        color: 'white',
+                                        fontSize: '18px',
+                                        fontWeight: '700',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        cursor: isGeocoding ? 'not-allowed' : 'pointer',
+                                        boxSizing: 'border-box',
+                                        transition: 'all 0.2s ease',
+                                        letterSpacing: '1px',
+                                        textTransform: 'uppercase',
+                                        boxShadow: '0 4px 12px rgba(0, 123, 255, 0.3)',
+                                        zIndex: 9999
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (!isGeocoding) {
+                                            e.target.style.backgroundColor = '#0056b3';
+                                            e.target.style.transform = 'translateY(-2px)';
+                                            e.target.style.boxShadow = '0 6px 16px rgba(0, 123, 255, 0.4)';
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        if (!isGeocoding) {
+                                            e.target.style.backgroundColor = '#007bff';
+                                            e.target.style.transform = 'translateY(0)';
+                                            e.target.style.boxShadow = '0 4px 12px rgba(0, 123, 255, 0.3)';
+                                        }
+                                    }}
+                                    onMouseDown={(e) => {
+                                        if (!isGeocoding) {
+                                            e.target.style.transform = 'scale(0.96)';
+                                        }
+                                    }}
+                                    onMouseUp={(e) => {
+                                        if (!isGeocoding) {
+                                            e.target.style.transform = 'scale(1)';
+                                        }
+                                    }}
+                                >
+                                    {isGeocoding ? '🔍 Buscando...' : 'ADICIONAR À LISTA'}
+                                </button>
                             </form>
                         </div>
 
                         {/* Coluna Direita: Histórico (scroll) */}
                         <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
-                            <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                <h3 style={{ margin: 0, color: theme.textMain }}>Histórico de Clientes</h3>
+
+                                {/* Botão Limpar Histórico */}
+                                <button
+                                    onClick={limparHistorico}
+                                    title="Limpar todo o histórico"
+                                    style={{
+                                        background: 'rgba(244, 67, 54, 0.1)',
+                                        border: '1px solid rgba(244, 67, 54, 0.3)',
+                                        borderRadius: '8px',
+                                        padding: '8px 12px',
+                                        cursor: 'pointer',
+                                        color: '#F44336',
+                                        fontSize: '13px',
+                                        fontWeight: 500,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        transition: 'all 0.2s ease'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.target.style.background = 'rgba(244, 67, 54, 0.2)';
+                                        e.target.style.transform = 'scale(1.05)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.target.style.background = 'rgba(244, 67, 54, 0.1)';
+                                        e.target.style.transform = 'scale(1)';
+                                    }}
+                                >
+                                    🗑️ Limpar
+                                </button>
+                            </div>
+
+                            {/* NOVO: Campo de pesquisa no histórico */}
+                            <input
+                                type="text"
+                                placeholder="🔍 Pesquisar no histórico..."
+                                value={historicoFilter}
+                                onChange={(e) => setHistoricoFilter(e.target.value)}
+                                style={{
+                                    ...inputStyle,
+                                    marginBottom: '12px',
+                                    fontSize: '14px',
+                                    padding: '10px 12px'
+                                }}
+                            />
+
                             <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
                             <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
-                                {(!allEntregas || allEntregas.length === 0) ? (
-                                    <p style={{ color: theme.textLight, padding: '12px' }}>Buscando no Banco...</p>
-                                ) : (
-                                    allEntregas.slice(0, 10).map((it, idx) => (
+                                {(() => {
+                                    // ✅ USAR recentList (localStorage) - MOSTRA DADOS IMEDIATAMENTE
+                                    const dadosHistorico = recentList && recentList.length > 0 ? recentList : [];
+
+                                    if (dadosHistorico.length === 0) {
+                                        return (
+                                            <p style={{ color: theme.textLight, padding: '12px', fontStyle: 'italic' }}>
+                                                Nenhum histórico disponível. Adicione entregas para popular esta lista.
+                                            </p>
+                                        );
+                                    }
+
+                                    // Filtrar baseado no texto digitado
+                                    const filterLower = historicoFilter.toLowerCase().trim();
+                                    const filtered = filterLower === ''
+                                        ? dadosHistorico.slice(0, 15)
+                                        : dadosHistorico.filter(it => {
+                                            const cliente = (it.cliente || '').toLowerCase();
+                                            const endereco = (it.endereco || '').toLowerCase();
+                                            return cliente.includes(filterLower) || endereco.includes(filterLower);
+                                        }).slice(0, 15);
+
+                                    if (filtered.length === 0) {
+                                        return (
+                                            <p style={{ color: theme.textLight, padding: '12px', fontStyle: 'italic' }}>
+                                                Nenhum resultado encontrado para "{historicoFilter}"
+                                            </p>
+                                        );
+                                    }
+
+                                    return filtered.map((it, idx) => (
                                         <div key={it && it.id != null ? it.id : idx} onClick={async () => {
                                             try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
                                             try {
@@ -2745,8 +3685,8 @@ function App() {
                                             <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente || it.endereco || '—'}</div>
                                             <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco || ''}</div>
                                         </div>
-                                    ))
-                                )}
+                                    ));
+                                })()}
                             </div>
                         </div>
                     </div>
@@ -2950,6 +3890,33 @@ function App() {
 
             </main>
 
+            {/* City choice modal (bairros gêmeos) */}
+            <CityChoiceModal
+                visible={showCityChoiceModal}
+                onClose={() => {
+                    setShowCityChoiceModal(false);
+                    setCityChoiceOptions([]);
+                    setPendingAddressData(null);
+                    setIsGeocoding(false);
+                }}
+                bairro={cityChoiceOptions[0] || ''}
+                cities={cityChoiceOptions.slice(1) || []}
+                onSelect={(selectedCity) => {
+                    // Usuário escolheu a cidade - continuar com geocodificação
+                    if (pendingAddressData) {
+                        const { enderecoNormalizado, clienteVal, obsValue, tipoEncomenda } = pendingAddressData;
+                        const enderecoComCidade = `${enderecoNormalizado}, ${selectedCity}, SC, Brasil`;
+
+                        setShowCityChoiceModal(false);
+                        setCityChoiceOptions([]);
+
+                        // Continuar com geocodificação
+                        continuarGeocod(enderecoComCidade, selectedCity, clienteVal, obsValue, tipoEncomenda);
+                    }
+                }}
+                theme={theme}
+            />
+
             {/* Driver selection modal (componente minimalista) */}
 
 
@@ -2982,7 +3949,91 @@ function CardKPI({ titulo, valor, cor }) {
 }
 
 const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', outline: 'none', fontSize: '14px' };
-const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
+const btnStyle = (bg, disabled = false) => ({
+    width: '100% !important',
+    padding: '15px',
+    borderRadius: '8px',
+    border: 'none',
+    background: disabled ? '#94a3b8' : bg,
+    color: '#fff',
+    fontWeight: 'bold',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
+    transition: 'all 0.2s ease',
+    opacity: disabled ? 0.6 : 1
+});
+
+// Modal para escolha de cidade quando bairro existe em múltiplas cidades
+function CityChoiceModal({ visible, onClose, bairro, cities, onSelect, theme }) {
+    if (!visible) return null;
+
+    return (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+            <div style={{ background: theme.card, padding: '32px', borderRadius: '16px', maxWidth: '500px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.4)' }}>
+                <h3 style={{ marginTop: 0, color: theme.primary, fontSize: '20px', marginBottom: '16px' }}>
+                    🏘️ Bairro em Múltiplas Cidades
+                </h3>
+                <p style={{ color: theme.textMain, fontSize: '15px', lineHeight: '1.6', marginBottom: '24px' }}>
+                    O bairro <strong>"{bairro}"</strong> existe em mais de uma cidade.<br />
+                    Por favor, selecione a cidade correta:
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+                    {cities.map((city) => (
+                        <button
+                            key={city}
+                            onClick={() => onSelect(city)}
+                            style={{
+                                padding: '16px 24px',
+                                borderRadius: '10px',
+                                border: '2px solid transparent',
+                                background: theme.primary,
+                                color: '#fff',
+                                fontSize: '16px',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+                            }}
+                            onMouseEnter={(e) => {
+                                e.target.style.background = '#1e40af';
+                                e.target.style.transform = 'translateY(-2px)';
+                                e.target.style.boxShadow = '0 6px 16px rgba(0,0,0,0.15)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.target.style.background = theme.primary;
+                                e.target.style.transform = 'translateY(0)';
+                                e.target.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+                            }}
+                            onMouseDown={(e) => {
+                                e.target.style.transform = 'scale(0.98)';
+                            }}
+                            onMouseUp={(e) => {
+                                e.target.style.transform = 'translateY(-2px)';
+                            }}
+                        >
+                            📍 {city}
+                        </button>
+                    ))}
+                </div>
+                <button
+                    onClick={onClose}
+                    style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: '8px',
+                        border: '1px solid #cbd5e1',
+                        background: 'transparent',
+                        color: theme.textLight,
+                        fontSize: '14px',
+                        cursor: 'pointer'
+                    }}
+                >
+                    Cancelar
+                </button>
+            </div>
+        </div>
+    );
+}
 
 // Modal minimalista para seleção de motorista online
 function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null, driverSelectMode = 'dispatch' }) {

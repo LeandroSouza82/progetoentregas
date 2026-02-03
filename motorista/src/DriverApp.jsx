@@ -255,11 +255,12 @@ export default function AppMotorista() {
             carregandoRef.current = true;
 
             // Buscar entregas EXCLUSIVAMENTE por motorista_id (UUID)
+            // Filtro rígido: apenas status 'em_rota' para não poluir o celular com entregas antigas ou pendentes de outros
             const res = await supabase
                 .from('entregas')
                 .select('*')
                 .eq('motorista_id', motoristaId)
-                .in('status', ['em_rota', 'enviada', 'pendente', 'em_andamento'])
+                .eq('status', 'em_rota')
                 .order('ordem_logistica', { ascending: true });
 
             const data = res && res.data ? res.data : [];
