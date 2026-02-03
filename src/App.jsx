@@ -594,8 +594,7 @@ function App() {
 
     // define map center EARLY to avoid ReferenceError in effects
     const [zoomLevel, setZoomLevel] = useState(13);
-    // Coordenadas do motorista Leandro como fallback (Palhoça/região)
-    const DEFAULT_MAP_CENTER = { lat: -27.6609227, lng: -48.7087265 }; 
+    // Estados de centro do mapa (usa DEFAULT_MAP_CENTER global definido na linha 23)
     const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
     const [pontoPartida, setPontoPartida] = useState(DEFAULT_MAP_CENTER); // sede/company fallback or dynamic driver origin
     const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
