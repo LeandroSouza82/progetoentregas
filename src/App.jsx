@@ -2546,7 +2546,7 @@ function App() {
                                                 position={[Number(motorista.lat), Number(motorista.lng)]}
                                                 icon={createMotoristaIcon(fullName(motorista))}
                                             >
-                                                <Tooltip permanent direction="top" offset={[0, -20]}>
+                                                <Tooltip permanent direction="top" offset={[0, -24]}>
                                                     <strong>{fullName(motorista)}</strong>
                                                 </Tooltip>
                                                 <Popup>
@@ -2580,7 +2580,7 @@ function App() {
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
                                                     icon={createNumberedIcon(num, pinColor)}
                                                 >
-                                                    <Tooltip permanent direction="top" offset={[0, -40]} className="entrega-tooltip" opacity={0.9}>
+                                                    <Tooltip permanent direction="top" offset={[0, -18]} className="entrega-tooltip" opacity={0.95}>
                                                         <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
                                                     </Tooltip>
                                                     <Popup>
@@ -2607,7 +2607,7 @@ function App() {
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
                                                     icon={createNumberedIcon(num, pinColor)}
                                                 >
-                                                    <Tooltip permanent direction="top" offset={[0, -40]} className="entrega-tooltip" opacity={0.9}>
+                                                    <Tooltip permanent direction="top" offset={[0, -18]} className="entrega-tooltip" opacity={0.95}>
                                                         <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
                                                     </Tooltip>
                                                     <Popup>

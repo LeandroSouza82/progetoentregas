@@ -167,22 +167,28 @@ export async function searchNominatim(query, bounds = null) {
     if (!query || query.trim().length < 3) return [];
     
     try {
+        // VIEWBOX FOCADO: Grande Florianópolis (Florianópolis, São José, Palhoça, Biguaçu)
         const defaultBounds = {
-            south: -30.0,
-            north: -25.0,
-            west: -54.0,
-            east: -48.0
+            south: -27.85,  // Limite sul (Palhoça)
+            north: -27.35,  // Limite norte (Biguaçu)
+            west: -48.70,   // Limite oeste
+            east: -48.40    // Limite leste
         };
         
         const b = bounds || defaultBounds;
         const viewbox = `${b.west},${b.south},${b.east},${b.north}`;
         
+        // ADICIONAR SUFIXO: força busca em Santa Catarina, Brasil
+        const searchQuery = query.toLowerCase().includes('santa catarina') || query.toLowerCase().includes('brasil')
+            ? query
+            : `${query}, Santa Catarina, Brasil`;
+        
         const url = `https://nominatim.openstreetmap.org/search?` +
-            `q=${encodeURIComponent(query)}` +
+            `q=${encodeURIComponent(searchQuery)}` +
             `&format=json` +
             `&viewbox=${viewbox}` +
             `&bounded=1` +
-            `&limit=5` +
+            `&limit=10` +  // Aumentado para permitir priorização
             `&addressdetails=1`;
         
         const response = await fetch(url, {
@@ -195,12 +201,47 @@ export async function searchNominatim(query, bounds = null) {
         
         const data = await response.json();
         
-        return data.map(item => ({
+        // PRIORIZAÇÃO: se busca contém "Feiticeira", priorizar Ingleses ou Rio Vermelho
+        const results = data.map(item => ({
             place_id: item.place_id,
             display_name: item.display_name,
             lat: parseFloat(item.lat),
-            lng: parseFloat(item.lon)
+            lng: parseFloat(item.lon),
+            address: item.address || {},
+            priority: 0
         }));
+        
+        // Sistema de priorização por bairro
+        if (query.toLowerCase().includes('feiticeira')) {
+            results.forEach(r => {
+                const displayLower = r.display_name.toLowerCase();
+                if (displayLower.includes('ingleses') || displayLower.includes('rio vermelho')) {
+                    r.priority = 10;
+                } else if (displayLower.includes('florianópolis')) {
+                    r.priority = 5;
+                }
+            });
+        } else {
+            // Prioridade geral: Florianópolis > São José > Palhoça > Biguaçu
+            results.forEach(r => {
+                const displayLower = r.display_name.toLowerCase();
+                if (displayLower.includes('florianópolis')) r.priority = 10;
+                else if (displayLower.includes('são josé')) r.priority = 8;
+                else if (displayLower.includes('palhoça')) r.priority = 6;
+                else if (displayLower.includes('biguaçu')) r.priority = 4;
+            });
+        }
+        
+        // Ordenar por prioridade e retornar top 5
+        return results
+            .sort((a, b) => b.priority - a.priority)
+            .slice(0, 5)
+            .map(({ place_id, display_name, lat, lng }) => ({
+                place_id,
+                display_name,
+                lat,
+                lng
+            }));
         
     } catch (error) {
         console.warn('Busca de endereço falhou:', error);
