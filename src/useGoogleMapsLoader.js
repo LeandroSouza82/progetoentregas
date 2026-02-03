@@ -32,6 +32,36 @@ export default function useGoogleMapsLoader({ apiKey } = {}) {
             existing.addEventListener('load', onLoad);
             existing.addEventListener('error', onError);
 
+            // If existing script is not async/defer, inject an async replacement to avoid blocking render
+            const needsAsyncFix = !(existing.async || existing.defer || existing.getAttribute('loading') === 'async');
+            if (needsAsyncFix) {
+                try { console.info('Existing Google Maps script found without async/defer. Injecting async replacement for stability.'); } catch (e) { }
+                const srcFix = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey || '')}&libraries=places,geometry&language=pt-BR&region=BR`;
+                const sFix = document.createElement('script');
+                sFix.setAttribute('data-google-maps-api-async-fix', '1');
+                sFix.async = true;
+                sFix.defer = true;
+                sFix.src = srcFix;
+                const onLoadFix = () => setLoaded(true);
+                const onErrFix = (e) => setError(e || new Error('Google Maps (async fix) failed to load'));
+                sFix.addEventListener('load', onLoadFix);
+                sFix.addEventListener('error', onErrFix);
+                document.head.appendChild(sFix);
+
+                window.__gmapsLoaderPromise = new Promise((resolve, reject) => {
+                    sFix.addEventListener('load', () => resolve(window.google && window.google.maps ? window.google.maps : null));
+                    sFix.addEventListener('error', (err) => reject(err || new Error('Failed to load Google Maps (async fix)')));
+                });
+                window.__gmapsLoaderPromise.catch(() => { });
+
+                return () => {
+                    existing.removeEventListener('load', onLoad);
+                    existing.removeEventListener('error', onError);
+                    sFix.removeEventListener('load', onLoadFix);
+                    sFix.removeEventListener('error', onErrFix);
+                };
+            }
+
             // If the existing script didn't include the Places library, inject a lightweight supplemental script that includes only the needed libraries (places,geometry)
             const hasPlaces = (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places) ? true : false;
             if (!hasPlaces) {

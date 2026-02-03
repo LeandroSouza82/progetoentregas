@@ -1,5 +1,7 @@
-import React, { useEffect, useRef } from 'react';
-import { GoogleMap, AdvancedMarker } from '@vis.gl/react-google-maps';
+import React, { useEffect, useRef, useMemo } from 'react';
+import { Map, AdvancedMarker, APIProvider } from '@vis.gl/react-google-maps';
+
+const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
 
 // Safety helper: Santa Catarina bounds (manager requested)
 const isValidSC = (lat, lng) => {
@@ -9,13 +11,15 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -30.0 && lngN < -54.0 && lngN > -48.0);
 };
 
-export default function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false }) {
     const mapRef = useRef(null);
 
     // build marker lists
-    const entregaMarkers = (entregas || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng))).map(e => ({ id: e.id, lat: Number(e.lat), lng: Number(e.lng), label: (e.ordem_logistica && Number(e.ordem_logistica) > 0) ? String(Number(e.ordem_logistica)) : null, title: e.cliente || e.endereco }));
+    // Memoize markers to avoid re-computation each render
+    const entregaMarkers = React.useMemo(() => (entregas || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng))).map(e => ({ id: e.id, lat: Number(e.lat), lng: Number(e.lng), label: (e.ordem_logistica && Number(e.ordem_logistica) > 0) ? String(Number(e.ordem_logistica)) : null, title: e.cliente || e.endereco })), [entregas]);
+
     // Show any passed fleet items that have valid SC coords — do not hide the moto if offline; ensures a stable, fixed icon
-    const frotaMarkers = (frota || []).filter(m => m && m.lat != null && m.lng != null && isValidSC(Number(m.lat), Number(m.lng))).map(m => ({ id: m.id, lat: Number(m.lat), lng: Number(m.lng), title: m.nome || 'Motorista' }));
+    const frotaMarkers = React.useMemo(() => (frota || []).filter(m => m && m.lat != null && m.lng != null && isValidSC(Number(m.lat), Number(m.lng))).map(m => ({ id: m.id, lat: Number(m.lat), lng: Number(m.lng), title: m.nome || 'Motorista' })), [frota]);
 
     // On load: center or fit bounds
     const handleLoad = (m) => {
@@ -39,9 +43,42 @@ export default function MapaLogistica({ entregas = [], frota = [], height = 500,
 
     const mapStyle = { width: '100%', height: mobile ? 250 : height };
 
-    return (
-        <div style={{ width: '100%', height: mobile ? 250 : height }}>
-            <GoogleMap mapContainerStyle={mapStyle} center={{ lat: -27.5969, lng: -48.5495 }} zoom={12} onLoad={handleLoad}>
+    // Determine safe center: prefer fleet first, then entregas, fallback to Florianópolis
+    const defaultCenter = { lat: -27.5969, lng: -48.5495 };
+    const computedCenter = useMemo(() => {
+        const firstFleet = (frotaMarkers && frotaMarkers.length > 0) ? frotaMarkers[0] : null;
+        const firstEntrega = (!firstFleet && entregaMarkers && entregaMarkers.length > 0) ? entregaMarkers[0] : null;
+        const candidate = firstFleet || firstEntrega || defaultCenter;
+        const lat = Number(candidate.lat);
+        const lng = Number(candidate.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return defaultCenter;
+        return { lat, lng };
+    }, [frotaMarkers, entregaMarkers]);
+
+    // Track last known markers to avoid refitting on every render
+    const lastPointsKeyRef = useRef('');
+    useEffect(() => {
+        try {
+            const key = JSON.stringify({ e: entregaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })), f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })) });
+            if (key === lastPointsKeyRef.current) return; // nothing changed
+            lastPointsKeyRef.current = key;
+            if (!mapRef.current) return;
+            const inst = mapRef.current;
+            const points = [...entregaMarkers.map(p => ({ lat: p.lat, lng: p.lng })), ...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
+            if (!points || points.length === 0) {
+                try { inst.setCenter(defaultCenter); inst.setZoom && inst.setZoom(12); } catch (e) { }
+                return;
+            }
+            try {
+                const bounds = new window.google.maps.LatLngBounds();
+                points.forEach(pt => bounds.extend({ lat: Number(pt.lat), lng: Number(pt.lng) }));
+                inst.fitBounds(bounds, 80);
+            } catch (e) { /* ignore */ }
+        } catch (e) { /* ignore */ }
+    }, [entregaMarkers, frotaMarkers]);
+
+    const mapInner = (
+        <Map mapContainerStyle={mapStyle} center={computedCenter} zoom={12} onLoad={handleLoad}>
                 {/* frota markers (drivers) */}
                 {frotaMarkers.map(m => (
                     <AdvancedMarker key={`m-${m.id}`} position={{ lat: m.lat, lng: m.lng }}>
@@ -62,7 +99,44 @@ export default function MapaLogistica({ entregas = [], frota = [], height = 500,
                     </AdvancedMarker>
                 ))}
 
-            </GoogleMap>
+            </Map>
+        );
+
+    // If we have an API key, wrap with APIProvider for better integration
+    if (GOOGLE_MAPS_API_KEY && typeof APIProvider === 'function') {
+        return (
+            <div style={{ width: '100%', height: mobile ? 250 : height }}>
+                <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
+                    {mapInner}
+                </APIProvider>
+            </div>
+        );
+    }
+
+    return (
+        <div style={{ width: '100%', height: mobile ? 250 : height }}>
+            {mapInner}
         </div>
     );
 }
+
+// Custom comparison: shallow check of coords and lengths to avoid needless re-renders
+function propsAreEqual(prev, next) {
+    try {
+        if ((prev.mobile || false) !== (next.mobile || false)) return false;
+        if ((prev.height || 0) !== (next.height || 0)) return false;
+        const plen = (prev.frota || []).length, nlen = (next.frota || []).length;
+        if (plen !== nlen) return false;
+        const elen = (prev.entregas || []).length, enlen = (next.entregas || []).length;
+        if (elen !== enlen) return false;
+        const pf = (prev.frota || []).map(m => ({ id: m.id, lat: Number(m.lat), lng: Number(m.lng) }));
+        const nf = (next.frota || []).map(m => ({ id: m.id, lat: Number(m.lat), lng: Number(m.lng) }));
+        if (JSON.stringify(pf) !== JSON.stringify(nf)) return false;
+        const pe = (prev.entregas || []).filter(e => e && e.lat != null && e.lng != null).map(e => ({ id: e.id, lat: Number(e.lat), lng: Number(e.lng) }));
+        const ne = (next.entregas || []).filter(e => e && e.lat != null && e.lng != null).map(e => ({ id: e.id, lat: Number(e.lat), lng: Number(e.lng) }));
+        if (JSON.stringify(pe) !== JSON.stringify(ne)) return false;
+        return true;
+    } catch (e) { return false; }
+}
+
+export default React.memo(MapaLogistica, propsAreEqual);
