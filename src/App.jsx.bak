@@ -1,61 +1,66 @@
 import React from 'react';
 import { useRef, useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import supabase, { subscribeToTable, onSupabaseReady, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, buscarTodasEntregas } from './supabaseClient';
-import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, geocodeNominatim, searchNominatim } from './geoUtils';
-
+import supabase, { subscribeToTable } from './supabaseClient';
+import useGoogleMapsLoader from './useGoogleMapsLoader';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
-// ===== CONFIGURAÇÕES E UTILIDADES =====
+// Ícone em Data URL SVG (moto verde) definido logo no topo com fallback seguro
+const _motoSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="#27ae60" d="M416 352c-44.1 0-80 35.9-80 80s35.9 80 80 80 80-35.9 80-80-35.9-80-80-35.9zm-256 0c-44.1 0-80 35.9-80 80s35.9 80 80 80 80-35.9 80-80-35.9-80-80-80zM496 256h-16.1l-64.7-129.4c-7-14.1-21.5-22.6-37.1-22.6H288v-48c0-17.7-14.3-32-32-32H160c-17.7 0-32 14.3-32 32v48H32c-17.7 0-32 14.3-32 32v160c0 17.7 14.3 32 32 32h32c0-53 43-96 96-96s96 43 96 96h64c0-53 43-96 96-96s96 43 96 96h32c17.7 0 32-14.3 32-32V288c0-17.7-14.3-32-32-32z"/></svg>';
+// Símbolo SVG como Path (configuração do Google Maps Symbol) para evitar qualquer fundo
 
-// Santa Catarina bounds (validação de coordenadas)
-const isValidSC = (lat, lng) => {
-    if (lat == null || lng == null) return false;
-    const latN = Number(lat); const lngN = Number(lng);
-    if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return false;
-    // Santa Catarina: lat entre -25 e -30, lng entre -48 e -54
-    return (latN < -25.0 && latN > -30.0 && lngN > -54.0 && lngN < -48.0);
-};
+// --- CONFIGURAÇÃO VISUAL ---
+// Google Maps helpers
+const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
 
-// Coordenadas padrão (Florianópolis - sede)
-const DEFAULT_MAP_CENTER = { lat: -27.5969, lng: -48.5495 };
-
-// Ícones Leaflet customizados
-function createNumberedIcon(number, color = '#2563eb') {
+function numberedIconUrl(number) {
     const n = number || '';
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><circle cx='18' cy='18' r='18' fill='${color}' stroke='%23fff' stroke-width='3'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='16' fill='%23fff' font-family='Arial' font-weight='800'>${n}</text></svg>`;
-    const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-    return L.icon({
-        iconUrl: url,
-        iconSize: [36, 36],
-        iconAnchor: [18, 36],
-        popupAnchor: [0, -36]
-    });
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36'><circle cx='18' cy='18' r='18' fill='%232563eb' stroke='%23fff' stroke-width='3'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='16' fill='%23fff' font-family='Arial' font-weight='800'>${n}</text></svg>`;
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-function createMotoristaIcon(name = '', heading = 0, color = '#10b981') {
-    const label = String(name || '').trim();
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'>
-        <g transform='translate(24 24) rotate(${heading})'>
-            <circle cx='0' cy='0' r='20' fill='${color}' stroke='%23fff' stroke-width='3'/>
-            <path d='M 0,-10 L 8,10 L 0,6 L -8,10 Z' fill='%23fff'/>
+const motoristaIconUrl = 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png';
+
+function motoristaIconUrlFor(heading = 0, color = '#2563eb') {
+    // simple truck / arrow SVG rotated by `heading` degrees around center
+    // color param controls the main fill color (ex: azul, laranja, roxo, verde)
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'>
+        <g transform='translate(20 20) rotate(${heading})'>
+            <rect x='-10' y='-8' width='20' height='12' rx='3' fill='${color}' stroke='%23fff' stroke-width='1'/>
+            <polygon points='10,-5 16,0 10,5' fill='${color}' />
+            <circle cx='-6' cy='6' r='3' fill='%23000' />
+            <circle cx='6' cy='6' r='3' fill='%23000' />
         </g>
     </svg>`;
-    const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-    return L.icon({
-        iconUrl: url,
-        iconSize: [48, 48],
-        iconAnchor: [24, 48],
-        popupAnchor: [0, -48]
-    });
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-// Simple scheduler (DESABILITADO para evitar loops)
-function scheduleRetry(ms = 5000) {
-    return; // DESABILITADO
+function motorcycleIconWithName(name = '') {
+    const label = String(name || '').trim();
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='40' viewBox='0 0 160 40'>
+        <style>text{font:700 12px/1.2 sans-serif; fill:#fff}</style>
+        <rect x='0' y='0' width='160' height='40' rx='8' fill='#111827' opacity='0.95'/>
+        <g transform='translate(8,6)'>
+            <svg x='0' y='0' width='28' height='28' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'>
+                <path fill='%23ff6b6b' d='M5 16a1 1 0 100 2 1 1 0 000-2zm11 0a1 1 0 100 2 1 1 0 000-2zM3 6h2l1.5 4h9l1-2h-6l-1-2H6' />
+            </svg>
+        </g>
+        <text x='48' y='22'>${label}</text>
+    </svg>`;
+    const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+    if (typeof window !== 'undefined' && window.google && window.google.maps) {
+        return {
+            url,
+            scaledSize: new window.google.maps.Size(50, 50),
+            anchor: new window.google.maps.Point(25, 25)
+        };
+    }
+    return { url };
 }
+
+// AdvancedMarker removed: using legacy Marker for stability
+
+// Smart loader: only uses LoadScript if Google API not already present
+// SmartLoadScript removed. We'll inject the Google Maps script once via useEffect in the App component.
 
 // Paletas de cores
 const lightTheme = {
@@ -71,16 +76,6 @@ const lightTheme = {
     textLight: '#94a3b8',
     shadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
 };
-
-// Helper: build full name from nome + sobrenome (DB fields)
-function fullName(record) {
-    try {
-        const first = record && record.nome ? String(record.nome).trim() : '';
-        const last = record && record.sobrenome ? String(record.sobrenome).trim() : '';
-        const combined = (first + (last ? (' ' + last) : '')).trim();
-        return combined || (record && (record.nome || record.email) ? String(record.nome || record.email) : 'Motorista');
-    } catch (e) { return 'Motorista'; }
-}
 
 const darkTheme = {
     headerBg: '#071028',
@@ -106,8 +101,7 @@ const otimizarRota = (pontoPartida, listaEntregas) => {
     let rotaOrdenada = [];
     let atual = pontoPartida;
     let pendentes = [...listaEntregas];
-    let maxIterations = 1000; // PROTEÇÃO CONTRA LOOP INFINITO
-    while (pendentes.length > 0 && maxIterations-- > 0) {
+    while (pendentes.length > 0) {
         let maisProximo = null;
         let menorDistancia = Infinity;
         let indexMaisProximo = -1;
@@ -131,9 +125,6 @@ const otimizarRota = (pontoPartida, listaEntregas) => {
             rotaOrdenada.push(maisProximo);
             atual = [maisProximo.lat, maisProximo.lng];
             pendentes.splice(indexMaisProximo, 1);
-        } else {
-            // PROTEÇÃO: se não encontrou próximo, sair do loop para evitar infinito
-            break;
         }
     }
     return rotaOrdenada;
@@ -141,91 +132,152 @@ const otimizarRota = (pontoPartida, listaEntregas) => {
 
 // Otimiza rota usando Google Distance Matrix API + heuristic (nearest neighbor + 2-opt) quando disponível
 // Retorna a lista de entregas reordenada conforme otimização de menor distância
-// ===== OTIMIZAÇÃO DE ROTA (LOCAL - SEM APIS EXTERNAS) =====
-// Usa algoritmo do Vizinho Mais Próximo com cálculo Haversine
-async function otimizarRotaLocal(pontoPartida, listaEntregas, motoristaId = null) {
-    // Filtrar apenas entregas ativas com status 'pendente' ou 'em_rota'
-    const remaining = (listaEntregas || []).filter(p => {
-        const status = String(p.status || '').trim().toLowerCase();
-        return status === 'pendente' || status === 'em_rota';
-    });
-    
+async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = null) {
+    // Filtrar apenas entregas ativas com status 'pendente' (sanitizado)
+    const remaining = (listaEntregas || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente' || String(p.status || '').trim().toLowerCase() === 'em_rota');
     if (!remaining || remaining.length === 0) return [];
-    
-    // CRÍTICO: Filtrar entregas SEM coordenadas válidas
-    const semCoordenadas = remaining.filter(p => !p.lat || !p.lng || isNaN(Number(p.lat)) || isNaN(Number(p.lng)));
-    const comCoordenadas = remaining.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)) && isValidSC(Number(p.lat), Number(p.lng)));
-    
-    if (semCoordenadas.length > 0) {
-        console.warn(`⚠️ ${semCoordenadas.length} entrega(s) sem coordenadas válidas (serão ignoradas)`);
-        semCoordenadas.forEach(e => {
-            console.warn(`   📍 ID: ${e.id} | Cliente: ${e.cliente} | Endereço: ${e.endereco}`);
-        });
-    }
-    
-    if (comCoordenadas.length === 0) {
-        console.error('❌ NENHUMA entrega com coordenadas válidas para otimizar!');
-        return [];
-    }
-    
-    console.log(`🧮 Otimizando rota localmente com ${comCoordenadas.length} entregas`);
 
-    // Determinar origem: motorista atual -> última entrega concluída -> pontoPartida (sede)
+    // Config: limite de entregas por ciclo antes de retornar à sede
+    const ROUTE_CYCLE_LIMIT = Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10);
+
+    // Determinar origem dinâmica: prefere lat/lng do motorista atual (se fornecido) -> última entrega concluída -> pontoPartida (empresa)
     let originLatLng = null;
-    
     try {
         if (motoristaId != null) {
-            const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId).single();
-            if (mdata) {
-                if (mdata.esta_online !== true) {
-                    console.warn('Motorista offline - abortando otimização');
-                    return [];
+            // tentar buscar lat/lng atual do motorista diretamente (estado real-time)
+            try {
+                const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId);
+                const m = (mdata && mdata[0]) ? mdata[0] : null;
+                if (m && typeof m.esta_online !== 'undefined' && m.esta_online !== true) {
+                    // driver not online — abort optimization per regra de ouro
+                    return remaining;
                 }
-                if (mdata.lat != null && mdata.lng != null) {
-                    originLatLng = { lat: Number(mdata.lat), lng: Number(mdata.lng) };
+                if (m && m.lat != null && m.lng != null) {
+                    originLatLng = { lat: Number(m.lat), lng: Number(m.lng) };
+                }
+            } catch (e) { /* fallback below */ }
+            if (!originLatLng) {
+                const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false });
+                if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) {
+                    originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
                 }
             }
         }
     } catch (e) {
-        console.warn('Falha ao buscar motorista:', e);
+        console.warn('otimizarRotaComGoogle: falha ao buscar última entrega concluída ou estado do motorista', e);
     }
 
-    // Fallback para pontoPartida (sede)
+    // Se não determinamos origin a partir do motorista, derive de pontoPartida (empresa)
     if (!originLatLng) {
         if (pontoPartida && typeof pontoPartida === 'object' && 'lat' in pontoPartida && 'lng' in pontoPartida) {
             originLatLng = { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) };
+        } else if (Array.isArray(pontoPartida) && pontoPartida.length >= 2) {
+            originLatLng = { lat: Number(pontoPartida[0]), lng: Number(pontoPartida[1]) };
         } else {
-            originLatLng = DEFAULT_MAP_CENTER;
+            originLatLng = { lat: 0, lng: 0 };
         }
     }
-    
-    // Determinar destino (volta para base)
-    const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) 
-        ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } 
-        : DEFAULT_MAP_CENTER;
-    
-    // ALGORITMO DO VIZINHO MAIS PRÓXIMO (importado de geoUtils.js)
-    const ordered = nearestNeighborRoute(originLatLng, comCoordenadas, baseCoord);
-    
-    // Calcular distância total estimada
-    const totalKm = calculateTotalDistance(originLatLng, ordered, baseCoord);
-    
-    console.log(`✅ Rota otimizada: ${ordered.length} entregas, distância estimada: ${totalKm.toFixed(1)} km`);
-    
-    // Persistir ordem_logistica no banco (somente se motoristaId fornecido - não persiste em preview)
-    if (motoristaId != null) {
+
+    // Distance Matrix removed: we now rely exclusively on DirectionsService.optimizeWaypoints for routing to avoid additional billing and permissions issues.
+    // Nearest-neighbor and 2-opt helpers were removed to ensure we don't accidentally call DistanceMatrix.
+
+    // If DistanceMatrix available, compute matrix: origins=[origin] + waypoints, destinations=waypoints+ [origin]
+    const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
+
+    // Use DirectionsService.optimizeWaypoints exclusively (no DistanceMatrix)
+    // If Google is blocked for the day, do not attempt DirectionsService — fall back to local heuristic
+    if (googleQuotaExceededRef.current) {
+        try { /* silent fallback when quota exceeded */ } catch (err) { }
+        const localOrder = otimizarRota(originLatLng, remaining);
+        return localOrder;
+    }
+
+    // Avoid calling Google if another routing is in progress — return heuristic fallback
+    if (routingInProgressRef.current) {
+        try { /* suppressed routing-in-progress log to avoid noise */ } catch (e) { }
+        const localOrder = otimizarRota(originLatLng, remaining);
+        return localOrder;
+    }
+
+    let orderedIndices = null;
+    try {
+        routingInProgressRef.current = true;
+        if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
+        const directionsService = new window.google.maps.DirectionsService();
+        const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
+        // Destination MUST be the company base (pontoPartida param) or mapCenter fallback
+        const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : (mapCenterState || DEFAULT_MAP_CENTER);
+        const request = { origin: originLatLng, destination: baseCoord, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
+        const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
+        const wpOrder = res.routes?.[0]?.waypoint_order || null;
+        if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) orderedIndices = wpOrder;
+        // Extract KM/time and set UI immediately from legs
         try {
+            const legs = res.routes?.[0]?.legs || [];
+            const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
+            const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
+            if (meters > 0) try { setEstimatedDistanceKm(Number((meters / 1000).toFixed(1))); } catch (e) { }
+            if (secs > 0) try { setEstimatedTimeSec(secs); setEstimatedTimeText(formatDuration(secs)); } catch (e) { }
+            // cache preview result for small window
+            try {
+                const hash = JSON.stringify((remaining || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
+                lastRouteCacheRef.current.set('preview|' + hash, { optimizedOrder: Array.isArray(wpOrder) ? wpOrder : null, drawResult: { meters, secs }, timestamp: Date.now() });
+            } catch (e) { /* ignore cache issues */ }
+        } catch (e) { /* ignore */ }
+    } catch (e) {
+        const es = String(e || '');
+        if (es.includes && es.includes('OVER_QUERY_LIMIT')) {
+            // Google quota reached — mark and fallback silently
+            markGoogleQuotaExceeded('Directions');
+        } else if (es.includes && (es.includes('REQUEST_DENIED') || es.includes('API_NOT_ALLOWED'))) {
+            // API key not authorized for Directions
+            markGoogleQuotaExceeded('Directions', '⚠️ Chave do Google não autorizada para Directions. Verifique as restrições de API no Google Cloud Console. Usando histórico/heurística local.');
+        } else {
+            try { console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e); } catch (err) { }
+        }
+        // last resort: local nearest neighbor by coord distance
+        const localOrder = otimizarRota(originLatLng, remaining);
+        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e2) { }
+        return localOrder;
+    } finally {
+        routingInProgressRef.current = false;
+    }
+
+
+    // Apply cycle rule: if remaining count > ROUTE_CYCLE_LIMIT, plan a return to HQ (pontoPartida) after first chunk
+    const includeHQ = remaining.length > ROUTE_CYCLE_LIMIT;
+
+    // Build ordered list
+    const ordered = orderedIndices.map(idx => remaining[idx]);
+
+    // If include HQ, we will limit first chunk and set HQ insertion for map only (we persist ordem_logistica sequentially)
+    if (includeHQ) {
+        // Persist ordem_logistica with HQ virtual waypoint inserted after the first chunk
+        try {
+            if (motoristaId != null) {
+                for (let i = 0; i < ordered.length; i++) {
+                    const pedido = ordered[i];
+                    const pid = pedido.id;
+                    if (!pid) continue;
+                    const ordem = i + 1;
+                    await supabase.from('entregas').update({ ordem_logistica: Number(ordem) }).eq('id', pid);
+                }
+            }
+        } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_logistica com HQ', e); }
+        return ordered; // Map drawing logic will insert HQ waypoint visually
+    }
+
+    // Persist ordem_logistica when normal (only if motoristaId is provided - preview mode should NOT persist)
+    try {
+        if (motoristaId != null) {
             for (let i = 0; i < ordered.length; i++) {
                 const pedido = ordered[i];
-                if (!pedido.id) continue;
-                await supabase.from('entregas').update({ ordem_logistica: i + 1 }).eq('id', pedido.id);
+                const pid = pedido.id;
+                if (!pid) continue;
+                await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
             }
-            console.log(`✅ ordem_logistica persistida para ${ordered.length} entregas`);
-        } catch (e) {
-            console.warn('Falha ao persistir ordem_logistica:', e);
         }
-    }
-    
+    } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_logistica', e); }
     return ordered;
 }
 
@@ -255,7 +307,8 @@ class ErrorBoundary extends React.Component {
 const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLevel, onSelect }) {
     if (!mapsLib || !mapsLib.Map) return null;
     const MarkerComp = mapsLib.AdvancedMarker || (({ children }) => <div>{children}</div>);
-    return (frota || []).filter(motorista => motorista.aprovado === true && motorista.esta_online === true && isValidSC(Number(motorista.lat), Number(motorista.lng))).map(motorista => {
+    return (frota || []).filter(motorista => motorista.aprovado === true && motorista.esta_online === true && motorista.lat != null && motorista.lng != null && !isNaN(parseFloat(motorista.lat)) && !isNaN(parseFloat(motorista.lng))).map(motorista => {
+        const iconSize = zoomLevel > 15 ? 48 : 32;
         return (
             <MarkerComp
                 key={motorista.id}
@@ -263,14 +316,9 @@ const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLev
             >
                 <div onClick={() => onSelect && onSelect(motorista)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', cursor: 'pointer' }}>
                     <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                        {fullName(motorista) || 'Entregador'}
+                        {motorista.nome || 'Entregador'}
                     </div>
-                    <img 
-                        src="/bike.png" 
-                        alt="Motorista" 
-                        onError={(e) => { e.target.onerror = null; e.target.src = '/moto.png'; }}
-                        style={{ width: '40px', height: '40px', objectFit: 'contain' }} 
-                    />
+                    <img src="/bicicleta-de-entrega.png" alt="Entregador" onError={(e) => { try { e.target.onerror = null; e.target.src = motoristaIconUrl; } catch (_) { } }} style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
                 </div>
             </MarkerComp>
         );
@@ -289,7 +337,7 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
     return (
         <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>
             <td style={{ padding: '15px 10px' }}>
-                <span style={{ color: '#ffffff', fontWeight: 600 }}>{fullName(m)}</span>
+                <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
             </td>
 
             <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px' }}>{email || 'Sem email'}</td>
@@ -330,32 +378,38 @@ function App() {
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
+    // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
-    // Local supabase ref to ensure we use the right client instance when it becomes available
-    const supabaseRef = React.useRef(supabase);
-    
-    // Update ref when supabase becomes ready (async)
-    React.useEffect(() => {
-        if (supabase && typeof supabase.from === 'function') {
-            supabaseRef.current = supabase;
-            console.log('🔵 supabaseRef atualizado (imediato):', typeof supabase?.from);
-        }
-        
-        // Garantir que onSupabaseReady atualize o ref
-        if (typeof onSupabaseReady === 'function') {
-            onSupabaseReady((client) => {
-                supabaseRef.current = client;
-                console.log('✅ supabaseRef atualizado via onSupabaseReady:', typeof client?.from);
-            });
-        }
+    // Google quota guard: quando o Google retornar OVER_QUERY_LIMIT, bloqueamos chamadas automáticas por 1 dia
+    const [googleQuotaExceeded, setGoogleQuotaExceeded] = useState(false);
+    const googleQuotaExceededRef = useRef(false);
+    const [quotaBannerMessage, setQuotaBannerMessage] = useState('⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.');
+
+    // Inicializa a partir do localStorage (persistência por dia)
+    useEffect(() => {
+        try {
+            const k = localStorage.getItem('googleQuotaExceededAt');
+            const today = new Date().toISOString().slice(0,10);
+            if (k === today) { setGoogleQuotaExceeded(true); googleQuotaExceededRef.current = true; }
+            else { localStorage.removeItem('googleQuotaExceededAt'); }
+        } catch (e) { /* ignore */ }
     }, []);
 
-    const [googleUnavailable, setGoogleUnavailable] = useState(false); // set when Places/Maps services are temporarily failing
-    const [supabaseConnectedLocal, setSupabaseConnectedLocal] = useState(Boolean(SUPABASE_CONNECTED));
-    const [supabaseChecking, setSupabaseChecking] = useState(false);
-    const [supabaseErrorLocal, setSupabaseErrorLocal] = useState(() => { try { return getLastSupabaseError ? getLastSupabaseError() : null; } catch (e) { return null; } });
-    const [motoristasOnlineCount, setMotoristasOnlineCount] = useState(0);
-    // Localização do gestor removida do dashboard: não solicitamos GPS aqui
+    // Marca o bloqueio de quota / autorização de forma idempotente
+    function markGoogleQuotaExceeded(source, customMessage) {
+        try {
+            if (googleQuotaExceededRef.current) return;
+            const today = new Date().toISOString().slice(0,10);
+            localStorage.setItem('googleQuotaExceededAt', today);
+            setGoogleQuotaExceeded(true);
+            googleQuotaExceededRef.current = true;
+            // Allow custom message for different failure modes
+            const defaultMsg = '⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.';
+            const msg = customMessage || defaultMsg;
+            setQuotaBannerMessage(msg);
+            try { console.info('Google blocked:', source); } catch (e) { }
+        } catch (e) { /* ignore */ }
+    }
 
     // Componente isolado para a tela de aprovação do motorista
     function TelaAprovacaoMotorista() {
@@ -404,72 +458,13 @@ function App() {
 
     // Estados do Supabase
     const [entregasEmEspera, setEntregasEmEspera] = useState([]); // agora vem de `entregas`
-    const [entregas, setEntregas] = useState([]); // debug-visible entregas (sempre array)
     const [frota, setFrota] = useState([]); // agora vem de `motoristas`
     const [totalEntregas, setTotalEntregas] = useState(0);
-    const DEBUG_FORCE_SHOW_ALL = true; // força mostrar tudo temporariamente (debug)
     const [avisos, setAvisos] = useState([]);
     const [gestorPhone, setGestorPhone] = useState(null);
     const [nomeGestor, setNomeGestor] = useState(null);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
-
-    // Initial fetch: load entregas once on mount (minimal logging)
-    React.useEffect(() => {
-        let mounted = true;
-        async function carregarEntregasInicial() {
-            try {
-                const data = await buscarTodasEntregas();
-                // SEMPRE normalizar e setar, mesmo se vazio
-                const normalized = Array.isArray(data) ? data.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null, cliente: it.cliente || it.cli || it.customer || '', endereco: it.endereco || it.address || '' })) : [];
-                
-                if (mounted) {
-                    setEntregas(normalized);
-                    setEntregasEmEspera(normalized);
-                    setAllEntregas(normalized);
-                    setTotalEntregas(normalized.length);
-                    console.log('✅ Entregas carregadas com sucesso:', normalized.length);
-                    console.log('✅ ESTADO entregasEmEspera agora:', normalized);
-                }
-                
-                // Carregar motoristas também
-                try {
-                    console.log('🔵 Tentando carregar motoristas...');
-                    const sb = supabaseRef.current || supabase;
-                    if (sb && typeof sb.from === 'function') {
-                        const { data: motoristas, error: motorErr } = await sb.from('motoristas').select('*').order('id');
-                        console.log('🔵 Resposta motoristas:', { motoristas, motorErr, count: motoristas?.length });
-                        
-                        if (motorErr) {
-                            console.error('❌ Erro ao carregar motoristas:', motorErr);
-                        } else if (motoristas && mounted) {
-                            const normalized = (motoristas || []).map(m => ({
-                                ...m,
-                                lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
-                                lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
-                            }));
-                            setFrota(normalized);
-                            console.log('✅ Motoristas carregados com sucesso:', normalized.length);
-                            console.log('✅ Lista de motoristas:', normalized);
-                        } else {
-                            console.warn('⚠️ Nenhum motorista encontrado no banco');
-                            setFrota([]);
-                        }
-                    } else {
-                        console.error('❌ Supabase não disponível para carregar motoristas');
-                    }
-                } catch (e) {
-                    console.error('❌ Erro carregando motoristas (inicial):', e);
-                    setFrota([]);
-                }
-            } catch (err) {
-                console.error('❌ Erro ao carregar entregas (inicial):', err);
-                if (mounted) { setEntregas([]); setEntregasEmEspera([]); setAllEntregas([]); }
-            }
-        }
-        carregarEntregasInicial();
-        return () => { mounted = false; };
-    }, []);
 
     // Draft preview state: a temporary point selected by gestor and the optimized preview order
     const [draftPoint, setDraftPoint] = useState(null);
@@ -555,10 +550,17 @@ function App() {
     const placesServiceRef = useRef(null);
     const predictionTimerRef = useRef(null);
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
-    // Google Maps: ativado para Places Autocomplete
-    const gmapsLoaded = typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places ? true : false;
+    const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
+
+    // If loader reports error (e.g., API key not authorized or script blocked), surface a manager-facing banner
+    useEffect(() => {
+        try {
+            if (!gmapsError) return;
+            const msg = (gmapsError && gmapsError.message && (String(gmapsError.message).includes('not authorized') || String(gmapsError.message).includes('API key'))) ? '⚠️ Google Maps não autorizado para o projeto atual. Verifique as restrições de API no Google Cloud Console.' : '⚠️ Falha ao carregar Google Maps: serviço indisponível.';
+            markGoogleQuotaExceeded('Loader', msg);
+        } catch (e) { }
+    }, [gmapsError]);
     const [recentList, setRecentList] = useState([]);
-    const [allEntregas, setAllEntregas] = useState([]); // raw entregas from DB (no filters)
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
     const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
@@ -567,8 +569,6 @@ function App() {
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
     const mapContainerRef = useRef(null);
-
-
 
     // Fetch control refs to avoid concurrent fetches and manage retries
     const fetchInProgressRef = useRef(false);
@@ -581,73 +581,20 @@ function App() {
     const motoristaDebounceMapRef = useRef(new Map()); // per-motorista debounce timers for realtime events
     const lastFrotaRef = useRef([]);
 
-    // Emergency brake: ensure we only load once to avoid loops while debugging
-    const hasLoadedOnce = useRef(false);
-    // Global switch to disable background polling/intervals during emergency stabilization
-    const EMERGENCY_POLLING_DISABLED = true;
-
     // Cleanup on unmount for any pending retry
     useEffect(() => {
         return () => { try { if (retryTimerRef.current) clearTimeout(retryTimerRef.current); } catch (e) { } };
     }, []);
 
-    // When Supabase client becomes ready, clear caches and reload primary data to ensure dashboard shows live info
-    const carregamentoInicialRef = useRef(false);
-    useEffect(() => {
-        // DESABILITADO: causa múltiplas chamadas a carregarDados
-        // Apenas o useEffect de buscarTodasEntregas (linha ~500) deve rodar
-        return;
-        
-        try {
-            onSupabaseReady(() => {
-                try {
-                    if (carregamentoInicialRef.current) { try { console.warn('⚠️ Carregamento inicial já executado, ignorando chamada duplicada'); } catch (e) { } return; }
-                    carregamentoInicialRef.current = true;
-                } catch (e) { /* ignore */ }
-                try {
-                    retryCountRef.current = 0;
-                } catch (e) { }
-                try { if (lastRouteCacheRef.current && typeof lastRouteCacheRef.current.clear === 'function') lastRouteCacheRef.current.clear(); } catch (e) { }
-                try { carregarDados(); } catch (e) { /* non-blocking */ }
-            });
-        } catch (e) { /* ignore */ }
-    }, []);
-
     // define map center EARLY to avoid ReferenceError in effects
     const [zoomLevel, setZoomLevel] = useState(13);
-    // Coordenadas do motorista Leandro como fallback (Palhoça/região)
-    const DEFAULT_MAP_CENTER = { lat: -27.6609227, lng: -48.7087265 }; 
+    const DEFAULT_MAP_CENTER = { lat: -27.645, lng: -48.648 };
     const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
     const [pontoPartida, setPontoPartida] = useState(DEFAULT_MAP_CENTER); // sede/company fallback or dynamic driver origin
     const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
 
-    // Geolocalização ao carregar o mapa
-    React.useEffect(() => {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    const userLocation = {
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude
-                    };
-                    setMapCenterState(userLocation);
-                    console.log('📍 Mapa centralizado na localização do usuário:', userLocation);
-                },
-                (error) => {
-                    console.warn('⚠️ Geolocalização falhou, usando localização do motorista Leandro:', error);
-                    setMapCenterState(DEFAULT_MAP_CENTER);
-                }
-            );
-        } else {
-            console.warn('⚠️ Geolocalização não disponível, usando localização do motorista Leandro');
-        }
-    }, []);
-
     // Ensure Google Maps resizes after the container height changes
     useEffect(() => {
-        // DESABILITADO TEMPORARIAMENTE: ResizeObserver pode disparar muito e travar
-        return;
-        
         if (!mapContainerRef.current) return;
         let ro = null;
         let t = null;
@@ -681,9 +628,6 @@ function App() {
 
     // Draft polyline drawing: dashed preview connecting origin + draftPreview points
     useEffect(() => {
-        // DESABILITADO TEMPORARIAMENTE: pode causar re-renders ao desenhar polylines
-        return;
-        
         try {
             if (!mapRef.current || !draftPreview || draftPreview.length === 0) {
                 try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { }
@@ -692,7 +636,7 @@ function App() {
             if (!window.google || !window.google.maps) return;
             // remove existing
             try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { }
-            const path = [(pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER].concat((draftPreview || []).map(pp => ({ lat: Number(pp.lat), lng: Number(pp.lng) })));
+            const path = [ (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER ].concat((draftPreview || []).map(pp => ({ lat: Number(pp.lat), lng: Number(pp.lng) })));
             const poly = new window.google.maps.Polyline({
                 path,
                 strokeColor: '#60a5fa',
@@ -708,7 +652,7 @@ function App() {
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
 
-    // Autocomplete (Places) — inicializar serviços quando Google estiver carregado
+    // Autocomplete (Places) — replaced Autocomplete widget with controlled AutocompleteService (debounced)
     useEffect(() => {
         if (typeof window === 'undefined') return;
         if (abaAtiva !== 'Nova Carga') return;
@@ -716,36 +660,18 @@ function App() {
         // Initialize services when Google loaded
         try {
             if (gmapsLoaded && window.google && window.google.maps && window.google.maps.places) {
-                if (!predictionServiceRef.current && window.google.maps.places.AutocompleteService) {
-                    predictionServiceRef.current = new window.google.maps.places.AutocompleteService();
-                    console.log('✅ AutocompleteService inicializado');
-                }
+                if (!predictionServiceRef.current && window.google.maps.places.AutocompleteService) predictionServiceRef.current = new window.google.maps.places.AutocompleteService();
                 if (!placesServiceRef.current && window.google.maps.places.PlacesService) {
-                    try { 
-                        placesServiceRef.current = new window.google.maps.places.PlacesService(document.createElement('div')); 
-                        console.log('✅ PlacesService inicializado');
-                    } catch (e) { 
-                        placesServiceRef.current = null; 
-                    }
-                }
-                // if we couldn't create either service, mark unavailable briefly
-                if (!predictionServiceRef.current && !placesServiceRef.current) {
-                    try { setGoogleUnavailable(true); setTimeout(() => setGoogleUnavailable(false), 60000); } catch (e) { }
+                    try { placesServiceRef.current = new window.google.maps.places.PlacesService(document.createElement('div')); } catch (e) { placesServiceRef.current = null; }
                 }
             }
-        } catch (e) { 
-            console.warn('AutocompleteService init failed', e); 
-            try { setGoogleUnavailable(true); setTimeout(() => setGoogleUnavailable(false), 60000); } catch (err) { } 
-        }
+        } catch (e) { console.warn('AutocompleteService init failed', e); }
 
         return () => { /* nothing to clean for services */ };
     }, [abaAtiva, gmapsLoaded]);
 
     // Draft point: set when gestor seleciona um endereço
     useEffect(() => {
-        // DESABILITADO TEMPORARIAMENTE: pode causar re-renders excessivos
-        return;
-        
         if (!enderecoCoords || !enderecoEntrega) { setDraftPoint(null); return; }
         try {
             setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: Number(enderecoCoords.lat), lng: Number(enderecoCoords.lng), tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
@@ -756,9 +682,6 @@ function App() {
 
     // Draft preview optimization: compute suggested order for entregasEmEspera + draftPoint (visual only)
     useEffect(() => {
-        // DESABILITADO TEMPORARIAMENTE: causa loops infinitos ao depender de entregasEmEspera
-        return;
-        
         let mounted = true;
         const list = Array.isArray(entregasEmEspera) ? entregasEmEspera.slice() : [];
         if (draftPoint) list.push(draftPoint);
@@ -799,108 +722,73 @@ function App() {
     async function fetchHistoryMatches(q) {
         try {
             if (!q || String(q).trim().length < 3) { setHistorySuggestions([]); return; }
-            if (!supabase || typeof supabase.from !== 'function') {
-                // Supabase not ready; clear suggestions and exit
-                setHistorySuggestions([]);
-                return;
-            }
             const { data, error } = await supabase.from('entregas').select('cliente,endereco,lat,lng').ilike('endereco', `%${q}%`).limit(6);
             if (error) { setHistorySuggestions([]); return; }
             setHistorySuggestions(Array.isArray(data) ? data : []);
         } catch (e) { setHistorySuggestions([]); }
     }
 
-    // GOOGLE MAPS PLACES: buscar predições de endereço
+    // Suggestions: fetch Google Place predictions (debounced caller)
     async function fetchPredictions(q) {
         try {
-            if (!predictionServiceRef.current || !q || q.length < 3) {
-                setPredictions([]);
-                return;
-            }
-            
-            const request = {
-                input: q,
-                componentRestrictions: { country: 'br' },
-                types: ['address']
-            };
-            
-            predictionServiceRef.current.getPlacePredictions(request, (results, status) => {
-                if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
-                    setPredictions(results);
-                } else {
-                    setPredictions([]);
-                    if (status === 'ZERO_RESULTS') {
-                        // Normal, sem resultados
-                    } else {
-                        console.warn('Places Autocomplete status:', status);
-                        setGoogleUnavailable(true);
-                        setTimeout(() => setGoogleUnavailable(false), 60000);
-                    }
-                }
+            if (!q || String(q).trim().length < 3) { setPredictions([]); return; }
+            if (googleQuotaExceededRef.current) { setPredictions([]); return []; } // Google bloqueado hoje: usar histórico somente
+            if (!predictionServiceRef.current) { setPredictions([]); return; }
+            return new Promise((resolve) => {
+                predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
+                            if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
+                    else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setPredictions([]); resolve([]); }
+                    else if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') { markGoogleQuotaExceeded('Places', '⚠️ API do Google não autorizada para Places. Use o histórico e cole o endereço manualmente.'); setPredictions([]); resolve([]); }
+                    else { setPredictions([]); resolve([]); }
+                });
             });
-        } catch (e) {
-            console.warn('fetchPredictions error:', e);
-            setPredictions([]);
-        }
+        } catch (e) { setPredictions([]); }
     }
 
-    // GOOGLE MAPS PLACES: ao clicar numa sugestão, buscar coordenadas
     async function handlePredictionClick(pred) {
         try {
-            setEnderecoFromHistory(false);
-            setEnderecoEntrega(pred.description || '');
-            
-            // Buscar detalhes do lugar (lat/lng) usando PlacesService
-            if (placesServiceRef.current && pred.place_id) {
-                placesServiceRef.current.getDetails(
-                    { placeId: pred.place_id, fields: ['geometry', 'formatted_address'] },
-                    (place, status) => {
-                        if (status === window.google.maps.places.PlacesServiceStatus.OK && place && place.geometry && place.geometry.location) {
-                            const lat = place.geometry.location.lat();
-                            const lng = place.geometry.location.lng();
-                            console.log('✅ Coordenadas capturadas do Google Places:', { lat, lng });
-                            setEnderecoCoords({ lat, lng });
+            if (!pred) return;
+            // Mark as not history
+            try { setEnderecoFromHistory(false); } catch (e) { }
+            try { setEnderecoEntrega(pred.description || (pred && pred.structured_formatting && pred.structured_formatting.main_text) || ''); } catch (e) { }
+            // If we have a place_id, fetch details for coords
+            if (pred && pred.place_id && placesServiceRef.current && placesServiceRef.current.getDetails) {
+                try {
+                    if (googleQuotaExceededRef.current) {
+                        // Google bloqueado — não tentar buscar detalhes
+                        setEnderecoCoords(null);
+                    } else {
+                        const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry','formatted_address'] }, (res, stat) => resolve({ res, stat })));
+                        if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
+                            const loc = details.res.geometry.location;
+                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
                         } else {
-                            console.warn('Places Details falhou:', status);
+                            if (details && details.stat === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('PlaceDetails');
+                            if (details && (details.stat === 'REQUEST_DENIED' || details.stat === 'API_NOT_ALLOWED')) markGoogleQuotaExceeded('PlaceDetails', '⚠️ API do Google não autorizada para Place Details. Use Histórico ou cole o endereço manualmente.');
                             setEnderecoCoords(null);
                         }
                     }
-                );
-            } else {
-                setEnderecoCoords(null);
+                } catch (e) { if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) markGoogleQuotaExceeded('PlaceDetails', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setEnderecoCoords(null); }
             }
-        } catch (e) {
-            console.warn('handlePredictionClick error:', e);
-            setEnderecoCoords(null);
-        }
-        try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
+            // clear suggestions
+            try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
+        } catch (e) { /* ignore */ }
     }
 
     const carregarDados = React.useCallback(async () => {
-        console.log('🔵 carregarDados CHAMADO - hasLoadedOnce:', hasLoadedOnce.current);
-        // MODIFICADO: permitir carregar pelo menos 1 vez, mas não bloquear completamente
-        // O useEffect inicial já carrega via buscarTodasEntregas, mas este pode ser chamado para refresh
-        
-        // If module-level client is not ready yet, DO NOT register callback (prevents recursion)
-        if (!supabaseRef.current || typeof supabaseRef.current.from !== 'function') {
-            console.log('❌ carregarDados ABORTADO - supabase não pronto');
-            return;
-        }
-        // REMOVIDO: Guard supabaseConnectedLocal que estava bloqueando execução
-        // use local ref for client
-        const sb = supabaseRef.current || supabase;
-        if (!sb || typeof sb.from !== 'function') return;
-        // Fetch control refs to avoid concurrent fetches
-        if (fetchInProgressRef.current) return;
-        fetchInProgressRef.current = true;
-        setLoadingFrota(true);
+            // Fetch control refs to avoid concurrent fetches
+            if (fetchInProgressRef.current) return;
+            fetchInProgressRef.current = true;
+            setLoadingFrota(true);
 
-        try {
-            let q = sb.from('motoristas').select('*');
+            try {
+                let q = supabase.from('motoristas').select('*');
             if (q && typeof q.order === 'function') q = q.order('id');
             const { data: motoristas, error: motorErr } = await q;
             if (motorErr) {
-                console.error('Erro na Tabela Motoristas:', motorErr);
+                console.warn('carregarDados: erro ao buscar motoristas', motorErr);
+                // Schedule capped retry to avoid infinite loops
+                scheduleRetry(5000);
                 // Preserve last known valid frota
                 setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
             } else {
@@ -927,8 +815,6 @@ function App() {
 
                 setFrota(merged);
                 lastFrotaRef.current = merged;
-                // update online counter
-                try { setMotoristasOnlineCount((merged || []).filter(m => m && (m.esta_online === true || String(m.esta_online) === 'true')).length); } catch (e) { }
                 // clear any pending retry
                 if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
                 // reset retry counter on success
@@ -940,6 +826,8 @@ function App() {
             }
         } catch (e) {
             console.warn('Erro carregando motoristas:', e);
+            // schedule capped retry
+            scheduleRetry(5000);
             // keep previous frota
             setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
         } finally {
@@ -948,61 +836,57 @@ function App() {
         }
 
 
-        // entregas: sempre carregar todas as entregas do DB (sem filtros complexos)
+        // entregas: filtro por NEW_LOAD_STATUS
         try {
-            // Be explicit about returned columns to ensure cliente/endereco are present
-            let q = sb.from('entregas').select('id,cliente,endereco,lat,lng,status,ordem_logistica,motorista_id,created_at');
+            let q = supabase.from('entregas').select('*');
+            if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
             // Prefer server-side ordering by ordem_logistica when supported
             if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
             const { data: entregasPend, error: entregasErr } = await q;
             if (entregasErr) {
-                console.error('Erro na Tabela Entregas:', entregasErr);
+                console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
                 setEntregasEmEspera([]);
             } else {
-                const rawList = Array.isArray(entregasPend) ? entregasPend.slice() : [];
-                // normalize motorista_id to string and ensure cliente/endereco keys exist
-                const list = rawList.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null, cliente: it.cliente || it.cli || it.customer || '', endereco: it.endereco || it.address || '' }));
-
-                // FORCED: do not filter — show everything while debugging
-                try { setAllEntregas(Array.isArray(list) ? list.slice() : []); } catch (e) { setAllEntregas([]); }
-                try { 
-                    console.log('🟢 carregarDados: setando entregasEmEspera com', list.length, 'itens');
-                    setEntregasEmEspera(Array.isArray(list) ? list.slice() : []); 
-                } catch (e) { setEntregasEmEspera([]); }
-                // Mirror into debug entregas state so debug UI shows the data (and set hasLoadedOnce)
-                try { setEntregas(Array.isArray(list) ? list.slice() : []); hasLoadedOnce.current = true; } catch (e) { setEntregas([]); hasLoadedOnce.current = true; }
+                const list = entregasPend || [];
+                // fallback local sort if server didn't order
+                const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : list;
+                setEntregasEmEspera(sorted);
                 // reset retry counter on success
                 try { retryCountRef.current = 0; } catch (e) { }
             }
         } catch (e) {
-            console.warn('Erro carregando entregas:', e);
+            console.warn('Erro carregando entregas (filtro de status):', e);
             // preserve previous entregasEmEspera if available
             setEntregasEmEspera(prev => (prev && prev.length) ? prev : []);
+            // schedule capped retry
+            scheduleRetry(5000);
         }
 
         // total de entregas
         try {
-            let q2 = sb.from('entregas').select('*');
+            let q2 = supabase.from('entregas').select('*');
             const { data: todas } = await q2;
             setTotalEntregas((todas || []).length);
         } catch (e) {
-            console.error('Erro contando entregas:', e);
+            console.warn('Erro contando entregas:', e);
             // don't reset total to 0 on transient errors
             // leave current value
+            // schedule capped retry
+            scheduleRetry(5000);
         }
 
         // avisos do gestor
         try {
-            let q3 = sb.from('avisos_gestor').select('titulo, mensagem, created_at');
+            let q3 = supabase.from('avisos_gestor').select('titulo, mensagem, created_at');
             if (q3 && typeof q3.order === 'function') q3 = q3.order('created_at', { ascending: false });
             if (q3 && typeof q3.limit === 'function') q3 = q3.limit(10);
             const { data: avisosData, error: avisosErr } = await q3;
-            if (avisosErr) { console.error('Erro na Tabela avisos_gestor:', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
-        } catch (e) { console.error('Erro carregando avisos:', e); setAvisos([]); }
+            if (avisosErr) { console.warn('carregarDados: erro ao buscar avisos', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
+        } catch (e) { console.warn('Erro carregando avisos:', e); setAvisos([]); }
 
         // configuracoes (gestor_phone)
         try {
-            let q4 = sb.from('configuracoes').select('valor').eq('chave', 'gestor_phone');
+            let q4 = supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone');
             if (q4 && typeof q4.limit === 'function') q4 = q4.limit(1);
             const { data: cfg } = await q4;
             if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
@@ -1010,11 +894,11 @@ function App() {
 
         // Histórico recente
         try {
-            let q5 = sb.from('entregas').select('cliente,endereco,created_at');
+            let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
             if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
             if (q5 && typeof q5.limit === 'function') q5 = q5.limit(200);
             const { data: recent, error: recentErr } = await q5;
-            if (recentErr) { console.error('Erro na Tabela Entregas (histórico):', recentErr); setRecentList([]); }
+            if (recentErr) { console.warn('carregarDados: erro ao buscar histórico', recentErr); setRecentList([]); }
             else if (recent) {
                 const seen = new Set();
                 const unique = [];
@@ -1029,7 +913,7 @@ function App() {
             } else {
                 setRecentList([]);
             }
-        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); }
+        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); scheduleRetry(5000); }
         setLoadingFrota(false);
     }, []);
 
@@ -1038,7 +922,6 @@ function App() {
     const aprovarMotorista = async (id) => {
         try {
             if (!id) return;
-            if (!supabase || typeof supabase.from !== 'function') { console.warn('aprovarMotorista: supabase client not initialized'); return { error: new Error('Supabase não inicializado') }; }
             const sid = String(id);
             const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', sid).select();
             if (error) {
@@ -1091,23 +974,20 @@ function App() {
         }
     };
 
-    // Limpador de localStorage: remove caches relacionados a entregas/rotas ao iniciar (evita 'lixo' em celulares)
+    // Limpador de localStorage: remove referências literais ao motorista antigo (ex: 'f6a9...') se existirem
     useEffect(() => {
         try {
             if (typeof window === 'undefined' || !window.localStorage) return;
-            const denyPatterns = [/entregas/i, /rota/i, /route/i, /draft/i, /mock_/i, /lastRouteCache/i];
-            const allowlist = ['motorista', 'v10_email'];
-            const toRemove = [];
-            for (let i = 0; i < localStorage.length; i++) {
+            const keysToCheck = ['motorista', 'v10_email'];
+            keysToCheck.forEach(k => {
                 try {
-                    const key = localStorage.key(i);
-                    if (!key) continue;
-                    if (allowlist.includes(key)) continue;
-                    const should = denyPatterns.some(rx => rx.test(key) || rx.test(String(localStorage.getItem(key) || '')));
-                    if (should) toRemove.push(key);
+                    const raw = localStorage.getItem(k);
+                    if (!raw) return;
+                    if (String(raw).includes('f6a9')) {
+                        localStorage.removeItem(k);
+                    }
                 } catch (e) { /* ignore */ }
-            }
-            toRemove.forEach(k => { try { localStorage.removeItem(k); console.info('localStorage cleanup removed', k); } catch (e) { } });
+            });
         } catch (e) { /* ignore */ }
     }, []);
 
@@ -1120,31 +1000,30 @@ function App() {
         // debug logs removed for production dashboard
     }, [frota]);
 
-    // DO NOT block the entire app render when Supabase credentials are missing.
-    // Instead show a non-blocking warning banner and let the UI load in degraded/local mode.
-    const missingSupabase = !HAS_SUPABASE_CREDENTIALS;
+    // If Supabase credentials are not present, show a clear error screen and avoid loading fake data
+    if (!HAS_SUPABASE_CREDENTIALS) {
+        return (
+            <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#111827', color: '#fff' }}>
+                <div style={{ textAlign: 'center', maxWidth: '720px', padding: '24px' }}>
+                    <h1 style={{ fontSize: '28px', marginBottom: '12px' }}>ERRO DE CONEXÃO: Chaves de API ausentes</h1>
+                    <p style={{ opacity: 0.85, marginBottom: '8px' }}>Defina as variáveis de ambiente <strong>VITE_SUPABASE_URL</strong> e <strong>VITE_SUPABASE_ANON_KEY</strong> (ou habilite o fallback de desenvolvimento em <strong>src/supabaseClient.js</strong>).</p>
+                    <p style={{ opacity: 0.7 }}>O sistema exige uma conexão real com o Supabase — sem chaves não é possível iniciar.</p>
+                </div>
+            </div>
+        );
+    }
 
     useEffect(() => {
         // Carrega dados iniciais (sem solicitar GPS no dashboard)
         const init = async () => {
-            try {
-                await carregarDados();
-            } catch (e) { /* ignore */ }
+            await carregarDados();
         };
-
-        // If supabase isn't ready yet, register to run init when it is; otherwise run now
-        try {
-            if (supabase && typeof supabase.from === 'function') {
-                init();
-            } else if (typeof onSupabaseReady === 'function') {
-                onSupabaseReady(init);
-            }
-        } catch (e) { /* ignore */ }
+        init();
 
         // On page load or when opening the dashboard, try to reuse last saved estimated distance from DB to avoid calling Google
         (async () => {
             try {
-                if (!HAS_SUPABASE_CREDENTIALS || !supabase || typeof supabase.from !== 'function') return;
+                if (!HAS_SUPABASE_CREDENTIALS) return;
                 const { data: lastLog, error } = await supabase.from('logs_roteirizacao').select('distancia_nova, created_at').order('created_at', { ascending: false }).limit(1);
                 if (!error && lastLog && lastLog.length > 0 && lastLog[0].distancia_nova != null) {
                     try {
@@ -1155,70 +1034,6 @@ function App() {
             } catch (e) { /* ignore */ }
         })();
     }, []);
-
-    // react to supabase ready/connected signal: run healthcheck and auto-load data once without user action
-    useEffect(() => {
-        // DESABILITADO: causa múltiplas chamadas a carregarDados que quebram hasLoadedOnce
-        // Apenas o useEffect inicial (buscarTodasEntregas) deve carregar dados
-        return;
-        
-        async function handleReady() {
-            try {
-                // If the module-level flag is already true, accept it and load immediately
-                if (SUPABASE_CONNECTED) {
-                    setSupabaseConnectedLocal(true);
-                    setSupabaseErrorLocal(null);
-                    try { await carregarDados(); } catch (e) { console.warn('carregarDados after SUPABASE_CONNECTED failed', e); }
-                    return;
-                }
-
-                // Attempt an immediate health-check (network / RLS / permission)
-                try {
-                    setSupabaseChecking(true);
-                    const res = await checkSupabaseConnection();
-                    setSupabaseChecking(false);
-                    if (res && res.connected) {
-                        setSupabaseConnectedLocal(true);
-                        setSupabaseErrorLocal(null);
-                        try { await carregarDados(); } catch (e) { console.warn('carregarDados after healthcheck failed', e); }
-                        return;
-                    } else {
-                        setSupabaseConnectedLocal(false);
-                        setSupabaseErrorLocal(res && res.error ? res.error : new Error('Supabase healthcheck failed'));
-                    }
-                } catch (e) {
-                    setSupabaseChecking(false);
-                    setSupabaseErrorLocal(e);
-                }
-
-                // Ensure we still react when onSupabaseConnected fires later
-                try {
-                    onSupabaseConnected(async () => {
-                        setSupabaseConnectedLocal(true);
-                        setSupabaseErrorLocal(null);
-                        try { await carregarDados(); } catch (e) { console.warn('carregarDados after connected failed', e); }
-                    });
-                } catch (e) { /* ignore */ }
-            } catch (e) { /* ignore */ }
-        }
-
-        try {
-            // Ensure local ref is set and carregarDados runs as soon as client exists
-            onSupabaseReady((client) => {
-                try {
-                    supabaseRef.current = client || supabaseRef.current;
-                    setSupabaseErrorLocal(null);
-                    if (client) setSupabaseConnectedLocal(true);
-                    try { carregarDados(); } catch (e) { console.warn('carregarDados after onSupabaseReady handler failed', e); }
-                } catch (e) { /* ignore */ }
-            });
-            // Also run the health-check driven handler
-            onSupabaseReady(handleReady);
-        } catch (e) {
-            // fallback: run immediately
-            try { handleReady(); } catch (err) { /* ignore */ }
-        }
-    }, [carregarDados]);
 
     // Tenta obter localização do gestor via Geolocation + reverse geocoding
     useEffect(() => {
@@ -1236,8 +1051,13 @@ function App() {
                 if (window.google && window.google.maps && window.google.maps.Geocoder) {
                     const geocoder = new window.google.maps.Geocoder();
                     const results = await new Promise((resolve, reject) => {
-                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
-                            if (status === 'OK') resolve(res); else reject(status);
+                                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
+                            if (status === 'OK') resolve(res);
+                            else {
+                                if (status === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('Geocoder');
+                                if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') markGoogleQuotaExceeded('Geocoder', '⚠️ Geocoder do Google não autorizado. Use fallback Nominatim.');
+                                reject(status);
+                            }
                         });
                     });
                     let city = '';
@@ -1276,7 +1096,8 @@ function App() {
                     // swallow and fallback
                 }
             } catch (e) {
-                // swallow
+                if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) { markGoogleQuotaExceeded('Geocoder'); }
+                // swallow and fallback
             }
             if (mounted) setGestorLocation('São Paulo, BR');
         };
@@ -1293,14 +1114,25 @@ function App() {
         (async () => {
             setLoadingFrota(true);
             try {
+                // Only attempt to import maps library when we have a valid API key
+                const key = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
+                if (!key || String(key).trim().length === 0) {
+                    setMapsLoadError(true);
+                    return;
+                }
                 const lib = await import('@vis.gl/react-google-maps');
                 if (!mounted) return;
                 setMapsLib(lib || null);
             } catch (e) {
-                console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e);
+                try { console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e); } catch (err) { }
                 if (!mounted) return;
                 setFrota([]);
                 setMapsLoadError(true);
+                // If the import fails because the API is not authorized, mark the app as blocked to provide a clear banner to managers
+                try {
+                    const msg = (e && e.message && (String(e.message).includes('Unauthorized') || String(e.message).includes('not authorized'))) ? '⚠️ Google Maps carregado, mas a chave não está autorizada para esta API. Verifique as restrições.' : null;
+                    if (msg) markGoogleQuotaExceeded('Loader', msg);
+                } catch (err) { }
             }
         })();
         return () => { mounted = false; };
@@ -1347,128 +1179,6 @@ function App() {
     // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
     const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
 
-    // Filtrar apenas entregas ATIVAS para exibir no mapa (excluir concluídas/finalizadas)
-    // IMPORTANTE: Se rotaAtiva estiver vazia, não deve mostrar NENHUM pino de entrega
-    const entregasAtivasNoMapa = React.useMemo(() => {
-        // Se não há rota ativa, retornar array vazio (sem pinos)
-        if (!rotaAtiva || rotaAtiva.length === 0) {
-            return [];
-        }
-        
-        const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
-        return orderedRota.filter(e => {
-            const status = String(e.status || '').toLowerCase().trim();
-            // Apenas mostrar entregas com coordenadas VÁLIDAS
-            const hasValidCoords = e.lat != null && e.lng != null && 
-                                   Number.isFinite(Number(e.lat)) && 
-                                   Number.isFinite(Number(e.lng));
-            return !statusInvalidos.includes(status) && hasValidCoords;
-        });
-    }, [orderedRota, rotaAtiva]);
-
-    // Verificar se a rota foi finalizada (todas as entregas concluídas)
-    const rotaFinalizada = React.useMemo(() => {
-        if (!orderedRota || orderedRota.length === 0) return false;
-        const statusFinais = ['concluida', 'concluída', 'finalizada', 'entregue'];
-        const todasConcluidas = orderedRota.every(e => {
-            const status = String(e.status || '').toLowerCase().trim();
-            return statusFinais.includes(status);
-        });
-        return todasConcluidas;
-    }, [orderedRota]);
-
-    // Reset do mapa quando rota é finalizada
-    React.useEffect(() => {
-        if (rotaFinalizada && mapRef.current) {
-            console.log('🏁 Rota finalizada! Limpando mapa...');
-            
-            // Limpar estado de rota ativa após 2 segundos
-            const timer = setTimeout(() => {
-                console.log('🧹 LIMPEZA FINAL: Removendo TODAS as entregas do mapa');
-                
-                // Limpar TODOS os estados de entregas
-                setRotaAtiva([]);
-                setMotoristaDaRota(null);
-                
-                // CRÍTICO: Garantir que entregasEmEspera não mantenha itens finalizados
-                setEntregasEmEspera(prev => {
-                    // Remover todas as entregas que já foram concluídas
-                    const statusFinais = ['concluida', 'concluída', 'finalizada', 'entregue'];
-                    return prev.filter(e => {
-                        const status = String(e.status || '').toLowerCase().trim();
-                        return !statusFinais.includes(status);
-                    });
-                });
-                
-                // Resetar zoom para visão geral
-                try {
-                    if (mapRef.current && mapRef.current.setZoom) {
-                        mapRef.current.setZoom(13);
-                        console.log('🗺️ Zoom resetado para visão geral');
-                    }
-                    
-                    // Centralizar no motorista se disponível, senão na cidade
-                    const motoristaOnline = frota.find(m => m.esta_online && m.lat && m.lng);
-                    if (motoristaOnline && mapRef.current.setCenter) {
-                        mapRef.current.setCenter({ 
-                            lat: Number(motoristaOnline.lat), 
-                            lng: Number(motoristaOnline.lng) 
-                        });
-                        console.log('📍 Mapa centralizado no motorista');
-                    } else if (mapRef.current.setCenter) {
-                        mapRef.current.setCenter(mapCenterState);
-                        console.log('📍 Mapa centralizado na cidade');
-                    }
-                } catch (e) {
-                    console.warn('Erro ao resetar mapa:', e);
-                }
-                
-                console.log('✅ Mapa limpo e pronto para próxima rota!');
-            }, 2000); // 2 segundos de delay para feedback visual
-            
-            return () => clearTimeout(timer);
-        }
-    }, [rotaFinalizada, frota, mapCenterState]);
-
-    // Ajustar bounds do mapa para mostrar todos os marcadores (entregas + motoristas)
-    React.useEffect(() => {
-        if (!mapRef.current || !mapsLib?.LatLngBounds) return;
-        
-        // Aguardar um pouco para garantir que os marcadores foram renderizados
-        const timer = setTimeout(() => {
-            try {
-                const bounds = new mapsLib.LatLngBounds();
-                let hasMarkers = false;
-
-                // Adicionar entregas aos bounds
-                [...(entregasEmEspera || []), ...(orderedRota || [])].forEach(entrega => {
-                    if (entrega.lat && entrega.lng && isValidSC(Number(entrega.lat), Number(entrega.lng))) {
-                        bounds.extend({ lat: Number(entrega.lat), lng: Number(entrega.lng) });
-                        hasMarkers = true;
-                    }
-                });
-
-                // Adicionar motoristas online aos bounds
-                (frota || []).forEach(motorista => {
-                    if (motorista.esta_online && motorista.lat && motorista.lng && isValidSC(Number(motorista.lat), Number(motorista.lng))) {
-                        bounds.extend({ lat: Number(motorista.lat), lng: Number(motorista.lng) });
-                        hasMarkers = true;
-                    }
-                });
-
-                // Ajustar mapa se houver marcadores
-                if (hasMarkers && mapRef.current.fitBounds) {
-                    mapRef.current.fitBounds(bounds);
-                    console.log('🗺️ Mapa ajustado para mostrar todos os marcadores');
-                }
-            } catch (e) {
-                console.warn('Erro ao ajustar bounds do mapa:', e);
-            }
-        }, 1000); // Aguardar 1 segundo para renderização
-
-        return () => clearTimeout(timer);
-    }, [entregasEmEspera, orderedRota, frota, mapsLib]);
-
     // Center for map: force Santa Catarina as requested
     const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
     // Forçar centro em Santa Catarina (coordenadas antigas removidas) — usar `mapCenterState`.
@@ -1488,7 +1198,7 @@ function App() {
             <MarkerComp key={m.id} position={{ lat: Number(displayPos.lat), lng: Number(displayPos.lng) }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', zIndex: 100001 }}>
                     <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                        {fullName(m) || 'Entregador'}
+                        {m.nome || 'Entregador'}
                     </div>
                     <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
                 </div>
@@ -1506,128 +1216,29 @@ function App() {
 
     function capitalize(s) { return String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1); }
 
-
     // Delivery markers: numbered pins with color and small label showing type
     const DeliveryMarkers = React.memo(function DeliveryMarkers({ list = [], mapsLib }) {
-        const [selectedMarker, setSelectedMarker] = React.useState(null);
-        const InfoWindowComp = mapsLib?.InfoWindow;
-        
         if (!mapsLib || !mapsLib.AdvancedMarker) return null;
-        return (
-            <>
-                {(list || []).map((p, idx) => {
-                    const lat = Number(p.lat);
-                    const lng = Number(p.lng);
-                    // Only render markers with valid coords inside SC bounds
-                    if (!isValidSC(Number(lat), Number(lng))) return null;
-                    // Use ordem_logistica exclusively for numbering on the map. If not set (>0) show empty.
+        return (list || []).map((p, idx) => {
+            const lat = Number(p.lat);
+            const lng = Number(p.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            // Use ordem_logistica exclusively for numbering on the map. If not set (>0) show empty.
                     // Use ordem_logistica when available, otherwise fallback to index+1 so pins are always visible
-                    const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : String(idx + 1);
-                    const tipo = String(p.tipo || 'Entrega').toLowerCase();
-                    const status = String(p.status || 'pendente').toLowerCase();
-                    
-                    // COR PRINCIPAL: Baseada no STATUS
-                    let pinColor;
-                    if (status === 'concluída' || status === 'concluida' || status === 'entregue' || status === 'sucesso') {
-                        pinColor = '#10b981'; // Verde - Sucesso
-                    } else if (status === 'falha' || status === 'cancelado' || status === 'cancelada') {
-                        pinColor = '#ef4444'; // Vermelho - Falha/Cancelado
-                    } else {
-                        pinColor = '#3b82f6'; // Azul - Pendente/Em Rota (padrão)
-                    }
-                    
-                    // COR DA BORDA: Baseada no TIPO de serviço
-                    let borderColor;
-                    if (tipo === 'entrega') {
-                        borderColor = '#2563eb'; // Azul
-                    } else if (tipo === 'recolha') {
-                        borderColor = '#f59e0b'; // Laranja
-                    } else if (tipo === 'outros' || tipo === 'outro') {
-                        borderColor = '#a855f7'; // Lilás
-                    } else {
-                        borderColor = '#64748b'; // Cinza padrão
-                    }
-                    
-                    // COR DO RÓTULO (LABEL): Fundo colorido + Texto BRANCO
-                    let labelBgColor, labelText;
-                    if (tipo === 'entrega') {
-                        labelBgColor = '#2563eb'; // AZUL (Entrega)
-                        labelText = 'Entrega';
-                    } else if (tipo === 'recolha') {
-                        labelBgColor = '#fb923c'; // LARANJA (Recolha)
-                        labelText = 'Recolha';
-                    } else if (tipo === 'outros' || tipo === 'outro') {
-                        labelBgColor = '#c084fc'; // LILÁS (Outros)
-                        labelText = 'Outros';
-                    } else {
-                        labelBgColor = '#64748b'; // Cinza padrão
-                        labelText = capitalize(tipo);
-                    }
-                    
-                    const MarkerComp = mapsLib.AdvancedMarker;
-                    return (
-                        <MarkerComp key={`entrega-${p.id || idx}`} position={{ lat, lng }}>
-                            <div 
-                                onClick={() => setSelectedMarker(p)}
-                                style={{ transform: 'translate(-50%,-110%)', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}
-                            >
-                                {/* Rótulo colorido acima do pino */}
-                                <div style={{ 
-                                    backgroundColor: labelBgColor, 
-                                    color: '#fff', 
-                                    padding: '4px 10px', 
-                                    borderRadius: 12, 
-                                    fontSize: 11, 
-                                    fontWeight: 700, 
-                                    marginBottom: 6, 
-                                    boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-                                    whiteSpace: 'nowrap'
-                                }}>
-                                    {labelText}
-                                </div>
-                                {/* Pino numerado com cor baseada no status */}
-                                <div style={{ 
-                                    width: 36, 
-                                    height: 36, 
-                                    borderRadius: '50%', 
-                                    background: pinColor, 
-                                    border: `3px solid ${borderColor}`,
-                                    display: 'flex', 
-                                    alignItems: 'center', 
-                                    justifyContent: 'center', 
-                                    color: '#fff', 
-                                    fontWeight: 800, 
-                                    fontSize: 14, 
-                                    boxShadow: '0 4px 10px rgba(0,0,0,0.25)' 
-                                }}>
-                                    {String(num)}
-                                </div>
-                            </div>
-                        </MarkerComp>
-                    );
-                })}
-                
-                {/* InfoWindow ao clicar no marcador */}
-                {selectedMarker && InfoWindowComp && (
-                    <InfoWindowComp 
-                        position={{ lat: Number(selectedMarker.lat), lng: Number(selectedMarker.lng) }}
-                        onCloseClick={() => setSelectedMarker(null)}
-                    >
-                        <div style={{ padding: '8px', minWidth: '200px' }}>
-                            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold', color: '#1f2937' }}>
-                                {selectedMarker.cliente}
-                            </h3>
-                            <p style={{ margin: '0', fontSize: '12px', color: '#6b7280' }}>
-                                📍 {selectedMarker.endereco}
-                            </p>
-                            <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#9ca3af' }}>
-                                Status: <span style={{ fontWeight: 'bold', color: '#3b82f6' }}>{selectedMarker.status}</span>
-                            </p>
-                        </div>
-                    </InfoWindowComp>
-                )}
-            </>
-        );
+            const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : String(idx + 1);
+            const tipo = String(p.tipo || 'Entrega');
+            // If ordem_logistica is zero or not set, show fallback index to keep pins visible (temporary)
+            const color = colorForType(tipo);
+            const MarkerComp = mapsLib.AdvancedMarker;
+            return (
+                <MarkerComp key={`entrega-${p.id || idx}`} position={{ lat, lng }}>
+                    <div style={{ transform: 'translate(-50%,-110%)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                        <div style={{ backgroundColor: 'rgba(0,0,0,0.75)', color: '#fff', padding: '4px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700, marginBottom: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>{capitalize(tipo)}</div>
+                        <div style={{ width: 36, height: 36, borderRadius: '50%', background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 14, boxShadow: '0 4px 10px rgba(0,0,0,0.25)' }}>{String(num)}</div>
+                    </div>
+                </MarkerComp>
+            );
+        });
     });
 
 
@@ -1676,7 +1287,7 @@ function App() {
 
     const getDriverServiceType = (motoristaId) => {
         try {
-            const found = (rotaAtiva || []).find(r => String(r.motorista_id) === String(motoristaId) && String(r.status || '').trim().toLowerCase() === 'em_rota');
+            const found = (rotaAtiva || []).find(r => Number(r.motorista_id) === Number(motoristaId) && String(r.status || '').trim().toLowerCase() === 'em_rota');
             return found ? (found.tipo || null) : null;
         } catch (e) { return null; }
     };
@@ -1839,9 +1450,9 @@ function App() {
                             // waypoint_order computed — suppressed verbose logging for stability
 
                             // Update UI state with the new order (do NOT persist here) — persistence is handled in recalcRotaForMotorista
-                            try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), motorista_id: String(motoristaId) }))); } catch (e) { }
+                            try { setRotaAtiva(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: motoristaId }))); } catch (e) { }
                             // preview mode: update local draft preview as well
-                            try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1) }))); } catch (e) { }
+                            try { setDraftPreview(newOrdered.map((p, idx) => ({ ...p, ordem: Number(idx + 1), ordem_logistica: Number(idx + 1) }))); } catch (e) { }
 
                             // Store wpOrderIds to include in possible return
                             const wpOrderIds = newOrdered.map(p => p && p.id);
@@ -1889,7 +1500,7 @@ function App() {
                                 try {
                                     const ov = res.routes[0].overview_path || [];
                                     let meters2 = 0;
-                                    for (let i = 1; i < ov.length; i++) meters2 += haversineKm(ov[i - 1], ov[i]) * 1000;
+                                    for (let i = 1; i < ov.length; i++) meters2 += haversineKm(ov[i-1], ov[i]) * 1000;
                                     if (meters2 > 0) setEstimatedDistanceKm(Number((meters2 / 1000).toFixed(1)));
                                 } catch (e) { /* ignore */ }
                             }
@@ -1937,16 +1548,8 @@ function App() {
             routingInProgressRef.current = true;
             // capture previous distance for audit
             const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
-            
-            // Usar supabaseRef para evitar erro "Cannot read properties of null"
-            const sb = supabaseRef.current || supabase;
-            if (!sb || typeof sb.from !== 'function') {
-                console.warn('recalcRotaForMotorista: supabase não disponível');
-                return;
-            }
-            
             // Fetch motorista to ensure online and get current lat/lng
-            const { data: mdata, error: merr } = await sb.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId);
+            const { data: mdata, error: merr } = await supabase.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId);
             if (merr) { console.warn('recalcRotaForMotorista: erro ao buscar motorista:', merr); return; }
             const motor = mdata && mdata[0] ? mdata[0] : null;
             if (!motor) return;
@@ -1964,13 +1567,10 @@ function App() {
                 try { setPontoPartida(origin); } catch (e) { /* ignore */ }
             }
 
-            // Fetch remaining deliveries for this motorista (or ALL when DEBUG_FORCE_SHOW_ALL)
-            let qR = supabase.from('entregas').select('*').in('status', ['pendente', 'em_rota']).order('ordem_logistica', { ascending: true });
-            if (!DEBUG_FORCE_SHOW_ALL && motoristaId != null) qR = qR.eq('motorista_id', motoristaId);
-            const { data: remData } = await qR;
-            // normalize motorista_id to string for consistent comparisons
-            const remainingForDriver = Array.isArray(remData) ? remData.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null })) : [];
-            if (!remainingForDriver || remainingForDriver.length === 0) return; 
+            // Fetch remaining deliveries for this motorista
+            const { data: remData } = await supabase.from('entregas').select('*').eq('motorista_id', motoristaId).in('status', ['pendente', 'em_rota']).order('ordem_logistica', { ascending: true });
+            const remainingForDriver = remData || [];
+            if (!remainingForDriver || remainingForDriver.length === 0) return;
 
             // Cache guard: avoid recalculating if remaining set hasn't changed recently
             try {
@@ -1986,7 +1586,7 @@ function App() {
                             if (cached.drawResult.secs) { setEstimatedTimeSec(cached.drawResult.secs); setEstimatedTimeText(formatDuration(cached.drawResult.secs)); }
                         }
                         if (cached.optimized && Array.isArray(cached.optimized)) {
-                            const optimizedWithOrder = (cached.optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: String(motoristaId) }));
+                            const optimizedWithOrder = (cached.optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
                             setRotaAtiva(optimizedWithOrder);
                         }
                         try { return; } catch (e) { }
@@ -1994,9 +1594,11 @@ function App() {
                 }
             } catch (e) { /* ignore hashing issues */ }
 
-            // Compute optimized order using local algorithm (Nearest Neighbor + Haversine)
+            // Compute optimized order using company HQ as final destination and respecting driver position via motoristaId
             try { setDistanceCalculating(true); } catch (e) { }
-            let optimized = await otimizarRotaLocal(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
+            // Log IDs being sent to Google for traceability
+            // IDs being sent to Google (verbose logging suppressed for stability)
+            let optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
             // Safety: avoid processing extremely large routes in one go to preserve browser stability
             try {
                 if (Array.isArray(optimized) && optimized.length > 200) {
@@ -2101,7 +1703,7 @@ function App() {
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
-                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: String(motoristaId) }));
+                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
                 setRotaAtiva(optimizedWithOrder);
                 const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
                 if (foundDriver) setMotoristaDaRota(foundDriver);
@@ -2114,7 +1716,7 @@ function App() {
 
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
-                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: String(motoristaId) }));
+                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
                 setRotaAtiva(optimizedWithOrder);
                 const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
                 if (foundDriver) setMotoristaDaRota(foundDriver);
@@ -2139,13 +1741,7 @@ function App() {
     async function fetchLogsForMotorista(motoristaId) {
         try {
             if (!motoristaId) { setLogsHistory([]); return; }
-            const sb = supabaseRef.current || supabase;
-            if (!sb || typeof sb.from !== 'function') {
-                console.warn('fetchLogsForMotorista: supabase não disponível');
-                setLogsHistory([]);
-                return;
-            }
-            const { data, error } = await sb.from('logs_roteirizacao').select('*').eq('motorista_id', motoristaId).order('created_at', { ascending: false }).limit(3);
+            const { data, error } = await supabase.from('logs_roteirizacao').select('*').eq('motorista_id', motoristaId).order('created_at', { ascending: false }).limit(3);
             if (error) { console.error('fetchLogsForMotorista: erro', error); setLogsHistory([]); return; }
             setLogsHistory(Array.isArray(data) ? data : []);
         } catch (e) { console.error('fetchLogsForMotorista: exceção', e); setLogsHistory([]); }
@@ -2153,30 +1749,28 @@ function App() {
 
     useEffect(() => { try { if (motoristaDaRota && motoristaDaRota.id) fetchLogsForMotorista(String(motoristaDaRota.id)); else setLogsHistory([]); } catch (e) { /* ignore */ } }, [motoristaDaRota]);
 
-    // Realtime: escuta inserções/atualizações em `entregas` e mantém lista sincronizada com o DB
+    // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
     useEffect(() => {
         if (!HAS_SUPABASE_CREDENTIALS) return;
 
-        const handleEntregasEvent = async (payload) => {
+        const handleEntregasEvent = (payload) => {
             try {
-                const ev = payload && payload.event ? payload.event : null;
-                const rec = payload && (payload.new || payload.record || payload.old) ? (payload.new || payload.record || payload.old) : null;
-                // If deletion, remove immediately from local state for snappy UX then refresh from DB
-                if (ev === 'DELETE' || (payload && payload.type === 'DELETE')) {
-                    try {
-                        const id = rec && rec.id ? String(rec.id) : null;
-                        if (id) {
-                            try { setEntregasEmEspera(prev => prev ? prev.filter(p => String(p.id) !== id) : prev); } catch (e) { }
-                            try { setRotaAtiva(prev => prev ? prev.filter(p => String(p.id) !== id) : prev); } catch (e) { }
-                            try { setDraftPreview(prev => prev ? prev.filter(p => String(p.id) !== id) : prev); } catch (e) { }
-                        }
-                    } catch (e) { /* ignore */ }
-                    try { await carregarDados(); } catch (e) { /* ignore */ }
-                    return;
+                const rec = payload.new || payload.record || null;
+                if (!rec) return;
+                if (rec.motorista_id) {
+                    const st = String(rec.status || '').trim().toLowerCase();
+                    if (payload.event === 'INSERT' || (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
+                        // Do NOT auto-trigger recalculation. Mark that driver's route needs manual reoptimization by a manager.
+                        try {
+                            const mid = String(rec.motorista_id);
+                            if (!pendingRecalcRef.current.has(mid)) {
+                                pendingRecalcRef.current.add(mid);
+                                try { setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
+                                try { setMensagemGeral(`Novas alterações para motorista ${mid}. Clique em REORGANIZAR ROTA para processar.`); } catch (e) { }
+                            }
+                        } catch (e) { /* ignore */ }
+                    }
                 }
-
-                // For insert/update, refresh from DB (DB is single source of truth)
-                try { await carregarDados(); } catch (e) { /* ignore reload errors */ }
             } catch (e) { /* ignore */ }
         };
 
@@ -2184,7 +1778,6 @@ function App() {
             const chan = supabase.channel('entregas-recalc')
                 .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, handleEntregasEvent)
                 .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, handleEntregasEvent)
-                .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'entregas' }, handleEntregasEvent)
                 .subscribe();
 
             return () => { try { supabase.removeChannel(chan); } catch (e) { chan.unsubscribe && chan.unsubscribe(); } };
@@ -2195,27 +1788,23 @@ function App() {
         try {
             if (typeof subscribeToTable === 'function') {
                 stopPolling = subscribeToTable('entregas', (res) => {
-                    try { carregarDados(); } catch (e) { /* ignore */ }
+                    (res && res.data || []).forEach(r => handleEntregasEvent({ new: r, event: 'INSERT' }));
                 }, { pollMs: 1000 });
             }
         } catch (e) { /* ignore */ }
 
         return () => { try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
-    }, [carregarDados]);
+    }, [recalcRotaForMotorista]);
 
-    // Auto-zoom / fitBounds behavior for Google Map when pontos mudam (only SC-valid points)
+    // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
     useEffect(() => {
         if (!mapRef.current) return;
         const map = mapRef.current;
         const pontos = [
-            ...orderedRota.filter(p => isValidSC(Number(p.lat), Number(p.lng))).map(p => [Number(p.lat), Number(p.lng)]),
-            ...((frota || []).filter(m => m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(m => [Number(m.lat), Number(m.lng)]))
+            ...orderedRota.map(p => [p.lat, p.lng]),
+            ...((frota || []).filter(m => m.esta_online === true && m.lat != null && m.lng != null).map(m => [m.lat, m.lng]))
         ].filter(pt => pt && pt.length >= 2 && !isNaN(Number(pt[0])) && !isNaN(Number(pt[1])));
-        if (!pontos || pontos.length === 0) {
-            // No valid points in SC — center on Florianópolis and set conservative zoom
-            try { map.setCenter({ lat: -27.5969, lng: -48.5495 }); map.setZoom && map.setZoom(12); } catch (e) { /* ignore */ }
-            return;
-        }
+        if (!pontos || pontos.length === 0) return;
         const bounds = new window.google.maps.LatLngBounds();
         pontos.forEach(pt => { bounds.extend({ lat: Number(pt[0]), lng: Number(pt[1]) }); });
         try {
@@ -2229,7 +1818,6 @@ function App() {
 
     // Remover motoristas sem atualização há mais de 2 minutos (evita 'fantasmas')
     useEffect(() => {
-        if (EMERGENCY_POLLING_DISABLED) return; // disabled temporarily for stabilization
         const INTERVAL = 30 * 1000; // checa a cada 30s
         const MAX_AGE = 2 * 60 * 1000; // 2 minutos
         const id = setInterval(() => {
@@ -2253,71 +1841,99 @@ function App() {
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        // GOOGLE MAPS DESABILITADO - modo texto apenas, aceitar entrada manual
+        // Se o Google Maps/Places está carregado, exigir que o usuário selecione uma sugestão que traga coords
+        if (gmapsLoaded) {
+            if (!window.google || !window.google.maps || !window.google.maps.places) {
+                console.error('Google Maps Places não está disponível (verifique se a library `places` foi carregada)');
+                // Permitimos fallback quando a library não está disponível, mas registramos o erro.
+            }
+            // If coords are not set (user pasted address / didn't click suggestion)
+            if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords.lat)) || !Number.isFinite(Number(enderecoCoords.lng))) {
+                if (enderecoFromHistory) {
+                    // History is sovereign — accept the address without forcing Google validation
+                    try { console.info('adicionarAosPendentes: address from history accepted without geocode'); } catch (e) { }
+                } else if (typeof window !== 'undefined') {
+                    // Prefer history coords from Supabase before calling Google Geocoder
+                    try {
+                        if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
+                            const { data: hist, error: histErr } = await supabase.from('entregas').select('lat,lng').ilike('endereco', `%${enderecoEntrega}%`).limit(1);
+                            if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
+                                setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
+                            } else {
+                                // No coords in history: if Google quota blocked, activate safety mode and inform user
+                                if (googleQuotaExceededRef.current) {
+                                    markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
+                                    try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar o endereço colado porque as APIs do Google estão indisponíveis. Por favor, verifique o endereço ou selecione do Histórico.'); } catch (e) { }
+                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                        try { enderecoRef.current.focus(); } catch (e) { }
+                                    }
+                                    return;
+                                }
 
-        // Coordenadas: usar se disponíveis, senão deixar null
+                                // Google Geocoder allowed — attempt to geocode
+                                if (window.google && window.google.maps && window.google.maps.Geocoder) {
+                                    try {
+                                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
+                                        const geocoder = new window.google.maps.Geocoder();
+                                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
+                                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
+                                            const loc = geoRes.results[0].geometry.location;
+                                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                        } else {
+                                            if (geoRes && geoRes.status === 'OVER_QUERY_LIMIT') {
+                                                markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
+                                                try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar — quota excedida.'); } catch (e) { }
+                                                if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                                    try { enderecoRef.current.focus(); } catch (e) { }
+                                                }
+                                                return;
+                                            }
+                                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
+                                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                                try { enderecoRef.current.focus(); } catch (e) { }
+                                            }
+                                            return;
+                                        }
+                                    } catch (err) {
+                                        console.warn('adicionarAosPendentes: geocoder error', err);
+                                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
+                                        return;
+                                    }
+                                } else {
+                                    // Geocoder not available and no history coords
+                                    try { alert('Geocoding não disponível. Selecione um endereço do Histórico ou cole um endereço que já esteja registrado com coordenadas.'); } catch (e) { }
+                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
+                                        try { enderecoRef.current.focus(); } catch (e) { }
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        // If the Supabase lookup fails, fall back to existing behavior but be conservative
+                        try { console.warn('adicionarAosPendentes: supabase history lookup failed, falling back to geocoder', e); } catch (err) { }
+                    }
+            }
+        }
+
+        // Preferir coordenadas obtidas via Google Places Autocomplete. Se não houver coords, usar fallback randômico baseado no centro do mapa.
         let lat = null;
         let lng = null;
         if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
             lat = Number(enderecoCoords.lat);
             lng = Number(enderecoCoords.lng);
+        } else {
+            const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
+            const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
+            lat = baseLat + (Math.random() - 0.5) * 0.04;
+            lng = baseLng + (Math.random() - 0.5) * 0.04;
         }
-        
         // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
         const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
         if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
-        
-        // GEOCODIFICAÇÃO OBRIGATÓRIA antes do salvamento
-        if (lat === null || lng === null) {
-            // Geocoding é OBRIGATÓRIO - sistema não deve salvar sem coordenadas
-            if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.Geocoder) {
-                alert('❌ Google Maps não disponível. Não é possível adicionar entregas no momento.');
-                return;
-            }
-            
-            try {
-                const geocoder = new window.google.maps.Geocoder();
-                const result = await new Promise((resolve, reject) => {
-                    geocoder.geocode({ address: enderecoVal }, (results, status) => {
-                        if (status === 'OK' && results && results[0]) {
-                            const location = results[0].geometry.location;
-                            resolve({ lat: location.lat(), lng: location.lng() });
-                        } else {
-                            reject(new Error('Geocoding falhou: ' + status));
-                        }
-                    });
-                });
-                lat = result.lat;
-                lng = result.lng;
-                console.log('✅ Endereço geocodificado com sucesso:', enderecoVal, '->', { lat, lng });
-            } catch (geocodeError) {
-                console.error('❌ ERRO DE GEOCODIFICAÇÃO:', geocodeError);
-                alert('❌ Não foi possível encontrar as coordenadas exatas para o endereço "' + enderecoVal + '".\n\nPor favor, verifique o endereço e tente novamente.\n\nDetalhes: ' + geocodeError.message);
-                return; // BLOQUEIA o salvamento
-            }
-        }
-        
-        // Debug: verificar estado do supabase
-        console.log('🔵 adicionarAosPendentes - supabase:', supabase, 'supabaseRef.current:', supabaseRef.current);
-        
-        const sb = supabaseRef.current || supabase;
-        if (!sb || typeof sb.from !== 'function') { 
-            console.error('❌ Supabase não disponível:', { sb, supabase, ref: supabaseRef.current }); 
-            alert('Banco de dados indisponível no momento. Aguarde alguns segundos e tente novamente.'); 
-            return; 
-        }
-        // Validação final: NUNCA salvar sem coordenadas válidas
-        if (lat === null || lng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-            console.error('❌ BLOQUEIO: Tentativa de salvar entrega sem coordenadas válidas');
-            alert('❌ Erro: Não é possível salvar entrega sem coordenadas exatas.');
-            return;
-        }
-        
-        console.log('✅ Salvando entrega com coordenadas validadas:', { cliente: clienteVal, endereco: enderecoVal, lat, lng });
-        
-        const { error } = await sb.from('entregas').insert([{
+        const { error } = await supabase.from('entregas').insert([{
             cliente: clienteVal,
             endereco: enderecoVal,
             tipo: String(tipoEncomenda || '').trim(),
@@ -2332,99 +1948,19 @@ function App() {
             // clear draft preview point after persisting
             setDraftPoint(null);
             try { carregarDados(); } catch (e) { }
-        } else {
-            alert('❌ Erro ao salvar: ' + (error.message || 'Erro desconhecido'));
         }
     };
 
     const excluirPedido = async (id) => {
         const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
         if (!parsedId || isNaN(parsedId)) {
-            console.warn('❌ excluirPedido: id inválido', id);
-            return;
+            console.warn('excluirPedido: id inválido', id);
+            return () => {
+                try { supabase.removeChannel && supabase.removeChannel(channel); } catch (e) { /* ignore */ }
+            };
         }
-        
-        const sb = supabaseRef.current || supabase;
-        if (!sb || typeof sb.from !== 'function') {
-            console.warn('❌ excluirPedido: supabase not initialized');
-            return;
-        }
-        
-        console.log('🗑️ Excluindo entrega ID:', parsedId);
-        const { error } = await sb.from('entregas').delete().eq('id', parsedId);
-        
-        if (error) {
-            console.error('❌ Erro ao excluir entrega:', error);
-        } else {
-            console.log('✅ Entrega excluída com sucesso!');
-            carregarDados();
-        }
-    };
-
-    // Marcar entrega como concluída com atualização instantânea (otimista)
-    const marcarComoConcluida = async (entregaId) => {
-        const sb = supabaseRef.current || supabase;
-        if (!sb || typeof sb.from !== 'function') {
-            console.error('❌ Supabase não disponível');
-            return;
-        }
-
-        // Atualização otimista: atualizar estado local ANTES do banco
-        setAllEntregas(prev => 
-            prev.map(e => e.id === entregaId ? { ...e, status: 'concluida' } : e)
-        );
-        setEntregasEmEspera(prev => 
-            prev.map(e => e.id === entregaId ? { ...e, status: 'concluida' } : e)
-        );
-        setRotaAtiva(prev => 
-            prev.map(e => e.id === entregaId ? { ...e, status: 'concluida' } : e)
-        );
-
-        // Atualizar no banco
-        const { error } = await sb.from('entregas')
-            .update({ status: 'concluida' })
-            .eq('id', entregaId);
-
-        if (error) {
-            console.error('❌ Erro ao marcar como concluída:', error);
-            // Reverter atualização otimista em caso de erro
-            carregarDados();
-        } else {
-            console.log('✅ Entrega marcada como concluída:', entregaId);
-        }
-    };
-
-    // Marcar entrega como falha/cancelada com atualização instantânea (otimista)
-    const marcarComoFalha = async (entregaId) => {
-        const sb = supabaseRef.current || supabase;
-        if (!sb || typeof sb.from !== 'function') {
-            console.error('❌ Supabase não disponível');
-            return;
-        }
-
-        // Atualização otimista: atualizar estado local ANTES do banco
-        setAllEntregas(prev => 
-            prev.map(e => e.id === entregaId ? { ...e, status: 'falha' } : e)
-        );
-        setEntregasEmEspera(prev => 
-            prev.map(e => e.id === entregaId ? { ...e, status: 'falha' } : e)
-        );
-        setRotaAtiva(prev => 
-            prev.map(e => e.id === entregaId ? { ...e, status: 'falha' } : e)
-        );
-
-        // Atualizar no banco
-        const { error } = await sb.from('entregas')
-            .update({ status: 'falha' })
-            .eq('id', entregaId);
-
-        if (error) {
-            console.error('❌ Erro ao marcar como falha:', error);
-            // Reverter atualização otimista em caso de erro
-            carregarDados();
-        } else {
-            console.log('⚠️ Entrega marcada como falha:', entregaId);
-        }
+        const { error } = await supabase.from('entregas').delete().eq('id', parsedId);
+        if (!error) carregarDados();
     };
 
     const dispararRota = async () => {
@@ -2444,101 +1980,48 @@ function App() {
         }
         // Garantir que usamos UUID como string (nunca converter para Number)
         const motoristaIdVal = String(selectedDriver.id);
-        
-        // Obter referência do Supabase uma única vez para toda a função
-        const sb = supabaseRef.current || supabase;
-        
-        const nomeCompleto = `${selectedDriver.nome || ''} ${selectedDriver.sobrenome || ''}`.trim();
-        
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🚀 INICIANDO ENVIO DE ROTA');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🆔 ID do Motorista:', motoristaIdVal);
-        console.log('👤 Nome Completo:', nomeCompleto);
-        console.log('🔌 Status:', selectedDriver.esta_online ? 'Online ✅' : 'Offline ⚠️');
-        console.log('📦 Entregas a enviar:', entregasEmEspera.length);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        
         setDispatchLoading(true);
         try {
             try { audioRef.current.play().catch(() => { }); } catch (e) { }
             let rotaOtimizada = [];
-            let tempoEstimado = 0;
-            
-            // Otimizar com algoritmo local (Nearest Neighbor)
             try {
                 try { setDistanceCalculating(true); } catch (e) { }
-                rotaOtimizada = await otimizarRotaLocal(mapCenterState, entregasEmEspera, motoristaIdVal);
+                rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, entregasEmEspera, motoristaIdVal);
                 try { setDistanceCalculating(false); } catch (e) { }
+                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
             } catch (e) {
-                console.warn('⚠️ Otimização local falhou:', e);
+                // fallback para algoritmo local em caso de erro com Google API
+                rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
             }
-            
-            // FALLBACK: Se otimização retornar vazio, usar TODAS as entregas em espera
-            if (!rotaOtimizada || rotaOtimizada.length === 0) {
-                console.warn('⚠️ Otimização retornou 0 entregas - usando lista completa de espera');
-                rotaOtimizada = [...entregasEmEspera]; // Clonar array
-                
-                // Adicionar ordem sequencial básica
-                rotaOtimizada = rotaOtimizada.map((e, idx) => ({
-                    ...e,
-                    ordem: idx + 1,
-                    ordem_logistica: idx + 1
-                }));
-                
-                console.log('✅ Rota criada com ordem sequencial:', rotaOtimizada.length, 'entregas');
-            }
-            
-            console.log('🗺️ Rota final para despacho:', rotaOtimizada.length, 'paradas');
-            
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
             // status para despacho: seguir regra solicitada ('pendente')
-            const statusValue = String('em_rota').trim().toLowerCase();
+            const statusValue = String('pendente').trim().toLowerCase();
 
             // Determine entregas to dispatch and collect their IDs (preserve original type)
             const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
             const assignedIds = entregasParaDespachar.map(p => p.id).filter(id => id !== undefined && id !== null);
             const assignedIdsStr = assignedIds.map(id => String(id));
 
-            console.log('🎯 IDs das entregas:', assignedIds);
-            console.log('📝 Status a aplicar:', statusValue);
-            console.log('🔗 Vinculando entregas ao motorista_id:', motoristaIdVal);
-
             if (assignedIds.length === 0) {
-                console.warn('⚠️ assignDriver: nenhum pedido válido para atualizar');
-                alert('❌ Erro: Nenhuma entrega válida para enviar. Verifique se há entregas selecionadas.');
-                return;
+                console.warn('assignDriver: nenhum pedido válido para atualizar');
             } else {
-                if (!sb || typeof sb.from !== 'function') {
-                    console.error('❌ Supabase não disponível para atualizar entregas');
-                    alert('❌ Erro: Sistema não está conectado ao banco de dados.');
-                    return;
-                }
-                
-                console.log('💾 Atualizando entregas no banco de dados...');
-                console.log('   Campo motorista_id =', motoristaIdVal);
-                console.log('   Campo status =', statusValue);
-                
                 let updErr = null;
                 try {
-                    // Atualizar EXCLUSIVAMENTE por ID (UUID) - nunca por nome
-                    let q = sb.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
+                    // Try bulk update; if .in is not available (mock), fallback to per-item updates
+                    let q = supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
                     if (q && typeof q.in === 'function') {
                         const { data: updData, error } = await q.in('id', assignedIds);
                         updErr = error;
                         if (!updErr) {
-                            console.log('✅ Entregas atualizadas no banco (bulk update)');
                             setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
-                        } else {
-                            console.error('❌ Erro no bulk update:', error);
                         }
                     } else {
                         // Fallback: update one by one
                         for (const id of assignedIds) {
                             try {
-                                const { error } = await sb.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
+                                const { error } = await supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
                                 if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
                             } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
                         }
@@ -2575,108 +2058,22 @@ function App() {
                     const pid = rotaOtimizada[i].id;
                     if (pid === undefined || pid === null) continue;
                     try {
-                        const { error: ordErr } = await sb.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                        if (ordErr) {
-                            console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
-                        } else {
-                            console.log(`✅ Ordem ${i + 1} atribuída à entrega ${pid}`);
-                        }
+                        const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                        if (ordErr) console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
                     } catch (e) {
                         console.error('Erro na requisição ordem_logistica:', e && e.message);
                     }
                 }
             } catch (e) { /* non-blocking */ }
-            
-            // NOTIFICAR MOTORISTA: usar tabela motoristas em vez de broadcast (mais confiável)
-            if (!sb || typeof sb.from !== 'function') {
-                console.error('❌ Supabase não disponível para notificação');
-                alert('⚠️ Aviso: A rota foi salva no banco, mas a notificação falhou. O motorista precisará atualizar o app.');
-            } else {
-                try {
-                    const dadosParaMotorista = {
-                        motorista_id: motoristaIdVal,
-                        motorista_nome: selectedDriver.nome || 'Motorista',
-                        total_entregas: rotaOtimizada.length,
-                        entregas: rotaOtimizada.map((e, idx) => ({
-                            id: e.id,
-                            cliente: e.cliente,
-                            endereco: e.endereco,
-                            lat: e.lat,
-                            lng: e.lng,
-                            ordem: idx + 1,
-                            tipo: e.tipo,
-                            status: 'em_rota'
-                        })),
-                        timestamp: new Date().toISOString()
-                    };
-                    
-                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    console.log('📡 NOTIFICANDO MOTORISTA VIA POSTGRES UPDATE');
-                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    console.log('🎯 Enviando rota para o ID:', motoristaIdVal);
-                    console.log('👤 Nome do motorista:', nomeCompleto);
-                    console.log('📦 Total de entregas:', rotaOtimizada.length);
-                    console.log('🔍 Dados completos:', dadosParaMotorista);
-                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    
-                    // Atualizar tabela motoristas EXCLUSIVAMENTE por ID (UUID)
-                    // O celular está escutando UPDATE nessa tabela via postgres_changes
-                    // IMPORTANTE: ultima_atualizacao é o gatilho que o celular observa
-                    const { error: notifError } = await sb
-                        .from('motoristas')
-                        .update({ 
-                            ultima_atualizacao: new Date().toISOString()  // ✅ Gatilho para o celular
-                        })
-                        .eq('id', motoristaIdVal);  // FILTRO POR ID (UUID) - NÃO POR NOME!
-                        
-                    if (notifError) {
-                        console.error('❌ Erro ao atualizar motorista:', notifError);
-                        throw notifError;
-                    } else {
-                        console.log('✅ Motorista notificado com sucesso!');
-                        console.log('✅ Campo ultima_atualizacao atualizado → Celular vai detectar');
-                        console.log('📱 Celular buscará: motorista_id=' + motoristaIdVal + ' + status=em_rota');
-                    }
-                    
-                } catch (notifError) {
-                    console.error('❌ Erro ao notificar motorista:', notifError);
-                    console.error('❌ Stack:', notifError.stack);
-                    alert('⚠️ Aviso: A rota foi salva, mas houve um erro ao notificar o motorista: ' + (notifError.message || notifError));
-                }
-            }
-            
             setRotaAtiva(rotaOtimizada);
             setMotoristaDaRota(driver);
             setAbaAtiva('Visão Geral');
-            
-            // 🧹 LIMPEZA AUTOMÁTICA: Limpar entregas da lista após envio bem-sucedido
-            console.log('🧹 Limpando entregas enviadas da lista...');
-            setEntregasEmEspera(prev => {
-                const idsEnviados = rotaOtimizada.map(e => e.id);
-                return prev.filter(e => !idsEnviados.includes(e.id));
-            });
-            console.log('✅ Dashboard limpo - entregas enviadas removidas da lista');
-            
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('✅ ROTA ENVIADA COM SUCESSO!');
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('👤 Motorista:', driver.nome, driver.sobrenome);
-            console.log('🆔 ID do Motorista:', motoristaIdVal);
-            console.log('📦 Total de entregas:', rotaOtimizada.length);
-            console.log('📍 Lista de paradas:', rotaOtimizada.map((e, i) => `${i+1}. ${e.cliente} - ${e.endereco}`).join('\n'));
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            
             await carregarDados();
-            
-            // Alerta de sucesso detalhado
-            const msgSucesso = `✅ Rota enviada com sucesso!\n\n👤 Motorista: ${driver.nome || 'motorista'}\n📦 Entregas: ${rotaOtimizada.length}\n📡 Status: ${rotaOtimizada.length > 0 ? 'Notificação enviada' : 'Sem entregas'}`;
-            alert(msgSucesso);
-            
+            alert('Rota enviada para ' + (driver.nome || 'motorista') + ' com sucesso.');
             // Recalcular e desenhar rota otimizada para o motorista designado
-            try { await recalcRotaForMotorista(String(motoristaIdVal)); } catch (e) { console.warn('⚠️ Falha ao recalcular rota após assignDriver:', e); }
+            try { await recalcRotaForMotorista(String(motoristaIdVal)); } catch (e) { console.warn('Falha ao recalcular rota após assignDriver:', e); }
         } catch (e) {
-            console.error('❌ ERRO CRÍTICO em assignDriver:', e);
-            alert('❌ Erro ao enviar rota: ' + (e.message || e) + '\n\nVerifique o console para mais detalhes.');
+            console.warn('Erro em assignDriver:', e);
         } finally {
             // Limpeza de estados residuais
             setShowDriverSelect(false);
@@ -2687,16 +2084,10 @@ function App() {
 
     // --- NOVA INTERFACE (AQUI ESTÁ A MUDANÇA VISUAL) ---
     const motoristas = frota || [];
-
+    const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
     // Use explicit aprovado boolean to split lists
     const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
-    const motoristasPendentes = (frota || []).filter(m => {
-        try {
-            const acessoPend = String((m && m.acesso) || '').trim().toLowerCase() === 'pendente';
-            const aprovadoFalse = (m && (m.aprovado === false || String(m.aprovado || '').trim().toLowerCase() === 'false'));
-            return acessoPend || aprovadoFalse;
-        } catch (e) { return false; }
-    });
+    const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
 
     // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
     async function handleDriverSelect(m) {
@@ -2733,11 +2124,6 @@ function App() {
 
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
-            {missingSupabase && (
-                <div style={{ width: '100%', background: '#7c2d12', color: '#fff', padding: '8px 12px', textAlign: 'center' }}>⚠️ Aviso: credenciais do Supabase ausentes — mostrando o modo de desenvolvimento/local. Configure <strong>VITE_SUPABASE_URL</strong> e <strong>VITE_SUPABASE_ANON_KEY</strong> em <code>.env.local</code> para habilitar dados em tempo real.</div>
-            )}
-
-
 
             {/* 1. HEADER SUPERIOR (NAVBAR) */}
             <header style={{
@@ -2758,10 +2144,7 @@ function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1E3A8A,#3B82F6)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
-                            <div style={{ fontSize: '13px', color: '#a9b8d3', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '8px' }} title="Motoristas online">Online: <strong style={{ color: '#60a5fa' }}>{motoristasOnlineCount}</strong></div>
-                        </div>
+                        <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
                     </div>
 
                     <nav style={{ display: 'flex', gap: '8px' }}>
@@ -2797,12 +2180,18 @@ function App() {
                 </div>
             </header>
 
+            {googleQuotaExceeded && (
+                <div style={{ position: 'fixed', top: 70, left: 0, right: 0, zIndex: 1299, background: '#fbbf24', color: '#0f172a', display: 'flex', justifyContent: 'center', padding: '10px 0', fontWeight: 700 }}>
+                    <div style={{ width: '100%', maxWidth: '1450px', padding: '0 20px', boxSizing: 'border-box' }}>{quotaBannerMessage}</div>
+                </div>
+            )}
+
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
 
 
-            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: googleQuotaExceeded ? '190px auto 0' : '140px auto 0', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
@@ -2820,53 +2209,44 @@ function App() {
                         <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'hidden', minHeight: '450px', maxHeight: '800px', position: 'relative' }}>
                             <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
                                 {
-                                    // Only mount the Map when we have an API key and the maps lib is available
-                                    (GOOGLE_MAPS_API_KEY && mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
+                                    // Se a lib do maps foi carregada com sucesso, renderiza o mapa dentro de ErrorBoundary
+                                    (mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
                                         (() => {
                                             const MapComp = mapsLib.Map;
-                                            return (
+                                            // Memoize the map view to avoid remounting the Map component on unrelated state updates
+                                            const mapView = React.useMemo(() => (
                                                 <ErrorBoundary>
                                                     <MapComp
-                                                        mapId="546bd17ef4a30773714756d8"
                                                         defaultCenter={mapCenterState}
                                                         defaultZoom={zoomLevel}
+                                                        mapId="546bd17ef4a30773714756d8"
                                                         style={{ width: '100%', height: '100%' }}
                                                         onZoomChanged={(ev) => setZoomLevel(ev?.detail?.zoom)}
                                                         onLoad={(m) => {
                                                             try {
                                                                 const inst = (m && (m.map || m.__map || m)) || m;
-                                                                mapRef.current = inst;
+                                                                // Preserve first instance to avoid re-instantiation (singleton-like behavior)
+                                                                if (!mapRef.current) mapRef.current = inst;
                                                             } catch (e) { /* ignore */ }
                                                         }}
                                                     >
                                                         <BotoesMapa />
                                                         <MarkerList frota={frota} mapsLib={mapsLib} zoomLevel={zoomLevel} onSelect={setSelectedMotorista} />
-                                                        {/* Pending markers (pre-dispatch) - APENAS pendentes/aguardando (nunca concluídas) */}
-                                                        <DeliveryMarkers list={(() => {
-                                                            const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
-                                                            return (entregasEmEspera || []).filter(e => {
-                                                                const status = String(e.status || '').toLowerCase().trim();
-                                                                const hasValidCoords = e.lat != null && e.lng != null && 
-                                                                                       Number.isFinite(Number(e.lat)) && 
-                                                                                       Number.isFinite(Number(e.lng));
-                                                                return !statusInvalidos.includes(status) && hasValidCoords;
-                                                            });
-                                                        })()} mapsLib={mapsLib} />
+                                                        {/* Pending markers (pre-dispatch) */}
+                                                        <DeliveryMarkers list={entregasEmEspera} mapsLib={mapsLib} />
                                                         {/* Draft preview markers (includes draftPoint) */}
                                                         <DeliveryMarkers list={draftPreview} mapsLib={mapsLib} isPreview={true} />
-                                                        {/* Rota ativa - apenas entregas NÃO concluídas */}
-                                                        <DeliveryMarkers list={entregasAtivasNoMapa} mapsLib={mapsLib} />
+                                                        <DeliveryMarkers list={orderedRota} mapsLib={mapsLib} />
                                                     </MapComp>
                                                 </ErrorBoundary>
-                                            );
+                                            ), [mapsLib, mapCenterState, zoomLevel, entregasEmEspera && entregasEmEspera.length]);
+
+                                            return mapView;
                                         })()
                                     ) : (
-                                        // Fallback: mapa não disponível. Mostrar placeholder (sem dependências externas) e manter a lista funcional
-                                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(180deg,#0b1220,#071228)', color: '#9ca3af' }}>
-                                            <div style={{ textAlign: 'center' }}>
-                                                <div style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px' }}>Mapa indisponível</div>
-                                                <div style={{ fontSize: '13px' }}>O mapa do Google não pôde ser carregado. A lista de entregas continua visível.</div>
-                                            </div>
+                                        // fallback seguro: evita piscar enquanto frota não carregou
+                                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b1220' }}>
+                                            {loadingFrota ? <div style={{ color: '#9ca3af' }}>Carregando posições...</div> : <div style={{ color: '#9ca3af' }}>{mapsLoadError ? 'Mapa indisponível — visualização desativada' : ''}</div>}
                                         </div>
                                     )
                                 }
@@ -2933,34 +2313,35 @@ function App() {
                                 <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
                                 <div style={{ position: 'relative' }}>
                                     <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
-                                        try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
-                                        try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
-                                    }} />
+                                            try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
+                                            try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
+                                        }} />
 
-                                    {/* Suggestions dropdown: history first, then Google predictions */}
-                                    {((historySuggestions && historySuggestions.length > 0) || (predictions && predictions.length > 0)) && (
-                                        <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
-                                            {historySuggestions && historySuggestions.map((h, idx) => (
-                                                <div key={'h-' + idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                    <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
-                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
-                                                </div>
-                                            ))}
-                                            {predictions && predictions.map((p, idx) => (
-                                                <div key={'p-' + idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                    <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
-                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
-                                                </div>
-                                            ))}
+                                        {/* Suggestions dropdown: history first, then Google predictions */}
+                                        {( (historySuggestions && historySuggestions.length>0) || (predictions && predictions.length>0) ) && (
+                                            <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
+                                                {historySuggestions && historySuggestions.map((h, idx) => (
+                                                    <div key={'h-'+idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
+                                                        <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
+                                                        <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
+                                                    </div>
+                                                ))}
+                                                {predictions && predictions.map((p, idx) => (
+                                                    <div key={'p-'+idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
+                                                        <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
+                                                        <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
 
-                                            {googleUnavailable && (!predictions || predictions.length === 0) && (enderecoEntrega && String(enderecoEntrega).trim().length >= 3) && (
-                                                <div style={{ padding: '12px', color: theme.textLight, borderTop: '1px solid rgba(255,255,255,0.02)' }}>
-                                                    {`Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.`}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
+                                        {/* If Places is unavailable, show a small hint and keep the input usable for manual paste */}
+                                        { (googleQuotaExceeded || !predictionServiceRef.current) && (
+                                            <div style={{ marginTop: '8px', color: '#f8e9c2', fontSize: '12px' }}>
+                                                { googleQuotaExceeded ? 'Busca de endereços via Google indisponível hoje — cole o endereço manualmente ou escolha do Histórico.' : 'Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.' }
+                                            </div>
+                                        )}
+                                    </div>
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                             </form>
@@ -2971,22 +2352,44 @@ function App() {
                             <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
                             <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
                             <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
-                                {(!allEntregas || allEntregas.length === 0) ? (
-                                    <p style={{ color: theme.textLight, padding: '12px' }}>Buscando no Banco...</p>
+                                {(!recentList || recentList.length === 0) ? (
+                                    <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
-                                    allEntregas.slice(0, 10).map((it, idx) => (
-                                        <div key={it && it.id != null ? it.id : idx} onClick={async () => {
+                                    recentList?.map((it, idx) => (
+                                        <div key={idx} onClick={async () => {
                                             try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
                                             try {
                                                 if (it && (it.lat != null && it.lng != null)) {
                                                     setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
                                                 } else {
-                                                    setEnderecoCoords(null);
+                                                    // If history entry lacks coords, prefer not to call Google when quota blocked
+                                                    if (it && (it.lat == null || it.lng == null)) {
+                                                        if (googleQuotaExceededRef.current) {
+                                                            // Keep history accepted but without coords
+                                                            setEnderecoCoords(null);
+                                                            try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
+                                                        } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
+                                                            try {
+                                                                const geocoder = new window.google.maps.Geocoder();
+                                                                const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
+                                                                if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
+                                                                    const loc = geo.results[0].geometry.location;
+                                                                    setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                                                } else {
+                                                                    setEnderecoCoords(null);
+                                                                }
+                                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
+                                                        } else {
+                                                            setEnderecoCoords(null);
+                                                        }
+                                                    } else {
+                                                        setEnderecoCoords(null);
+                                                    }
                                                 }
-                                            } catch (e) { console.warn('historico onClick failed', e); setEnderecoCoords(null); }
+                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
                                         }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
-                                            <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente || it.endereco || '—'}</div>
-                                            <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco || ''}</div>
+                                            <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
+                                            <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
                                         </div>
                                     ))
                                 )}
@@ -3059,7 +2462,7 @@ function App() {
                                 <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
                                     <option value="all">📢 Enviar para Todos</option>
                                     {motoristasAtivos.map(m => (
-                                        <option key={m.id} value={String(m.id)}>{fullName(m)}</option>
+                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
                                     ))}
                                 </select>
                                 <div style={{ flex: 1 }}>
@@ -3121,7 +2524,7 @@ function App() {
                                     const statusColor = isOnline ? '#10b981' : 'rgba(239,68,68,0.6)';
 
                                     // Progresso de carga: contar entregas vinculadas ao motorista a partir de entregasAtivos
-                                    const entregasMot = DEBUG_FORCE_SHOW_ALL ? (entregasAtivos || []) : (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
+                                    const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
                                     const total = entregasMot.length;
                                     const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
                                     // Tipo principal (para rótulo dinâmico) — preferir o primeiro tipo conhecido
@@ -3139,7 +2542,7 @@ function App() {
                                         <tr key={m.id} onClick={() => setSelectedMotorista(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
                                             <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
-                                                <span style={{ color: '#ffffff', fontWeight: 600 }}>{fullName(m)}</span>
+                                                <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
                                             </td>
                                             <td>
                                                 {/* Texto dinâmico: se tiver carga, mostrar verbo + contador; senão Disponível/Offline */}
@@ -3209,10 +2612,10 @@ function App() {
         </div>
     );
 
-    // App content is rendered directly; APIProvider is provided at the top-level (src/main.jsx)
-    return appContent;
+    return APIProviderComp ? (
+        <APIProviderComp apiKey={GOOGLE_MAPS_API_KEY}>{appContent}</APIProviderComp>
+    ) : appContent;
 }
-
 
 // Componentes Pequenos
 function CardKPI({ titulo, valor, cor }) {
@@ -3266,7 +2669,7 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
                             <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 8px', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                                 <div style={{ flex: 1 }}>
                                     <button disabled={loading} onClick={() => handleSelect(m)} style={{ background: 'transparent', border: 'none', textAlign: 'left', cursor: loading ? 'wait' : 'pointer', padding: 0 }}>
-                                        <div style={{ fontWeight: 700, color: '#ffffff' }}>{fullName(m)}</div>
+                                        <div style={{ fontWeight: 700, color: '#ffffff' }}>{m.nome}</div>
                                         <div style={{ fontSize: '12px', color: theme.textLight }}>{m.veiculo || ''}</div>
                                     </button>
                                 </div>
@@ -3282,4 +2685,4 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
     );
 }
 
-export default App;
+// export default App; // TEMPORARY COMMENTED FOR SYNTAX DEBUG - will restore after fix

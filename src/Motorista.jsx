@@ -17,6 +17,7 @@ export default function AppMotorista() {
     }
   } catch (e) { motoristaId = null; }
 
+
   useEffect(() => {
     let channel = null;
     let isMounted = true;
@@ -91,8 +92,15 @@ export default function AppMotorista() {
     try {
       const parsed = id;
       if (!parsed) return;
+      // Optimistic remove: immediately update UI to avoid waiting for network
+      setEntregas(prev => prev.filter(e => e.id !== parsed));
+
       const { error } = await supabase.from('entregas').update({ status: 'concluido' }).eq('id', parsed);
-      if (!error) setEntregas(prev => prev.filter(e => e.id !== parsed));
+      if (error) {
+        console.warn('Erro concluindo entrega (revertendo otimista):', error);
+        // revert by reloading list
+        try { await carregarEntregas(); } catch (e) { /* ignore */ }
+      }
     } catch (e) { console.warn('Erro concluindo entrega:', e); }
   };
 

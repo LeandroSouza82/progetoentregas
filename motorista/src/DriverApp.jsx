@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import supabase, { subscribeToTable } from '../../src/supabaseClient';
+import supabase, { onSupabaseReady } from '../../src/supabaseClient';
+import MapaLogistica from '../../src/MapaLogistica';
+
+// Safety helper: Santa Catarina bounds per manager request
+const isValidSC = (lat, lng) => lat < -25.0 && lat > -30.0 && lng < -54.0 && lng > -48.0;
 
 export default function AppMotorista() {
+    // render count diagnostics removed for production stability
+    const carregandoRef = useRef(false);
+    const startedRef = useRef(false);
+    const intervalRef = useRef(null);
+    const prevCoordsRef = useRef({ lat: null, lng: null });
+    const lastSentRef = useRef(0); // timestamp throttle for GPS sends
+    const startedChannelRef = useRef(false); // ensure realtime channel created once
+    const channelsRef = useRef([]); // store created channel subscriptions
     // Sessão do motorista (persistida)
     const [loggedIn, setLoggedIn] = useState(() => {
         try {
@@ -13,6 +25,7 @@ export default function AppMotorista() {
     });
     const [entregas, setEntregas] = useState([]);
     const [status, setStatus] = useState("Localizando...");
+    const audioSuccessRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
 
     // Campos temporários do formulário de login
     const [formNome, setFormNome] = useState(loggedIn ? loggedIn.nome : '');
@@ -178,7 +191,7 @@ export default function AppMotorista() {
         const userEmail = loggedIn?.email || (typeof localStorage !== 'undefined' ? localStorage.getItem('v10_email') : null);
         const userId = loggedIn?.id || null;
 
-        console.log('Iniciando processo de logout...');
+        // logout iniciado (silenciado)
 
         // Build double-filter (id,email)
         const filters = [];
@@ -192,8 +205,6 @@ export default function AppMotorista() {
                 const { data, error } = await supabase.from('motoristas').update({ esta_online: false }).or(orFilter).select();
                 if (error) {
                     console.error('Erro ao avisar o banco (update retornou erro):', error);
-                } else {
-                    console.log('Banco atualizado com sucesso para offline.', data);
                 }
             } catch (e) {
                 console.error('Erro inesperado ao atualizar motoristas:', e);
@@ -224,34 +235,75 @@ export default function AppMotorista() {
         try {
             // logar apenas na primeira execução para evitar piscar no console
             if (!carregarRotaLogRef.current) {
-                console.log("[motorista] carregarRota: iniciando fetch de entregas (mock supabase)");
+                // primeira execução (silenciado)
             }
             const motoristaId = loggedIn && loggedIn.id ? loggedIn.id : null;
+            const motoristaNome = loggedIn ? `${loggedIn.nome || ''} ${loggedIn.sobrenome || ''}`.trim() : 'Desconhecido';
+            
             if (!motoristaId) {
-                if (!carregarRotaLogRef.current) console.warn('[motorista] carregarRota: motoristaId ausente, abortando fetch');
+                console.error('❌ [CELULAR] ID do motorista ausente! Login:', loggedIn);
                 setEntregas([]);
                 return;
             }
+            
+            console.log('🔍 [CELULAR] Buscando entregas para:');
+            console.log('   🆔 ID:', motoristaId);
+            console.log('   👤 Nome:', motoristaNome);
+            
+            // prevent concurrent loads
+            if (carregandoRef.current) return;
+            carregandoRef.current = true;
+            
+            // Buscar entregas EXCLUSIVAMENTE por motorista_id (UUID)
             const res = await supabase
                 .from('entregas')
                 .select('*')
                 .eq('motorista_id', motoristaId)
-                .order('created_at', { ascending: false });
+                .in('status', ['em_rota', 'enviada', 'pendente', 'em_andamento'])
+                .order('ordem_logistica', { ascending: true });
+                
             const data = res && res.data ? res.data : [];
-            setEntregas(Array.isArray(data) ? data : []);
+            const newData = Array.isArray(data) ? data : [];
+            
+            console.log('✅ [CELULAR] Entregas carregadas:', newData.length);
+            if (newData.length > 0) {
+                console.log('📋 IDs das entregas:', newData.map(e => e.id));
+            }
+            
+            try {
+                const prev = JSON.stringify(entregas || []);
+                const next = JSON.stringify(newData);
+                if (prev !== next) setEntregas(newData); // avoid setState if identical
+            } catch (e) {
+                setEntregas(newData);
+            }
             if (!carregarRotaLogRef.current) {
-                console.log("[motorista] carregarRota: resultado", { preview: data.slice ? data.slice(0, 5) : data });
+                // primeira execução: marca como executado (silenciado)
                 carregarRotaLogRef.current = true;
             }
         } catch (error) {
             console.error("Erro ao carregar rota:", error);
         } finally {
-            if (!carregarRotaLogRef.current) console.log("[motorista] carregarRota: fim");
+            carregandoRef.current = false;
+            // finalizado (silenciado)
         }
     };
 
     // carregar rota apenas uma vez ao montar a página (evita re-execuções infinitas)
     useEffect(() => {
+        // Mobile cleanup: remove stale cached entregas/rota from previous sessions
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const keys = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (!k) continue;
+                    if (/entregas|rota|route|draft|mock_/i.test(k) && !['motorista', 'v10_email'].includes(k)) keys.push(k);
+                }
+                keys.forEach(k => { try { localStorage.removeItem(k); } catch (e) { } });
+            }
+        } catch (e) { /* ignore */ }
+
         if (!loggedIn?.id) return; // ensure we have an id before attempting to load
         // Se não aprovado, não carrega rota nem ativa GPS; mostra mensagem de análise
         if (!loggedIn.aprovado) {
@@ -260,7 +312,28 @@ export default function AppMotorista() {
             return;
         }
 
-        carregarRota();
+        if (!startedRef.current) {
+            startedRef.current = true;
+            // initial load
+            try { carregarRota(); } catch (e) { /* ignore */ }
+            // regular polling at fixed interval (10s) to refresh without tight loops
+            // DISABLED during emergency stabilization
+            const POLLING_ENABLED = false;
+            if (POLLING_ENABLED) {
+                intervalRef.current = setInterval(() => {
+                    try {
+                        carregarRota();
+                    } catch (e) { /* ignore */ }
+                }, 10000);
+            }
+
+            // Also ensure we run a reload when Supabase client becomes ready (in case it initialized after mount)
+            try {
+                onSupabaseReady(() => {
+                    try { carregarRota(); } catch (e) { /* ignore */ }
+                });
+            } catch (e) { /* ignore */ }
+        }
 
         // pedir permissão de notificações (opcional)
         if (window.Notification && Notification.permission !== 'granted') {
@@ -268,7 +341,7 @@ export default function AppMotorista() {
         }
 
         setStatus('GPS desativado');
-        return () => { /* limpeza não necessária sem watchPosition */ };
+        return () => { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } };
         // rodar somente no mount conforme correção cirúrgica
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -324,21 +397,46 @@ export default function AppMotorista() {
     // Realtime: escuta atualizações do motorista logado (aprovação em tempo real)
     useEffect(() => {
         if (!loggedIn) return;
+        if (startedChannelRef.current) return; // already subscribed
+        startedChannelRef.current = true;
         const id = loggedIn.id;
         const email = loggedIn.email;
-        const channels = [];
 
         try {
             // Prefer native realtime if available
             if (supabase && typeof supabase.channel === 'function') {
                 if (id) {
                     const chanId = `motorista-updates-id-${id}`;
-                    const chId = supabase.channel(chanId).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `id=eq.${id}` }, (payload) => {
+                    const ch = supabase.channel(chanId).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `id=eq.${id}` }, (payload) => {
                         try {
                             const rec = payload.new || payload.record || null;
                             if (!rec) return;
 
-                            // Sincroniza flag de aprovação
+                            // 🚨 DETECTAR NOVA ROTA via campo ultima_atualizacao (timestamp)
+                            // Quando o dashboard envia rota, ele atualiza ultima_atualizacao
+                            // Os dados da rota estão na tabela entregas (filtrar por motorista_id + status=em_rota)
+                            if (rec.ultima_atualizacao) {
+                                const timestamp = rec.ultima_atualizacao;
+                                const agora = new Date().getTime();
+                                const atualizacao = new Date(timestamp).getTime();
+                                const diferencaSegundos = Math.abs(agora - atualizacao) / 1000;
+                                
+                                // Se atualização foi nos últimos 10 segundos, é uma nova rota
+                                if (diferencaSegundos < 10) {
+                                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                                    console.log('🚨 NOVA ROTA DETECTADA VIA UPDATE!');
+                                    console.log('⏰ Timestamp:', timestamp);
+                                    console.log('🎯 Diferença:', diferencaSegundos.toFixed(1), 'segundos');
+                                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                                    
+                                    // Recarregar rota do banco de dados (busca entregas com motorista_id e status=em_rota)
+                                    carregarRota();
+                                    
+                                    // Notificação sonora/visual
+                                    alert(`🚨 Nova rota recebida!\n\nAs entregas foram atualizadas.`);
+                                }
+                            }
+
                             if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
                                 const updated = { ...(loggedIn || {}), aprovado: true };
                                 try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
@@ -347,7 +445,6 @@ export default function AppMotorista() {
                                 try { carregarRota(); } catch (e) { }
                             }
 
-                            // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
                             if (typeof rec.esta_online !== 'undefined' && loggedIn && String(loggedIn.id) === String(rec.id)) {
                                 const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true };
                                 try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
@@ -356,12 +453,12 @@ export default function AppMotorista() {
                             }
                         } catch (e) { /* ignore */ }
                     }).subscribe();
-                    channels.push(chId);
+                    channelsRef.current.push(ch);
                 }
 
                 if (email) {
                     const chanEmail = `motorista-updates-email-${email}`;
-                    const chEmail = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
+                    const chE = supabase.channel(chanEmail).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas', filter: `email=eq.${email}` }, (payload) => {
                         try {
                             const rec = payload.new || payload.record || null;
                             if (!rec) return;
@@ -374,7 +471,6 @@ export default function AppMotorista() {
                                 try { carregarRota(); } catch (e) { }
                             }
 
-                            // Sincroniza explicitamente o flag esta_online — se gestor marcar false, refletir localmente e não sobrescrever
                             if (typeof rec.esta_online !== 'undefined') {
                                 const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true, id: rec.id || (loggedIn && loggedIn.id) };
                                 try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
@@ -384,65 +480,66 @@ export default function AppMotorista() {
 
                         } catch (e) { /* ignore */ }
                     }).subscribe();
-                    channels.push(chEmail);
+                    channelsRef.current.push(chE);
                 }
-            } else {
-                // fallback polling: subscribeToTable if available
-                try {
-                    if (typeof subscribeToTable === 'function') {
-                        if (id) {
-                            const stop = subscribeToTable('motoristas', (res) => {
-                                (res && res.data || []).filter(r => String(r.id) === String(id)).forEach(r => {
-                                    // emulate payload format
-                                    const rec = r;
-                                    if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
-                                        const updated = { ...(loggedIn || {}), aprovado: true };
-                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                                        try { setLoggedIn(updated); } catch (e) { }
-                                        try { setStatus('Online (aprovado)'); } catch (e) { }
-                                        try { carregarRota(); } catch (e) { }
-                                    }
-                                    if (typeof rec.esta_online !== 'undefined' && loggedIn && String(loggedIn.id) === String(rec.id)) {
-                                        const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true };
-                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                                        try { setLoggedIn(updated); } catch (e) { }
-                                        try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
-                                    }
-                                });
-                            }, { pollMs: 1500 });
-                            channels.push({ stop });
-                        }
-
-                        if (email) {
-                            const stopE = subscribeToTable('motoristas', (res) => {
-                                (res && res.data || []).filter(r => String(r.email) === String(email)).forEach(r => {
-                                    const rec = r;
-                                    if (rec.aprovado === true && !(loggedIn && loggedIn.aprovado)) {
-                                        const updated = { ...(loggedIn || {}), aprovado: true, id: rec.id };
-                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                                        try { setLoggedIn(updated); } catch (e) { }
-                                        try { setStatus('Online (aprovado)'); } catch (e) { }
-                                        try { carregarRota(); } catch (e) { }
-                                    }
-                                    if (typeof rec.esta_online !== 'undefined') {
-                                        const updated = { ...(loggedIn || {}), esta_online: rec.esta_online === true, id: rec.id || (loggedIn && loggedIn.id) };
-                                        try { localStorage.setItem('motorista', JSON.stringify(updated)); } catch (e) { }
-                                        try { setLoggedIn(updated); } catch (e) { }
-                                        try { setStatus(rec.esta_online === true ? 'Online (aprovado)' : 'Offline (bloqueado)'); } catch (e) { }
-                                    }
-                                });
-                            }, { pollMs: 1500 });
-                            channels.push({ stop: stopE });
-                        }
-                    }
-                } catch (e) { /* ignore */ }
+                
+                // 📡 ESCUTAR BROADCAST DE NOVA ROTA do Dashboard
+                if (id) {
+                    const canalRotaBroadcast = `rota-motorista-${id}`;
+                    console.log('📻 Escutando canal de broadcast:', canalRotaBroadcast);
+                    console.log('🔑 ID do motorista logado:', id);
+                    
+                    const chBroadcast = supabase
+                        .channel(canalRotaBroadcast)
+                        .on('broadcast', { event: 'nova_rota' }, (payload) => {
+                            console.log('🚨 NOVA ROTA RECEBIDA VIA BROADCAST!', payload);
+                            console.log('📦 Payload completo:', JSON.stringify(payload, null, 2));
+                            try {
+                                const dados = payload.payload;
+                                if (dados && dados.entregas && dados.entregas.length > 0) {
+                                    console.log('📦 Total de entregas recebidas:', dados.total_entregas);
+                                    console.log('📋 Lista de entregas:', dados.entregas);
+                                    
+                                    // Recarregar rota do banco de dados
+                                    carregarRota();
+                                    
+                                    // Notificação sonora/visual
+                                    alert(`🚨 Nova rota recebida!\n\n📦 ${dados.total_entregas} entregas\n👤 Motorista: ${dados.motorista_nome}`);
+                                } else {
+                                    console.warn('⚠️ Broadcast recebido mas sem entregas:', dados);
+                                }
+                            } catch (e) {
+                                console.error('❌ Erro ao processar broadcast:', e);
+                            }
+                        })
+                        .subscribe((status) => {
+                            console.log('📡 Status da subscrição do canal:', status);
+                            if (status === 'SUBSCRIBED') {
+                                console.log('✅ Canal de broadcast CONECTADO e PRONTO:', canalRotaBroadcast);
+                            } else if (status === 'CLOSED') {
+                                console.warn('⚠️ Canal de broadcast FECHADO:', canalRotaBroadcast);
+                            } else if (status === 'CHANNEL_ERROR') {
+                                console.error('❌ ERRO no canal de broadcast:', canalRotaBroadcast);
+                            }
+                        });
+                    
+                    channelsRef.current.push(chBroadcast);
+                    console.log('✅ Canal adicionado à lista de canais ativos');
+                }
             }
         } catch (e) { /* ignore */ }
 
         return () => {
-            try { channels.forEach(c => { if (c && typeof c.unsubscribe === 'function') c.unsubscribe(); }); } catch (e) { }
+            try {
+                channelsRef.current.forEach(c => { if (c && typeof c.unsubscribe === 'function') c.unsubscribe(); });
+            } catch (e) { /* ignore */ }
+            channelsRef.current = [];
+            startedChannelRef.current = false;
         };
     }, [loggedIn && loggedIn.id, loggedIn && loggedIn.email]);
+
+    // current task helper (first delivery)
+    const tarefaAtual = entregas[0] || null;
     // GPS: força prompt e inicia watchPosition para enviar lat/lng ao Supabase
     // GPS: força prompt e inicia watchPosition para enviar lat/lng ao Supabase
     useEffect(() => {
@@ -465,7 +562,16 @@ export default function AppMotorista() {
             try {
                 const driverId = loggedIn?.id || null;
                 if (!driverId) return;
-                await supabase.from('motoristas').update({ lat, lng, ultima_atualizacao: new Date().toISOString() }).eq('id', driverId);
+                // avoid sending identical coords repeatedly
+                const prev = prevCoordsRef.current || { lat: null, lng: null };
+                const latN = Number(lat), lngN = Number(lng);
+                if (Number.isFinite(prev.lat) && Number.isFinite(prev.lng) && prev.lat === latN && prev.lng === lngN) return;
+                // throttle sends to at most once per 5s
+                const now = Date.now();
+                if (now - (lastSentRef.current || 0) < 5000) return;
+                lastSentRef.current = now;
+                prevCoordsRef.current = { lat: latN, lng: lngN };
+                await supabase.from('motoristas').update({ lat: latN, lng: lngN, ultima_atualizacao: new Date().toISOString() }).eq('id', driverId);
             } catch (e) {
                 console.warn('[motorista] Falha ao enviar posição para Supabase:', e && e.message ? e.message : e);
             }
@@ -475,6 +581,8 @@ export default function AppMotorista() {
             try {
                 const lat = pos.coords.latitude;
                 const lng = pos.coords.longitude;
+                // Send only if coordinates are inside SC bounds to avoid spurious jumps
+                if (!isValidSC(lat, lng)) return;
                 sendPosition(lat, lng);
                 try { setStatus('GPS ativo'); } catch (e) { /* ignore */ }
             } catch (e) { /* ignore */ }
@@ -491,7 +599,7 @@ export default function AppMotorista() {
                 // permission granted, start watchPosition
                 try {
                     watchId = navigator.geolocation.watchPosition(handleWatch, handleError, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-                    console.log('GPS Ativado com sucesso para o ID:', loggedIn?.id);
+
                 } catch (e) {
                     console.warn('[motorista] Falha ao iniciar watchPosition:', e && e.message ? e.message : e);
                 }
@@ -664,6 +772,13 @@ export default function AppMotorista() {
                 </div>
             </div>
 
+            {/* Map area (mobile-first) */}
+            {loggedIn && (
+                <div style={{ marginBottom: '18px' }}>
+                    <MapaLogistica entregas={entregas} mobile={true} />
+                </div>
+            )}
+
             {loggedIn && !loggedIn.aprovado && (
                 <div style={{ marginTop: '60px', textAlign: 'center', color: '#fff' }}>
                     <div style={{ fontSize: '20px', fontWeight: '700', color: '#00e676' }}>Cadastro em análise</div>
@@ -711,7 +826,34 @@ export default function AppMotorista() {
                         <div style={{ fontSize: '20px', margin: '5px 0' }}>{e.cliente || 'Cliente'}</div>
                         <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '20px' }}>📍 {e.endereco || 'Endereço não informado'}</div>
                         <button
-                            onClick={() => setEntregas(p => p.filter((_, index) => index !== i))}
+                            onClick={() => {
+                                // Se esta é a ÚLTIMA entrega, tocar som de sucesso
+                                const isUltimaEntrega = entregas.length === 1;
+                                
+                                if (isUltimaEntrega) {
+                                    console.log('🎉 ÚLTIMA ENTREGA CONCLUÍDA! Tocando som de sucesso...');
+                                    
+                                    // Tocar som de sucesso/finalização
+                                    try {
+                                        audioSuccessRef.current.play().catch(err => {
+                                            console.warn('Áudio bloqueado pelo navegador:', err);
+                                        });
+                                    } catch (e) {
+                                        console.warn('Erro ao tocar áudio:', e);
+                                    }
+                                    
+                                    // Limpar TODAS as entregas do mapa após o som
+                                    setTimeout(() => {
+                                        console.log('🧹 LIMPANDO MAPA - Removendo todas as entregas');
+                                        setEntregas([]);
+                                        console.log('✅ Mapa limpo! Pronto para próxima rota.');
+                                    }, 100); // Pequeno delay para garantir que o som comece
+                                } else {
+                                    // Ainda há entregas restantes, apenas remove esta
+                                    console.log(`📦 Entrega ${i + 1} concluída. Restam ${entregas.length - 1} entregas.`);
+                                    setEntregas(p => p.filter((_, index) => index !== i));
+                                }
+                            }}
                             style={mBtn}
                         >
                             CONCLUIR ENTREGA

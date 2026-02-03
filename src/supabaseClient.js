@@ -6,6 +6,74 @@ let supabase = null;
 let HAS_SUPABASE_CREDENTIALS = false;
 let subscribeToTable = null;
 
+// Connection state and diagnostics
+let SUPABASE_CONNECTED = false;
+let lastSupabaseError = null;
+const supabaseConnectedHandlers = [];
+function onSupabaseConnected(cb) {
+    if (typeof cb !== 'function') return;
+    if (SUPABASE_CONNECTED) {
+        try { setTimeout(cb, 0); } catch (e) { /* swallow */ }
+    } else {
+        supabaseConnectedHandlers.push(cb);
+    }
+}
+function _notifySupabaseConnected() {
+    SUPABASE_CONNECTED = true;
+    try { supabaseConnectedHandlers.forEach(fn => { try { fn(); } catch (e) { /* swallow */ } }); } catch (e) { }
+    supabaseConnectedHandlers.length = 0;
+}
+
+async function checkSupabaseConnection() {
+    // Returns { connected: boolean, error: any }
+    lastSupabaseError = null;
+    if (!supabase || typeof supabase.from !== 'function') {
+        lastSupabaseError = new Error('Supabase client is not initialized');
+        SUPABASE_CONNECTED = false;
+        return { connected: false, error: lastSupabaseError };
+    }
+    try {
+        const res = await supabase.from('entregas').select('id').limit(1);
+        if (res && res.error) {
+            lastSupabaseError = res.error;
+            SUPABASE_CONNECTED = false;
+            console.error('[supabaseClient] healthcheck error fetching entregas:', res.error);
+            return { connected: false, error: res.error };
+        }
+        // success
+        SUPABASE_CONNECTED = true;
+        lastSupabaseError = null;
+        console.info('[supabaseClient] healthcheck OK. entregas sample count:', Array.isArray(res.data) ? res.data.length : 0);
+        try { _notifySupabaseConnected(); } catch (e) { }
+        return { connected: true, error: null };
+    } catch (e) {
+        lastSupabaseError = e;
+        SUPABASE_CONNECTED = false;
+        console.error('[supabaseClient] healthcheck failed with exception:', e);
+        return { connected: false, error: e };
+    }
+}
+function getLastSupabaseError() { return lastSupabaseError; }
+
+// Ready hook: callers can register to be notified when the Supabase client finishes initialization.
+let SUPABASE_READY = false;
+const supabaseReadyHandlers = [];
+function onSupabaseReady(cb) {
+    if (typeof cb !== 'function') return;
+    // Only invoke immediately when we truly have a ready supabase client
+    if (SUPABASE_READY && supabase && typeof supabase.from === 'function') {
+        try { setTimeout(() => cb(supabase), 0); } catch (e) { /* swallow */ }
+    } else {
+        supabaseReadyHandlers.push(cb);
+    }
+}
+
+function _notifySupabaseReady() {
+    SUPABASE_READY = true;
+    try { supabaseReadyHandlers.forEach(fn => { try { fn(supabase); } catch (e) { /* swallow */ } }); } catch (e) { }
+    supabaseReadyHandlers.length = 0;
+}
+
 // Node/mock path when running without window (test scripts set global.localStorage)
 if (typeof window === 'undefined') {
     // minimal mock similar to motorista/src/supabaseClient.js
@@ -56,6 +124,9 @@ if (typeof window === 'undefined') {
     supabase = { from(table) { return createQuery(table); } };
     HAS_SUPABASE_CREDENTIALS = false;
 
+    // Mark ready in the mock path so any registered handlers run in tests
+    try { _notifySupabaseReady(); } catch (e) { }
+
     subscribeToTable = function (table, handler, opts = {}) {
         const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 200;
         let last = JSON.stringify(readTable(table));
@@ -71,34 +142,103 @@ if (typeof window === 'undefined') {
 
 } else {
     // Browser / real Supabase path
-    const { createClient } = await import('@supabase/supabase-js');
-    const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) ? import.meta.env.VITE_SUPABASE_URL : process.env.VITE_SUPABASE_URL;
-    const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_ANON_KEY) ? import.meta.env.VITE_SUPABASE_ANON_KEY : process.env.VITE_SUPABASE_ANON_KEY;
-    supabase = createClient(supabaseUrl, supabaseAnonKey);
-    HAS_SUPABASE_CREDENTIALS = Boolean(supabaseUrl && supabaseAnonKey);
-    // subscribeToTable can use Supabase Realtime when available
-    subscribeToTable = function (table, handler, opts = {}) {
-        // Minimal fallback: polling using the REST endpoint when real realtime unavailable
-        const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 1000;
-        let last = null;
-        let stopped = false;
-        (async () => {
-            while (!stopped) {
-                try {
-                    const res = await supabase.from(table).select('*');
-                    const curr = JSON.stringify(res && res.data ? res.data : []);
-                    if (curr !== last) {
-                        last = curr;
-                        handler({ data: res.data });
+    // Use dynamic import without top-level await to stay compatible with build targets.
+    import('@supabase/supabase-js').then(({ createClient }) => {
+        try {
+            const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) ? import.meta.env.VITE_SUPABASE_URL : process.env.VITE_SUPABASE_URL;
+            const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_ANON_KEY) ? import.meta.env.VITE_SUPABASE_ANON_KEY : process.env.VITE_SUPABASE_ANON_KEY;
+            supabase = createClient(supabaseUrl, supabaseAnonKey);
+            HAS_SUPABASE_CREDENTIALS = Boolean(supabaseUrl && supabaseAnonKey);
+
+            // Notify that a client object exists (handlers may want to keep it)
+            try { _notifySupabaseReady(); } catch (e) { }
+
+            // subscribeToTable can use Supabase Realtime when available
+            subscribeToTable = function (table, handler, opts = {}) {
+                // Minimal fallback: polling using the REST endpoint when real realtime unavailable
+                const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 1000;
+                let last = null;
+                let stopped = false;
+                (async () => {
+                    while (!stopped) {
+                        try {
+                            const res = await supabase.from(table).select('*');
+                            if (res && res.error) {
+                                console.error('[supabaseClient] Error fetching table', table, res.error);
+                            }
+                            const curr = JSON.stringify(res && res.data ? res.data : []);
+                            if (curr !== last) {
+                                last = curr;
+                                handler({ data: res.data, error: res && res.error ? res.error : null });
+                            }
+                        } catch (e) { console.error('[supabaseClient] subscribeToTable polling error for', table, e); }
+                        await new Promise(r => setTimeout(r, pollMs));
                     }
-                } catch (e) { /* ignore */ }
-                await new Promise(r => setTimeout(r, pollMs));
-            }
-        })();
-        return () => { stopped = true; };
-    };
+                })();
+                return () => { stopped = true; };
+            };
+
+            // Immediately run a detailed healthcheck and surface meaningful logs/errors
+            try {
+                (async () => {
+                    try {
+                        // Validate the env variables explicitly (helps diagnosing missing/misnamed keys)
+                        const okUrl = !!supabaseUrl; const okKey = !!supabaseAnonKey;
+                        if (!okUrl || !okKey) {
+                            const msg = `[supabaseClient] Missing Supabase env variables. VITE_SUPABASE_URL:${okUrl ? 'SET' : 'MISSING'} VITE_SUPABASE_ANON_KEY:${okKey ? 'SET' : 'MISSING'}`;
+                            console.error(msg);
+                            lastSupabaseError = new Error(msg);
+                            SUPABASE_CONNECTED = false;
+                            try { _notifySupabaseReady(); } catch (e) { }
+                            return;
+                        }
+
+                        // Run the canonical check and set connection status
+                        const res = await checkSupabaseConnection();
+                        if (!res.connected) {
+                            // If the check failed, log extra context (could be RLS/permission or network issue)
+                            console.error('[supabaseClient] supabase health check failed:', res.error);
+                        }
+                    } catch (e) {
+                        console.error('[supabaseClient] healthcheck threw', e);
+                    } finally {
+                        try { _notifySupabaseReady(); } catch (e) { }
+                    }
+                })();
+            } catch (e) { /* ignore healthcheck errors */ }
+
+            // Notify any registered handlers that supabase client object is ready (may still be unconnected)
+            try { _notifySupabaseReady(); } catch (e) { }
+        } catch (e) {
+            console.warn('Failed to initialize supabase client', e);
+            lastSupabaseError = e;
+            SUPABASE_CONNECTED = false;
+            try { _notifySupabaseReady(); } catch (err) { }
+        }
+    }).catch(e => {
+        // If import fails, leave supabase as null and log warning but do not throw — callers should guard with HAS_SUPABASE_CREDENTIALS
+        console.warn('Supabase package failed to load dynamically:', e);
+    });
+}
+
+async function buscarTodasEntregas() {
+    try {
+        // wait for client if needed
+        if (!supabase || typeof supabase.from !== 'function') {
+            await new Promise((resolve) => {
+                try { onSupabaseReady(() => resolve()); } catch (e) { setTimeout(resolve, 500); }
+            });
+        }
+        if (!supabase || typeof supabase.from !== 'function') throw new Error('Supabase client unavailable');
+        const res = await supabase.from('entregas').select('*');
+        if (res && res.error) throw res.error;
+        return Array.isArray(res.data) ? res.data : [];
+    } catch (error) {
+        console.error('Erro ao buscar entregas:', error);
+        return [];
+    }
 }
 
 export default supabase;
-export { supabase, HAS_SUPABASE_CREDENTIALS, subscribeToTable };
+export { supabase, HAS_SUPABASE_CREDENTIALS, subscribeToTable, onSupabaseReady, SUPABASE_READY, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, lastSupabaseError, buscarTodasEntregas };
 

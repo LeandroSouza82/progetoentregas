@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useMemo } from 'react';
-import useGoogleMapsLoader from './useGoogleMapsLoader';
-
 // Singleton map holder (keeps the Google Map instance alive across mounts)
 let GLOBAL_GOOGLE_MAP = null;
 
 // Componente reutilizável que monta um mapa Google Maps JS puro
 export default function MapComponent({
-    center = { lat: -28.2634, lng: -48.8428 }, // Palhoça, SC
+    center = { lat: -27.2423, lng: -50.2188 }, // Default to Santa Catarina center
     zoom = 13,
     style = { width: '100%', height: '100%' },
     onLoad = () => { },
@@ -14,9 +12,25 @@ export default function MapComponent({
 }) {
     const containerRef = useRef(null);
     const mapRef = useRef(null);
-    // capture API key explicitly so we can avoid loading when missing
-    const apiKey = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
-    const { loaded, error } = useGoogleMapsLoader({ apiKey });
+    // Passive check for Google Maps availability (APIProvider should load it)
+    const [loaded, setLoaded] = React.useState(typeof window !== 'undefined' && window.google && window.google.maps ? true : false);
+    const [error, setError] = React.useState(null);
+
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const check = () => {
+            if (window.google && window.google.maps) {
+                setLoaded(true);
+                setError(null);
+                return true;
+            }
+            return false;
+        };
+        if (check()) return;
+        const interval = setInterval(() => { if (check()) clearInterval(interval); }, 300);
+        const timeout = setTimeout(() => { clearInterval(interval); setError(new Error('Google Maps did not become available in time')); }, 10000);
+        return () => { clearInterval(interval); clearTimeout(timeout); };
+    }, []);
 
     // memoized options to avoid re-creating on simple prop changes
     const mapOptions = useMemo(() => ({

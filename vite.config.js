@@ -7,7 +7,7 @@ export default defineConfig({
   base: './', // Garante que os caminhos dos assets funcionem em qualquer subpasta
   build: {
     outDir: 'dist', // Define explicitamente a pasta de saída para a Vercel encontrar
-    chunkSizeWarningLimit: 1600, // Aumenta o limite para o Leaflet não gerar avisos
+    chunkSizeWarningLimit: 1600, // Aumenta o limite para evitar avisos de chunk size (conservador)
     rollupOptions: {
       output: {
         // Organiza os arquivos de saída para evitar conflitos de cache

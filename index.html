@@ -11,9 +11,7 @@
 
 <body>
   <div id="root"></div>
-  <!-- Carregamento único e assíncrono da Google Maps JS API (inclui Places + Geometry) -->
-  <script data-google-maps-api loading="async"
-    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM&libraries=places,geometry&language=pt-BR&region=BR"></script>
+  <!-- Google Maps script removed; loader is injected dynamically by the React loader (useGoogleMapsLoader / APIProvider). If you prefer a static script, set the proper key in .env.local and re-add it here. -->
   <script type="module" src="/src/main.jsx"></script>
 </body>
 

@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import DriverApp from './DriverApp';
-import supabase from './supabaseClient'; // Certifique-se que o arquivo existe
+import supabase, { onSupabaseReady } from './supabaseClient'; // Certifique-se que o arquivo existe
 import MapaLogistica from '../../src/MapaLogistica';
 // keep imports minimal for map rendering via MapaLogistica
 
@@ -81,15 +81,34 @@ function InternalMobileApp() {
             // Marca uma vez como online
             try { await markOnline(); } catch (e) { /* ignore */ }
 
-            // Busca entregas uma vez
+            // Busca entregas uma vez (force load independent of auth/user)
             try { await carregarRota(); } catch (e) { /* ignore */ }
+
+            // Also log raw motoristas for debugging mapping issues (if reachable)
+            try {
+                const { data: mf, error: mErr } = await supabase.from('motoristas').select('*').limit(50);
+                if (mErr) console.error('[motorista] erro fetch motoristas:', mErr);
+                try { console.log('Motoristas Brutos (motorista app):', mf); } catch (e) { }
+            } catch (e) { console.error('[motorista] fetch motoristas failed', e); }
 
             // Busca dados frescos do motorista (lat/lng) apenas uma vez para garantir que o mapa mostre a moto
             try {
                 if (motorista && motorista.id) {
                     const { data: mData, error } = await supabase.from('motoristas').select('*').eq('id', motorista.id).limit(1).maybeSingle();
                     if (!error && mData && mounted) {
-                        setMotorista(prev => ({ ...(prev || {}), ...mData }));
+                        setMotorista(prev => {
+                            // Only update when id or coordinates have actually changed to avoid excessive rerenders
+                            const prevId = prev && prev.id ? String(prev.id) : null;
+                            const newId = mData && mData.id ? String(mData.id) : null;
+                            const prevLat = prev && typeof prev.lat !== 'undefined' ? Number(prev.lat) : null;
+                            const prevLng = prev && typeof prev.lng !== 'undefined' ? Number(prev.lng) : null;
+                            const newLat = mData && typeof mData.lat !== 'undefined' ? Number(mData.lat) : null;
+                            const newLng = mData && typeof mData.lng !== 'undefined' ? Number(mData.lng) : null;
+                            if (prevId !== newId || prevLat !== newLat || prevLng !== newLng) {
+                                return { ...(prev || {}), ...mData };
+                            }
+                            return prev;
+                        });
                     }
                 }
             } catch (err) { /* ignore */ }
@@ -112,31 +131,33 @@ function InternalMobileApp() {
             }
             const { error } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motoristaId);
             if (error) console.error('[motorista] markOnline: erro ao atualizar motoristas', error);
-            else console.log('[motorista] markOnline: motorista marcado como Online');
+            else console.debug('[motorista] markOnline: motorista marcado como Online');
         } catch (err) {
             console.error('[motorista] markOnline: exceção', err);
         }
     }
 
     async function carregarRota() {
-        console.log('[motorista] carregarRota: iniciando fetch de entregas');
+        // Prevent re-entrant calls while an existing load is in progress
+        if (carregando) return;
         setCarregando(true);
         try {
-            // Pega apenas entregas com status 'Em Rota'
-            // Na vida real, filtraria pelo ID do motorista também
+            // Pega entregas sem depender de filtros sensíveis — o App irá filtrar localmente por status esperado
             const res = await supabase
                 .from('entregas')
-                .select('*')
-                .eq('status', 'Em Rota')
-                .order('ordem_logistica', { ascending: true }); // Ordena pela sequência persistida (ordem_logistica)
+                .select('*');
 
-            // Em caso do backend/mock não suportar 'ordem_logistica', faremos fallback client-side abaixo
+            // Debug raw entregas for mapping issues
+            try { console.log('[motorista] Entregas Brutas:', res && res.data); } catch (e) { }
 
-            console.log('[motorista] carregarRota: resultado', { dataPreview: Array.isArray(res.data) ? res.data.slice(0, 5) : res.data, error: res.error });
+            // Filter to relevant statuses for driver view (case-insensitive): Em Rota, pendente, aguardando
+            const raw = Array.isArray(res.data) ? res.data.slice() : (res.data || []);
+            const filtered = raw.filter(p => {
+                try { const s = String(p && (p.status || '')).trim().toLowerCase(); return s === 'em rota' || s === 'em_rota' || s === 'pendente' || s === 'aguardando' || s === 'em_rota'; } catch (e) { return false; }
+            });
 
-            // Fallback: ordena preferindo 'ordem_logistica' quando presente/maior que zero, senão usa 'ordem' ou id
-            const data = Array.isArray(res.data) ? res.data.slice() : (res.data || []);
-            let finalData = Array.isArray(data) ? data : [];
+            // Fallback ordering: ordem_logistica > ordem > id
+            let finalData = filtered.slice();
             finalData.sort((a, b) => (
                 (Number(a.ordem_logistica) && Number(a.ordem_logistica) > 0 ? Number(a.ordem_logistica) : (Number(a.ordem) || a.id || 0)) -
                 (Number(b.ordem_logistica) && Number(b.ordem_logistica) > 0 ? Number(b.ordem_logistica) : (Number(b.ordem) || b.id || 0))
@@ -152,7 +173,6 @@ function InternalMobileApp() {
             console.error('[motorista] carregarRota: exceção', err);
         } finally {
             setCarregando(false);
-            console.log('[motorista] carregarRota: fim');
         }
     }
 
@@ -165,9 +185,10 @@ function InternalMobileApp() {
             return;
         }
         if (app === 'waze') {
-            window.open(`https://waze.com/ul?ll=${latN},${lngN}&navigate=yes`, '_blank');
+            window.open('https://waze.com/ul?ll=' + latN + ',' + lngN + '&navigate=yes', '_blank');
         } else {
-            window.open(`https://www.google.com/maps/dir/?api=1&destination=${latN},${lngN}`, '_blank');
+            // Use search query URL which is more appropriate for pinpointing a lat/lng
+            window.open('https://www.google.com/maps/search/?api=1&query=' + latN + ',' + lngN, '_blank');
         }
     };
 
@@ -192,7 +213,6 @@ function InternalMobileApp() {
                 try {
                     const { error: e2 } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motorista.id);
                     if (e2) console.error('[motorista] finalizarEntrega: falha ao atualizar motoristas', e2);
-                    else console.log('[motorista] finalizarEntrega: motorista marcado como Online');
                 } catch (err) {
                     console.error('[motorista] finalizarEntrega: exceção atualizando motoristas', err);
                 }
@@ -217,7 +237,7 @@ function InternalMobileApp() {
             };
             arr.push(novo);
             localStorage.setItem(key, JSON.stringify(arr));
-            console.log('[motorista] seedEntrega: gravado', novo);
+            // debug: seed gravado (silenciado em produção)
             carregarRota();
         } catch (err) {
             console.error('[motorista] seedEntrega: erro', err);
@@ -229,7 +249,7 @@ function InternalMobileApp() {
         try {
             const key = 'mock_entregas';
             localStorage.removeItem(key);
-            console.log('[motorista] clearSeeds: mock_entregas removido');
+            // mock_entregas removido (silenciado)
             // Também tenta remover do supabase se estiver usando o mock com API
             try {
                 // remove entregas temporárias com status 'Em Rota' sem cliente definido? conservador: não executa delete global
@@ -261,6 +281,9 @@ function InternalMobileApp() {
     const markersParaMostrar = (orderedRota || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng)));
 
     const mapRefMobile = useRef(null);
+
+    // Memoize frota to avoid creating a new array on every render and causing map re-renders
+    const frotaMemo = useMemo(() => (motorista ? [motorista] : []), [motorista?.id, motorista?.lat, motorista?.lng]);
 
     // AdvancedMarker removed: map rendering moved to MapaLogistica component
 
@@ -296,7 +319,7 @@ function InternalMobileApp() {
                             </div>
                         </div>
                         <div>
-                            <h2 style={{ margin: 0, fontSize: '16px' }}>{motorista.nome}</h2>
+                            <h2 style={{ margin: 0, fontSize: '16px' }}>{(motorista && (motorista.nome || motorista.sobrenome)) ? `${(motorista.nome||'').trim()}${motorista.sobrenome ? ' ' + String(motorista.sobrenome).trim() : ''}` : motorista.nome}</h2>
                             <span style={{ fontSize: '12px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px' }}>● Online</span>
                         </div>
                         <button onClick={() => setChatOpen(true)} title="Chat rápido com gestor" style={{ marginLeft: '10px', background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>💬 Chat</button>
@@ -464,7 +487,7 @@ function InternalMobileApp() {
                     <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
                     <div style={{ borderRadius: '8px', overflow: 'hidden' }}>
                         {/* Mobile-first: altura fixa 250px em mobile */}
-                        <MapaLogistica entregas={entregas} frota={motorista ? [motorista] : []} mobile={true} />
+                        <MapaLogistica entregas={entregas} frota={frotaMemo} mobile={true} />
                         <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
                     </div>
                 </div>
