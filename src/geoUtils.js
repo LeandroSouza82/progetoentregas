@@ -207,3 +207,44 @@ export async function searchNominatim(query, bounds = null) {
         return [];
     }
 }
+
+/**
+ * Busca uma rota otimizada usando OSRM (Open Source Routing Machine)
+ * @param {array} coordinates - Array de coordenadas [[lng, lat], [lng, lat], ...]
+ * @returns {Promise<object|null>} Objeto com geometry (array de [lat, lng]) e distance (km)
+ */
+export async function getOSRMRoute(coordinates) {
+    if (!coordinates || coordinates.length < 2) return null;
+    
+    try {
+        // OSRM usa formato: lng,lat;lng,lat;...
+        const coords = coordinates.map(c => `${c[0]},${c[1]}`).join(';');
+        const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+        
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.warn('OSRM retornou status:', response.status);
+            return null;
+        }
+        
+        const data = await response.json();
+        if (!data.routes || data.routes.length === 0) {
+            console.warn('OSRM não retornou rotas');
+            return null;
+        }
+        
+        const route = data.routes[0];
+        // Converter coordenadas de [lng, lat] para [lat, lng] (formato Leaflet)
+        const geometry = route.geometry.coordinates.map(c => [c[1], c[0]]);
+        const distanceKm = (route.distance / 1000).toFixed(2);
+        
+        return {
+            geometry,
+            distance: parseFloat(distanceKm)
+        };
+    } catch (error) {
+        console.warn('Erro ao buscar rota no OSRM:', error);
+        return null;
+    }
+}
+

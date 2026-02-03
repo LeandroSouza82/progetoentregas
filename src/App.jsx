@@ -1,10 +1,10 @@
 import React from 'react';
 import { useRef, useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import supabase, { subscribeToTable, onSupabaseReady, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, buscarTodasEntregas } from './supabaseClient';
-import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, geocodeNominatim, searchNominatim } from './geoUtils';
+import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, geocodeNominatim, searchNominatim, getOSRMRoute } from './geoUtils';
 
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
@@ -37,10 +37,17 @@ function createNumberedIcon(number, color = '#2563eb') {
 
 function createMotoristaIcon(name = '', heading = 0, color = '#10b981') {
     const label = String(name || '').trim();
+    // Ícone de moto/carrinha estilizado
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'>
-        <g transform='translate(24 24) rotate(${heading})'>
-            <circle cx='0' cy='0' r='20' fill='${color}' stroke='%23fff' stroke-width='3'/>
-            <path d='M 0,-10 L 8,10 L 0,6 L -8,10 Z' fill='%23fff'/>
+        <g transform='translate(24 24)'>
+            <circle cx='0' cy='0' r='22' fill='${color}' stroke='%23fff' stroke-width='3'/>
+            <!-- Moto icon -->
+            <g transform='translate(-12, -8) scale(0.6)'>
+                <circle cx='8' cy='20' r='4' fill='%23fff'/>
+                <circle cx='32' cy='20' r='4' fill='%23fff'/>
+                <path d='M 10,12 L 18,8 L 22,10 L 24,8 L 28,10 L 30,12 L 26,18 L 14,18 Z' fill='%23fff'/>
+                <rect x='18' y='10' width='8' height='8' fill='%23fff'/>
+            </g>
         </g>
     </svg>`;
     const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
@@ -463,6 +470,7 @@ function App() {
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
     const [estimatedTimeText, setEstimatedTimeText] = useState(null);
     const [distanceCalculating, setDistanceCalculating] = useState(false);
+    const [routeGeometry, setRouteGeometry] = useState(null); // Geometria OSRM para desenhar rota
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
     const [logsHistory, setLogsHistory] = useState([]);
     const [showLogsPopover, setShowLogsPopover] = useState(false);
@@ -676,7 +684,7 @@ function App() {
         } catch (e) { console.warn('Erro desenhando draft polyline', e); }
         return () => { try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { } };
     }, [draftPreview, pontoPartida, mapCenterState]);
-    // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
+    
     // Nominatim: não precisa de inicialização (fetch direto HTTP)
     
     // Draft point: set when gestor seleciona um endereço
@@ -1308,11 +1316,12 @@ function App() {
         }
     }, [rotaFinalizada, frota, mapCenterState]);
 
-    // Ajustar bounds do mapa para mostrar todos os marcadores (entregas + motoristas)
+    // DESABILITADO: Ajuste de bounds (dependia do Google Maps)
+    // Com Leaflet, o mapa ajusta automaticamente ou use map.fitBounds() manualmente
+    /*
     React.useEffect(() => {
         if (!mapRef.current || !mapsLib?.LatLngBounds) return;
         
-        // Aguardar um pouco para garantir que os marcadores foram renderizados
         const timer = setTimeout(() => {
             try {
                 const bounds = new mapsLib.LatLngBounds();
@@ -1328,6 +1337,19 @@ function App() {
 
                 // Adicionar motoristas online aos bounds
                 (frota || []).forEach(motorista => {
+                    if (motorista.aprovado === true && motorista.esta_online === true && motorista.lat && motorista.lng && isValidSC(Number(motorista.lat), Number(motorista.lng))) {
+                        // bounds.extend({ lat: Number(motorista.lat), lng: Number(motorista.lng) });
+                        hasMarkers = true;
+                    }
+                });
+
+                // if (hasMarkers) mapRef.current.fitBounds(bounds, { padding: 50 });
+            } catch (e) { console.warn('Erro ao ajustar bounds', e); }
+        }, 1000);
+
+        return () => clearTimeout(timer);
+    }, [entregasEmEspera, orderedRota, frota]);
+    */
                     if (motorista.esta_online && motorista.lat && motorista.lng && isValidSC(Number(motorista.lat), Number(motorista.lng))) {
                         bounds.extend({ lat: Number(motorista.lat), lng: Number(motorista.lng) });
                         hasMarkers = true;
@@ -1345,7 +1367,7 @@ function App() {
         }, 1000); // Aguardar 1 segundo para renderização
 
         return () => clearTimeout(timer);
-    }, [entregasEmEspera, orderedRota, frota, mapsLib]);
+    }, [entregasEmEspera, orderedRota, frota]);
 
     // Center for map: force Santa Catarina as requested
     const motoristaLeandro = frota && frota.find ? frota.find(m => m.id === 1) : null;
@@ -1361,17 +1383,9 @@ function App() {
         }, [m.lat, m.lng]);
 
         const iconSize = zoomLevel > 15 ? 48 : 32;
-        const MarkerComp = mapsLib && mapsLib.AdvancedMarker ? mapsLib.AdvancedMarker : ({ children }) => <div>{children}</div>;
-        return (
-            <MarkerComp key={m.id} position={{ lat: Number(displayPos.lat), lng: Number(displayPos.lng) }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', zIndex: 100001 }}>
-                    <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                        {fullName(m) || 'Entregador'}
-                    </div>
-                    <img src="/bicicleta-de-entrega.png" alt="Entregador" style={{ width: `${iconSize}px`, height: `${iconSize}px`, objectFit: 'contain', transition: 'width 0.3s ease-in-out, height 0.3s ease-in-out' }} />
-                </div>
-            </MarkerComp>
-        );
+        // SmoothMarker desabilitado (usava Google Maps AdvancedMarker)
+        // Com Leaflet, os markers são renderizados diretamente no JSX do mapa
+        return null;
     };
 
     // Helper: map type to color
@@ -1529,6 +1543,26 @@ function App() {
                     // splice HQ into place
                     waypts.splice(limit, 0, { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) });
                 }
+            }
+            
+            // BUSCAR ROTA OSRM para desenhar linha seguindo ruas
+            try {
+                const baseDest = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
+                const allPoints = [
+                    [origin.lng, origin.lat],
+                    ...waypts.map(w => [w.lng, w.lat]),
+                    [baseDest.lng, baseDest.lat]
+                ];
+                const osrmResult = await getOSRMRoute(allPoints);
+                if (osrmResult && osrmResult.geometry) {
+                    setRouteGeometry(osrmResult.geometry);
+                    console.log(`✅ Rota OSRM obtida: ${osrmResult.distance} km`);
+                } else {
+                    setRouteGeometry(null); // Fallback: linha reta
+                }
+            } catch (e) {
+                console.warn('Erro ao buscar rota OSRM:', e);
+                setRouteGeometry(null);
             }
 
             // Prevent duplicate Directions calls: if origin+orderedList+includeHQ same as last query, reuse result
@@ -2562,6 +2596,9 @@ function App() {
                                                 position={[Number(motorista.lat), Number(motorista.lng)]}
                                                 icon={createMotoristaIcon(fullName(motorista))}
                                             >
+                                                <Tooltip permanent direction="top" offset={[0, -20]}>
+                                                    <strong>{fullName(motorista)}</strong>
+                                                </Tooltip>
                                                 <Popup>
                                                     <div>
                                                         <strong>{fullName(motorista)}</strong><br />
@@ -2593,6 +2630,9 @@ function App() {
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
                                                     icon={createNumberedIcon(num, pinColor)}
                                                 >
+                                                    <Tooltip permanent direction="top" offset={[0, -40]} className="entrega-tooltip" opacity={0.9}>
+                                                        <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
+                                                    </Tooltip>
                                                     <Popup>
                                                         <div>
                                                             <strong>{entrega.cliente}</strong><br />
@@ -2617,6 +2657,9 @@ function App() {
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
                                                     icon={createNumberedIcon(num, pinColor)}
                                                 >
+                                                    <Tooltip permanent direction="top" offset={[0, -40]} className="entrega-tooltip" opacity={0.9}>
+                                                        <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
+                                                    </Tooltip>
                                                     <Popup>
                                                         <div>
                                                             <strong>{entrega.cliente}</strong><br />
@@ -2627,6 +2670,16 @@ function App() {
                                                 </Marker>
                                             );
                                         })}
+                                        
+                                        {/* Polyline da rota OSRM (seguindo ruas) */}
+                                        {routeGeometry && routeGeometry.length > 0 && (
+                                            <Polyline
+                                                positions={routeGeometry}
+                                                color="#60a5fa"
+                                                weight={5}
+                                                opacity={0.9}
+                                            />
+                                        )}
                                     </MapContainer>
                                 </ErrorBoundary>
 
