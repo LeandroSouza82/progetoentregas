@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import DriverApp from './DriverApp';
 import supabase from './supabaseClient'; // Certifique-se que o arquivo existe
-import { GoogleMap } from '@vis.gl/react-google-maps';
-import { AdvancedMarker } from '@vis.gl/react-google-maps';
+import MapaLogistica from '../../src/MapaLogistica';
+// keep imports minimal for map rendering via MapaLogistica
 
 const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
 
@@ -42,17 +42,9 @@ function InternalMobileApp() {
     // Estado da bateria (simulado)
     const [battery, setBattery] = useState({ level: 0.85, charging: false });
 
-    // Simulação de atualização da bateria (pode ser adaptado para API real)
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setBattery(b => {
-                let newLevel = b.level - 0.01;
-                if (newLevel < 0.1) newLevel = 1;
-                return { ...b, level: newLevel };
-            });
-        }, 10000);
-        return () => clearInterval(interval);
-    }, []);
+    // Simulação de atualização da bateria removida para evitar processos em background (estabilidade)
+    // Mantemos um nível estático para exibição
+    useEffect(() => { setBattery({ level: 0.85, charging: false }); }, []);
     // Estado do Motorista: inicializa a partir da sessão persistida (localStorage)
     const [motorista, setMotorista] = useState(() => {
         try {
@@ -82,16 +74,33 @@ function InternalMobileApp() {
         }, 1200);
     }
 
-    // Carrega entregas do Supabase
+    // Carrega entregas do Supabase e fixa a conexão ao mount (sem polling) → evita "pisca-pisca" de status
     useEffect(() => {
-        // Ao abrir o app, marca motorista como Online (sincroniza com o dashboard)
-        markOnline();
-        carregarRota();
+        let mounted = true;
+        async function init() {
+            // Marca uma vez como online
+            try { await markOnline(); } catch (e) { /* ignore */ }
 
-        // Atualização em tempo real (Polling simples a cada 5s)
-        const intervalo = setInterval(carregarRota, 5000);
-        return () => clearInterval(intervalo);
+            // Busca entregas uma vez
+            try { await carregarRota(); } catch (e) { /* ignore */ }
+
+            // Busca dados frescos do motorista (lat/lng) apenas uma vez para garantir que o mapa mostre a moto
+            try {
+                if (motorista && motorista.id) {
+                    const { data: mData, error } = await supabase.from('motoristas').select('*').eq('id', motorista.id).limit(1).maybeSingle();
+                    if (!error && mData && mounted) {
+                        setMotorista(prev => ({ ...(prev || {}), ...mData }));
+                    }
+                }
+            } catch (err) { /* ignore */ }
+        }
+        init();
+        return () => { mounted = false; };
     }, []);
+
+    // Safety stub: prevent ref errors from missing helpers elsewhere
+    const scheduleRetry = () => { };
+
 
     // Marca o motorista como Online no backend (mock ou real)
     async function markOnline() {
@@ -119,21 +128,25 @@ function InternalMobileApp() {
                 .from('entregas')
                 .select('*')
                 .eq('status', 'Em Rota')
-                    .order('ordem_logistica', { ascending: true }); // Ordena pela sequência persistida (ordem_logistica)
+                .order('ordem_logistica', { ascending: true }); // Ordena pela sequência persistida (ordem_logistica)
 
             // Em caso do backend/mock não suportar 'ordem_logistica', faremos fallback client-side abaixo
 
-            console.log('[motorista] carregarRota: resultado', { dataPreview: Array.isArray(data) ? data.slice(0, 5) : data, error });
+            console.log('[motorista] carregarRota: resultado', { dataPreview: Array.isArray(res.data) ? res.data.slice(0, 5) : res.data, error: res.error });
 
             // Fallback: ordena preferindo 'ordem_logistica' quando presente/maior que zero, senão usa 'ordem' ou id
-            let finalData = Array.isArray(data) ? data.slice() : [];
-            finalData.sort((a, b) => (Number(a.ordem_logistica) && Number(a.ordem_logistica) > 0 ? Number(a.ordem_logistica) : (Number(a.ordem) || a.id || 0)) - (Number(b.ordem_logistica) && Number(b.ordem_logistica) > 0 ? Number(b.ordem_logistica) : (Number(b.ordem) || b.id || 0)));
+            const data = Array.isArray(res.data) ? res.data.slice() : (res.data || []);
+            let finalData = Array.isArray(data) ? data : [];
+            finalData.sort((a, b) => (
+                (Number(a.ordem_logistica) && Number(a.ordem_logistica) > 0 ? Number(a.ordem_logistica) : (Number(a.ordem) || a.id || 0)) -
+                (Number(b.ordem_logistica) && Number(b.ordem_logistica) > 0 ? Number(b.ordem_logistica) : (Number(b.ordem) || b.id || 0))
+            ));
 
-            if (!error && finalData) {
+            if (!res.error && finalData) {
                 setEntregas(finalData);
                 setSelectedId(prev => prev || (finalData.length > 0 ? finalData[0].id : null));
-            } else if (error) {
-                console.error('[motorista] carregarRota: erro do supabase', error);
+            } else if (res.error) {
+                console.error('[motorista] carregarRota: erro do supabase', res.error);
             }
         } catch (err) {
             console.error('[motorista] carregarRota: exceção', err);
@@ -145,10 +158,16 @@ function InternalMobileApp() {
 
     // Função para abrir GPS
     const abrirGPS = (app, lat, lng) => {
+        const latN = lat == null ? null : Number(lat);
+        const lngN = lng == null ? null : Number(lng);
+        if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
+            alert('Coordenadas inválidas para navegação');
+            return;
+        }
         if (app === 'waze') {
-            window.open(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`, '_blank');
+            window.open(`https://waze.com/ul?ll=${latN},${lngN}&navigate=yes`, '_blank');
         } else {
-            window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, '_blank');
+            window.open(`https://www.google.com/maps/dir/?api=1&destination=${latN},${lngN}`, '_blank');
         }
     };
 
@@ -234,24 +253,25 @@ function InternalMobileApp() {
     const proximasTarefas = entregas.filter(e => e.id !== (tarefaAtual ? tarefaAtual.id : null));
 
     // Ordena entregas pela propriedade 'ordem' se presente, senão por id
-    const orderedRota = entregas && entregas.slice ? entregas.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
-    const mapRefMobile = useRef(null);
-    // SmartLoadScript para evitar múltiplos carregamentos do mesmo script Google Maps
-    function SmartLoadScript({ apiKey, children }) {
-        if (typeof window !== 'undefined' && window.google && window.google.maps) return <>{children}</>;
-        return <LoadScript googleMapsApiKey={apiKey}>{children}</LoadScript>;
-    }
+    // Valid SC coordinates helper (manager-specified bounds)
+    const isValidSC = (lat, lng) => lat < -25.0 && lat > -30.0 && lng < -54.0 && lng > -48.0;
 
-    // AdvancedMarker removed: use legacy Marker for mobile map rendering
+    const orderedRota = entregas && entregas.slice ? entregas.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
+    // markers filtered to SC region only (ensure numeric comparison)
+    const markersParaMostrar = (orderedRota || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng)));
+
+    const mapRefMobile = useRef(null);
+
+    // AdvancedMarker removed: map rendering moved to MapaLogistica component
 
     return (
         <div style={{
             minHeight: '100vh',
-            backgroundColor: theme.bg,
+            backgroundColor: '#071228',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
             display: 'flex',
             flexDirection: 'column',
-            maxWidth: '480px', // Simula largura de celular se aberto no PC
+            maxWidth: '1450px',
             margin: '0 auto',
             borderLeft: '1px solid #ddd',
             borderRight: '1px solid #ddd'
@@ -439,38 +459,15 @@ function InternalMobileApp() {
                     </>
                 )}
 
-                {/* MAPA COM BADGES NUMERADOS (apenas visualização rápida) */}
-                {orderedRota.length > 0 && (
-                    <div style={{ background: '#fff', borderRadius: '12px', padding: '10px', boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
-                        <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
-                        <div style={{ height: '220px', borderRadius: '8px', overflow: 'hidden' }}>
-                            <SmartLoadScript apiKey={GOOGLE_MAPS_API_KEY}>
-                                <GoogleMap mapContainerStyle={{ width: '100%', height: '100%' }} center={{ lat: parseFloat(orderedRota[0].lat), lng: parseFloat(orderedRota[0].lng) }} zoom={13} onLoad={m => { if (!mapRefMobile.current) mapRefMobile.current = m; }}>
-                                    {orderedRota.map((p, i) => {
-                                        if (!mapRefMobile.current || !window.google || !window.google.maps) return null;
-                                        const lat = parseFloat(p.lat);
-                                        const lng = parseFloat(p.lng);
-                                        if (isNaN(lat) || isNaN(lng)) return null;
-                                        // Use ordem_logistica exclusively for pin numbering on mobile
-                                        // Use ordem_logistica when present, otherwise fallback to index+1
-                                        const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : String(i + 1);
-                                        const tipo = String(p.tipo || 'Entrega');
-                                        const color = (tipo === 'recolha') ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#2563eb');
-                                        return (
-                                            <AdvancedMarker key={p.id} position={{ lat, lng }}>
-                                                <div style={{ transform: 'translate(-50%,-110%)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                                    <div style={{ backgroundColor: 'rgba(0,0,0,0.75)', color: '#fff', padding: '4px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700, marginBottom: 6, boxShadow: '0 2px 6px rgba(0,0,0,0.25)' }}>{tipo.charAt(0).toUpperCase()+tipo.slice(1)}</div>
-                                                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 14, boxShadow: '0 4px 10px rgba(0,0,0,0.25)' }}>{String(num)}</div>
-                                                </div>
-                                            </AdvancedMarker>
-                                        );
-                                    })}
-                                </GoogleMap>
-                            </SmartLoadScript>
-                            <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
-                        </div>
+                {/* MAPA COM BADGES NUMERADOS (agora isolado em MapaLogistica) */}
+                <div style={{ background: '#fff', borderRadius: '12px', padding: '10px', boxShadow: '0 6px 18px rgba(0,0,0,0.06)' }}>
+                    <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
+                    <div style={{ borderRadius: '8px', overflow: 'hidden' }}>
+                        {/* Mobile-first: altura fixa 250px em mobile */}
+                        <MapaLogistica entregas={entregas} frota={motorista ? [motorista] : []} mobile={true} />
+                        <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
                     </div>
-                )}
+                </div>
 
                 {/* LISTA DE ENTREGAS (SELECIONÁVEL) */}
                 <div style={{ marginTop: '10px' }}>
