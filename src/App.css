@@ -1,3 +1,21 @@
+/* Estilos para Tooltips permanentes do Leaflet */
+.leaflet-tooltip.entrega-tooltip {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 2px solid #2563eb !important;
+  border-radius: 8px !important;
+  padding: 4px 8px !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25) !important;
+}
+
+.leaflet-tooltip {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-radius: 6px !important;
+  padding: 6px 10px !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2) !important;
+}
+
 /* Estilo do Modal */
 .modal-overlay {
   position: fixed;
