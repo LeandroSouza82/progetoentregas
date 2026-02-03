@@ -251,31 +251,8 @@ class ErrorBoundary extends React.Component {
 
 // Nota: badge fixo do gestor removido para evitar duplicidade visual
 
-// Marker list memoizado: re-renderiza somente quando referência da frota mudar ou zoom/mapsLib mudar
-const MarkerList = React.memo(function MarkerList({ frota = [], mapsLib, zoomLevel, onSelect }) {
-    if (!mapsLib || !mapsLib.Map) return null;
-    const MarkerComp = mapsLib.AdvancedMarker || (({ children }) => <div>{children}</div>);
-    return (frota || []).filter(motorista => motorista.aprovado === true && motorista.esta_online === true && isValidSC(Number(motorista.lat), Number(motorista.lng))).map(motorista => {
-        return (
-            <MarkerComp
-                key={motorista.id}
-                position={{ lat: parseFloat(motorista.lat), lng: parseFloat(motorista.lng) }}
-            >
-                <div onClick={() => onSelect && onSelect(motorista)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateY(-20px)', cursor: 'pointer' }}>
-                    <div style={{ backgroundColor: 'white', color: 'black', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.2)', marginBottom: '4px' }}>
-                        {fullName(motorista) || 'Entregador'}
-                    </div>
-                    <img 
-                        src="/bike.png" 
-                        alt="Motorista" 
-                        onError={(e) => { e.target.onerror = null; e.target.src = '/moto.png'; }}
-                        style={{ width: '40px', height: '40px', objectFit: 'contain' }} 
-                    />
-                </div>
-            </MarkerComp>
-        );
-    });
-}, (prev, next) => prev.frota === next.frota && prev.mapsLib === next.mapsLib && prev.zoomLevel === next.zoomLevel);
+// Componentes antigos do Google Maps removidos (MarkerList, DeliveryMarkers)
+// Agora usamos Leaflet diretamente no JSX do mapa
 
 // Linha da tabela de motorista memoizada (modo 'Gestão'): mostra apenas NOME | EMAIL | ENDEREÇO | AÇÕES
 const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme, onApprove, onReject }) {
@@ -323,13 +300,11 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
 }, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme);
 
 function App() {
-    // mapa dinamicamente importado para prevenir que falhas no build do pacote quebrem o app
-    const [mapsLib, setMapsLib] = useState(null);
-    const [mapsLoadError, setMapsLoadError] = useState(false);
+    // Estados principais
     const [loadingFrota, setLoadingFrota] = useState(false);
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
-    const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
+    const [abaAtiva, setAbaAtiva] = useState('Visão Geral');
 
     // Local supabase ref to ensure we use the right client instance when it becomes available
     const supabaseRef = React.useRef(supabase);
@@ -756,7 +731,7 @@ function App() {
         }, 700);
 
         return () => { mounted = false; clearTimeout(draftOptimizeTimerRef.current); };
-    }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState, gmapsLoaded]);
+    }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState]);
 
     // Suggestions: fetch history matches from Supabase
     async function fetchHistoryMatches(q) {
@@ -1209,25 +1184,6 @@ function App() {
         return () => { mounted = false; };
     }, []);
 
-    // Import dinâmico do pacote de mapas (evita crash no build/SSR quando o pacote falha)
-    useEffect(() => {
-        let mounted = true;
-        (async () => {
-            setLoadingFrota(true);
-            try {
-                const lib = await import('@vis.gl/react-google-maps');
-                if (!mounted) return;
-                setMapsLib(lib || null);
-            } catch (e) {
-                console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e);
-                if (!mounted) return;
-                setFrota([]);
-                setMapsLoadError(true);
-            }
-        })();
-        return () => { mounted = false; };
-    }, []);
-
     // Failsafe do Gestor: marcar offline com fetch keepalive no pagehide
     useEffect(() => {
         if (!user || !session) return;
@@ -1428,164 +1384,8 @@ function App() {
 
     function capitalize(s) { return String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1); }
 
-
-    // Delivery markers: numbered pins with color and small label showing type
-    const DeliveryMarkers = React.memo(function DeliveryMarkers({ list = [], mapsLib }) {
-        const [selectedMarker, setSelectedMarker] = React.useState(null);
-        const InfoWindowComp = mapsLib?.InfoWindow;
-        
-        if (!mapsLib || !mapsLib.AdvancedMarker) return null;
-        return (
-            <>
-                {(list || []).map((p, idx) => {
-                    const lat = Number(p.lat);
-                    const lng = Number(p.lng);
-                    // Only render markers with valid coords inside SC bounds
-                    if (!isValidSC(Number(lat), Number(lng))) return null;
-                    // Use ordem_logistica exclusively for numbering on the map. If not set (>0) show empty.
-                    // Use ordem_logistica when available, otherwise fallback to index+1 so pins are always visible
-                    const num = (p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? String(Number(p.ordem_logistica)) : String(idx + 1);
-                    const tipo = String(p.tipo || 'Entrega').toLowerCase();
-                    const status = String(p.status || 'pendente').toLowerCase();
-                    
-                    // COR PRINCIPAL: Baseada no STATUS
-                    let pinColor;
-                    if (status === 'concluída' || status === 'concluida' || status === 'entregue' || status === 'sucesso') {
-                        pinColor = '#10b981'; // Verde - Sucesso
-                    } else if (status === 'falha' || status === 'cancelado' || status === 'cancelada') {
-                        pinColor = '#ef4444'; // Vermelho - Falha/Cancelado
-                    } else {
-                        pinColor = '#3b82f6'; // Azul - Pendente/Em Rota (padrão)
-                    }
-                    
-                    // COR DA BORDA: Baseada no TIPO de serviço
-                    let borderColor;
-                    if (tipo === 'entrega') {
-                        borderColor = '#2563eb'; // Azul
-                    } else if (tipo === 'recolha') {
-                        borderColor = '#f59e0b'; // Laranja
-                    } else if (tipo === 'outros' || tipo === 'outro') {
-                        borderColor = '#a855f7'; // Lilás
-                    } else {
-                        borderColor = '#64748b'; // Cinza padrão
-                    }
-                    
-                    // COR DO RÓTULO (LABEL): Fundo colorido + Texto BRANCO
-                    let labelBgColor, labelText;
-                    if (tipo === 'entrega') {
-                        labelBgColor = '#2563eb'; // AZUL (Entrega)
-                        labelText = 'Entrega';
-                    } else if (tipo === 'recolha') {
-                        labelBgColor = '#fb923c'; // LARANJA (Recolha)
-                        labelText = 'Recolha';
-                    } else if (tipo === 'outros' || tipo === 'outro') {
-                        labelBgColor = '#c084fc'; // LILÁS (Outros)
-                        labelText = 'Outros';
-                    } else {
-                        labelBgColor = '#64748b'; // Cinza padrão
-                        labelText = capitalize(tipo);
-                    }
-                    
-                    const MarkerComp = mapsLib.AdvancedMarker;
-                    return (
-                        <MarkerComp key={`entrega-${p.id || idx}`} position={{ lat, lng }}>
-                            <div 
-                                onClick={() => setSelectedMarker(p)}
-                                style={{ transform: 'translate(-50%,-110%)', display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer' }}
-                            >
-                                {/* Rótulo colorido acima do pino */}
-                                <div style={{ 
-                                    backgroundColor: labelBgColor, 
-                                    color: '#fff', 
-                                    padding: '4px 10px', 
-                                    borderRadius: 12, 
-                                    fontSize: 11, 
-                                    fontWeight: 700, 
-                                    marginBottom: 6, 
-                                    boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-                                    whiteSpace: 'nowrap'
-                                }}>
-                                    {labelText}
-                                </div>
-                                {/* Pino numerado com cor baseada no status */}
-                                <div style={{ 
-                                    width: 36, 
-                                    height: 36, 
-                                    borderRadius: '50%', 
-                                    background: pinColor, 
-                                    border: `3px solid ${borderColor}`,
-                                    display: 'flex', 
-                                    alignItems: 'center', 
-                                    justifyContent: 'center', 
-                                    color: '#fff', 
-                                    fontWeight: 800, 
-                                    fontSize: 14, 
-                                    boxShadow: '0 4px 10px rgba(0,0,0,0.25)' 
-                                }}>
-                                    {String(num)}
-                                </div>
-                            </div>
-                        </MarkerComp>
-                    );
-                })}
-                
-                {/* InfoWindow ao clicar no marcador */}
-                {selectedMarker && InfoWindowComp && (
-                    <InfoWindowComp 
-                        position={{ lat: Number(selectedMarker.lat), lng: Number(selectedMarker.lng) }}
-                        onCloseClick={() => setSelectedMarker(null)}
-                    >
-                        <div style={{ padding: '8px', minWidth: '200px' }}>
-                            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold', color: '#1f2937' }}>
-                                {selectedMarker.cliente}
-                            </h3>
-                            <p style={{ margin: '0', fontSize: '12px', color: '#6b7280' }}>
-                                📍 {selectedMarker.endereco}
-                            </p>
-                            <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#9ca3af' }}>
-                                Status: <span style={{ fontWeight: 'bold', color: '#3b82f6' }}>{selectedMarker.status}</span>
-                            </p>
-                        </div>
-                    </InfoWindowComp>
-                )}
-            </>
-        );
-    });
-
-
-    // (MapControls removed — using single `BotoesMapa` inside <Map>)
-
-    // Componente interno obrigatório para controle do mapa (deve ficar DENTRO de <Map>..</Map>)
-    function BotoesMapa() {
-        const map = mapsLib && typeof mapsLib.useMap === 'function' ? mapsLib.useMap() : null;
-        const [spinning, setSpinning] = useState(false);
-        const handleRefresh = () => {
-            try { setSpinning(true); } catch (e) { }
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition((position) => {
-                    const { latitude, longitude } = position.coords;
-                    if (map) {
-                        map.panTo({ lat: latitude, lng: longitude });
-                        map.setZoom(15);
-                    }
-                    try { carregarDados(); } catch (e) { /* non-blocking */ }
-                    // stop spinning after a short interval to show feedback
-                    try { setTimeout(() => setSpinning(false), 900); } catch (e) { }
-                }, () => { try { setSpinning(false); } catch (e) { } });
-            } else {
-                try { setSpinning(false); } catch (e) { }
-            }
-        };
-        return (
-            <div style={{ position: 'absolute', top: 65, right: 12, zIndex: 9999 }}>
-                <button onClick={handleRefresh} style={{ width: 44, height: 44, borderRadius: '50%', background: '#fff', border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4b5563" strokeWidth="2" style={{ transform: spinning ? 'rotate(360deg)' : 'none', transition: 'transform 0.9s linear' }}><path d="M21 12a9 9 0 10-2.62 6.13M21 3v6h-6" /></svg>
-                </button>
-            </div>
-        );
-    }
-
-    // (MapControlsFallback removed — single `BotoesMapa` is used inside <Map>)
+    // Componentes antigos do Google Maps removidos (DeliveryMarkers e BotoesMapa)
+    // Agora usamos Leaflet com Markers diretamente no JSX
 
     // Helpers para cores por tipo de carga
     const getColorForType = (tipo) => {
