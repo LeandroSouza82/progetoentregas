@@ -2740,61 +2740,95 @@ function App() {
                         {/* MAPA EM CARD (DIMINUÍDO, REDIMENSIONÁVEL E ELEGANTE) */}
                         <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'hidden', minHeight: '450px', maxHeight: '800px', position: 'relative' }}>
                             <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
-                                {
-                                    // Only mount the Map when we have an API key and the maps lib is available
-                                    (GOOGLE_MAPS_API_KEY && mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
-                                        (() => {
-                                            const MapComp = mapsLib.Map;
+                                <ErrorBoundary>
+                                    <MapContainer
+                                        center={[mapCenterState.lat || DEFAULT_MAP_CENTER.lat, mapCenterState.lng || DEFAULT_MAP_CENTER.lng]}
+                                        zoom={zoomLevel}
+                                        style={{ width: '100%', height: '100%', borderRadius: '12px' }}
+                                        whenCreated={(map) => {
+                                            mapRef.current = map;
+                                        }}
+                                    >
+                                        {/* OpenStreetMap Tile Layer */}
+                                        <TileLayer
+                                            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                                            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                                        />
+                                        
+                                        {/* Motoristas online */}
+                                        {(frota || []).filter(m => m.aprovado === true && m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(motorista => (
+                                            <Marker
+                                                key={`motorista-${motorista.id}`}
+                                                position={[Number(motorista.lat), Number(motorista.lng)]}
+                                                icon={createMotoristaIcon(fullName(motorista))}
+                                            >
+                                                <Popup>
+                                                    <div>
+                                                        <strong>{fullName(motorista)}</strong><br />
+                                                        {motorista.veiculo && `Veículo: ${motorista.veiculo}`}
+                                                    </div>
+                                                </Popup>
+                                            </Marker>
+                                        ))}
+                                        
+                                        {/* Entregas em espera (pendentes) */}
+                                        {(() => {
+                                            const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
+                                            return (entregasEmEspera || []).filter(e => {
+                                                const status = String(e.status || '').toLowerCase().trim();
+                                                const hasValidCoords = e.lat != null && e.lng != null && 
+                                                                       Number.isFinite(Number(e.lat)) && 
+                                                                       Number.isFinite(Number(e.lng)) &&
+                                                                       isValidSC(Number(e.lat), Number(e.lng));
+                                                return !statusInvalidos.includes(status) && hasValidCoords;
+                                            });
+                                        })().map((entrega, idx) => {
+                                            const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
+                                            let pinColor = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' ? '#c084fc' : '#2563eb');
+                                            const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
+                                            
                                             return (
-                                                <ErrorBoundary>
-                                                    <MapComp
-                                                        mapId="546bd17ef4a30773714756d8"
-                                                        defaultCenter={mapCenterState}
-                                                        defaultZoom={zoomLevel}
-                                                        style={{ width: '100%', height: '100%' }}
-                                                        onZoomChanged={(ev) => setZoomLevel(ev?.detail?.zoom)}
-                                                        onLoad={(m) => {
-                                                            try {
-                                                                const inst = (m && (m.map || m.__map || m)) || m;
-                                                                mapRef.current = inst;
-                                                            } catch (e) { /* ignore */ }
-                                                        }}
-                                                    >
-                                                        <BotoesMapa />
-                                                        <MarkerList frota={frota} mapsLib={mapsLib} zoomLevel={zoomLevel} onSelect={setSelectedMotorista} />
-                                                        {/* Pending markers (pre-dispatch) - APENAS pendentes/aguardando (nunca concluídas) */}
-                                                        <DeliveryMarkers list={(() => {
-                                                            const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
-                                                            return (entregasEmEspera || []).filter(e => {
-                                                                const status = String(e.status || '').toLowerCase().trim();
-                                                                const hasValidCoords = e.lat != null && e.lng != null && 
-                                                                                       Number.isFinite(Number(e.lat)) && 
-                                                                                       Number.isFinite(Number(e.lng));
-                                                                return !statusInvalidos.includes(status) && hasValidCoords;
-                                                            });
-                                                        })()} mapsLib={mapsLib} />
-                                                        {/* Draft preview markers (includes draftPoint) */}
-                                                        <DeliveryMarkers list={draftPreview} mapsLib={mapsLib} isPreview={true} />
-                                                        {/* Rota ativa - apenas entregas NÃO concluídas */}
-                                                        <DeliveryMarkers list={entregasAtivasNoMapa} mapsLib={mapsLib} />
-                                                    </MapComp>
-                                                </ErrorBoundary>
+                                                <Marker
+                                                    key={`entrega-${entrega.id}`}
+                                                    position={[Number(entrega.lat), Number(entrega.lng)]}
+                                                    icon={createNumberedIcon(num, pinColor)}
+                                                >
+                                                    <Popup>
+                                                        <div>
+                                                            <strong>{entrega.cliente}</strong><br />
+                                                            {entrega.endereco}<br />
+                                                            <em style={{ color: pinColor }}>{tipo.toUpperCase()}</em>
+                                                        </div>
+                                                    </Popup>
+                                                </Marker>
                                             );
-                                        })()
-                                    ) : (
-                                        // Fallback: mapa não disponível. Mostrar placeholder (sem dependências externas) e manter a lista funcional
-                                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(180deg,#0b1220,#071228)', color: '#9ca3af' }}>
-                                            <div style={{ textAlign: 'center' }}>
-                                                <div style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px' }}>Mapa indisponível</div>
-                                                <div style={{ fontSize: '13px' }}>O mapa do Google não pôde ser carregado. A lista de entregas continua visível.</div>
-                                            </div>
-                                        </div>
-                                    )
-                                }
-
-                                {/* Map controls consolidated: single `BotoesMapa` is rendered INSIDE the <Map> */}
-
-                                {/* Floating refresh button removed; use single `BotoesMapa` inside the <Map> */}
+                                        })}
+                                        
+                                        {/* Entregas ativas (rota em andamento) */}
+                                        {(entregasAtivasNoMapa || []).map((entrega, idx) => {
+                                            if (!isValidSC(Number(entrega.lat), Number(entrega.lng))) return null;
+                                            const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
+                                            let pinColor = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' ? '#c084fc' : '#10b981'); // Verde para ativas
+                                            const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
+                                            
+                                            return (
+                                                <Marker
+                                                    key={`ativa-${entrega.id}`}
+                                                    position={[Number(entrega.lat), Number(entrega.lng)]}
+                                                    icon={createNumberedIcon(num, pinColor)}
+                                                >
+                                                    <Popup>
+                                                        <div>
+                                                            <strong>{entrega.cliente}</strong><br />
+                                                            {entrega.endereco}<br />
+                                                            <em style={{ color: pinColor }}>EM ROTA</em>
+                                                        </div>
+                                                    </Popup>
+                                                </Marker>
+                                            );
+                                        })}
+                                    </MapContainer>
+                                </ErrorBoundary>
 
                                 {/* Resize handle indicator */}
                                 <div style={{ position: 'absolute', bottom: 8, right: 12, width: 36, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 6, cursor: 'ns-resize', display: 'inline-block', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }} title="Arraste para redimensionar a altura do mapa" />
