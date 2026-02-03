@@ -62,7 +62,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         try {
             // APENAS ajustar bounds na primeira renderização, nunca mais (evita re-centralização quando motoristas piscam)
             if (hasInitializedBoundsRef.current) return;
-            
+
             const key = JSON.stringify({ e: entregaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })), f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })) });
             if (key === lastPointsKeyRef.current) return; // nothing changed
             lastPointsKeyRef.current = key;

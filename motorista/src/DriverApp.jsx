@@ -239,21 +239,21 @@ export default function AppMotorista() {
             }
             const motoristaId = loggedIn && loggedIn.id ? loggedIn.id : null;
             const motoristaNome = loggedIn ? `${loggedIn.nome || ''} ${loggedIn.sobrenome || ''}`.trim() : 'Desconhecido';
-            
+
             if (!motoristaId) {
                 console.error('❌ [CELULAR] ID do motorista ausente! Login:', loggedIn);
                 setEntregas([]);
                 return;
             }
-            
+
             console.log('🔍 [CELULAR] Buscando entregas para:');
             console.log('   🆔 ID:', motoristaId);
             console.log('   👤 Nome:', motoristaNome);
-            
+
             // prevent concurrent loads
             if (carregandoRef.current) return;
             carregandoRef.current = true;
-            
+
             // Buscar entregas EXCLUSIVAMENTE por motorista_id (UUID)
             const res = await supabase
                 .from('entregas')
@@ -261,15 +261,15 @@ export default function AppMotorista() {
                 .eq('motorista_id', motoristaId)
                 .in('status', ['em_rota', 'enviada', 'pendente', 'em_andamento'])
                 .order('ordem_logistica', { ascending: true });
-                
+
             const data = res && res.data ? res.data : [];
             const newData = Array.isArray(data) ? data : [];
-            
+
             console.log('✅ [CELULAR] Entregas carregadas:', newData.length);
             if (newData.length > 0) {
                 console.log('📋 IDs das entregas:', newData.map(e => e.id));
             }
-            
+
             try {
                 const prev = JSON.stringify(entregas || []);
                 const next = JSON.stringify(newData);
@@ -420,7 +420,7 @@ export default function AppMotorista() {
                                 const agora = new Date().getTime();
                                 const atualizacao = new Date(timestamp).getTime();
                                 const diferencaSegundos = Math.abs(agora - atualizacao) / 1000;
-                                
+
                                 // Se atualização foi nos últimos 10 segundos, é uma nova rota
                                 if (diferencaSegundos < 10) {
                                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -428,10 +428,10 @@ export default function AppMotorista() {
                                     console.log('⏰ Timestamp:', timestamp);
                                     console.log('🎯 Diferença:', diferencaSegundos.toFixed(1), 'segundos');
                                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                                    
+
                                     // Recarregar rota do banco de dados (busca entregas com motorista_id e status=em_rota)
                                     carregarRota();
-                                    
+
                                     // Notificação sonora/visual
                                     alert(`🚨 Nova rota recebida!\n\nAs entregas foram atualizadas.`);
                                 }
@@ -482,13 +482,13 @@ export default function AppMotorista() {
                     }).subscribe();
                     channelsRef.current.push(chE);
                 }
-                
+
                 // 📡 ESCUTAR BROADCAST DE NOVA ROTA do Dashboard
                 if (id) {
                     const canalRotaBroadcast = `rota-motorista-${id}`;
                     console.log('📻 Escutando canal de broadcast:', canalRotaBroadcast);
                     console.log('🔑 ID do motorista logado:', id);
-                    
+
                     const chBroadcast = supabase
                         .channel(canalRotaBroadcast)
                         .on('broadcast', { event: 'nova_rota' }, (payload) => {
@@ -499,10 +499,10 @@ export default function AppMotorista() {
                                 if (dados && dados.entregas && dados.entregas.length > 0) {
                                     console.log('📦 Total de entregas recebidas:', dados.total_entregas);
                                     console.log('📋 Lista de entregas:', dados.entregas);
-                                    
+
                                     // Recarregar rota do banco de dados
                                     carregarRota();
-                                    
+
                                     // Notificação sonora/visual
                                     alert(`🚨 Nova rota recebida!\n\n📦 ${dados.total_entregas} entregas\n👤 Motorista: ${dados.motorista_nome}`);
                                 } else {
@@ -522,7 +522,7 @@ export default function AppMotorista() {
                                 console.error('❌ ERRO no canal de broadcast:', canalRotaBroadcast);
                             }
                         });
-                    
+
                     channelsRef.current.push(chBroadcast);
                     console.log('✅ Canal adicionado à lista de canais ativos');
                 }
@@ -829,10 +829,10 @@ export default function AppMotorista() {
                             onClick={() => {
                                 // Se esta é a ÚLTIMA entrega, tocar som de sucesso
                                 const isUltimaEntrega = entregas.length === 1;
-                                
+
                                 if (isUltimaEntrega) {
                                     console.log('🎉 ÚLTIMA ENTREGA CONCLUÍDA! Tocando som de sucesso...');
-                                    
+
                                     // Tocar som de sucesso/finalização
                                     try {
                                         audioSuccessRef.current.play().catch(err => {
@@ -841,7 +841,7 @@ export default function AppMotorista() {
                                     } catch (e) {
                                         console.warn('Erro ao tocar áudio:', e);
                                     }
-                                    
+
                                     // Limpar TODAS as entregas do mapa após o som
                                     setTimeout(() => {
                                         console.log('🧹 LIMPANDO MAPA - Removendo todas as entregas');

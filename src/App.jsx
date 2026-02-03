@@ -156,30 +156,30 @@ async function otimizarRotaLocal(pontoPartida, listaEntregas, motoristaId = null
         const status = String(p.status || '').trim().toLowerCase();
         return status === 'pendente' || status === 'em_rota';
     });
-    
+
     if (!remaining || remaining.length === 0) return [];
-    
+
     // CRÍTICO: Filtrar entregas SEM coordenadas válidas
     const semCoordenadas = remaining.filter(p => !p.lat || !p.lng || isNaN(Number(p.lat)) || isNaN(Number(p.lng)));
     const comCoordenadas = remaining.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)) && isValidSC(Number(p.lat), Number(p.lng)));
-    
+
     if (semCoordenadas.length > 0) {
         console.warn(`⚠️ ${semCoordenadas.length} entrega(s) sem coordenadas válidas (serão ignoradas)`);
         semCoordenadas.forEach(e => {
             console.warn(`   📍 ID: ${e.id} | Cliente: ${e.cliente} | Endereço: ${e.endereco}`);
         });
     }
-    
+
     if (comCoordenadas.length === 0) {
         console.error('❌ NENHUMA entrega com coordenadas válidas para otimizar!');
         return [];
     }
-    
+
     console.log(`🧮 Otimizando rota localmente com ${comCoordenadas.length} entregas`);
 
     // Determinar origem: motorista atual -> última entrega concluída -> pontoPartida (sede)
     let originLatLng = null;
-    
+
     try {
         if (motoristaId != null) {
             const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId).single();
@@ -205,20 +205,20 @@ async function otimizarRotaLocal(pontoPartida, listaEntregas, motoristaId = null
             originLatLng = DEFAULT_MAP_CENTER;
         }
     }
-    
+
     // Determinar destino (volta para base)
-    const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) 
-        ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } 
+    const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null)
+        ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) }
         : DEFAULT_MAP_CENTER;
-    
+
     // ALGORITMO DO VIZINHO MAIS PRÓXIMO (importado de geoUtils.js)
     const ordered = nearestNeighborRoute(originLatLng, comCoordenadas, baseCoord);
-    
+
     // Calcular distância total estimada
     const totalKm = calculateTotalDistance(originLatLng, ordered, baseCoord);
-    
+
     console.log(`✅ Rota otimizada: ${ordered.length} entregas, distância estimada: ${totalKm.toFixed(1)} km`);
-    
+
     // Persistir ordem_logistica no banco (somente se motoristaId fornecido - não persiste em preview)
     if (motoristaId != null) {
         try {
@@ -232,7 +232,7 @@ async function otimizarRotaLocal(pontoPartida, listaEntregas, motoristaId = null
             console.warn('Falha ao persistir ordem_logistica:', e);
         }
     }
-    
+
     return ordered;
 }
 
@@ -315,14 +315,14 @@ function App() {
 
     // Local supabase ref to ensure we use the right client instance when it becomes available
     const supabaseRef = React.useRef(supabase);
-    
+
     // Update ref when supabase becomes ready (async)
     React.useEffect(() => {
         if (supabase && typeof supabase.from === 'function') {
             supabaseRef.current = supabase;
             console.log('🔵 supabaseRef atualizado (imediato):', typeof supabase?.from);
         }
-        
+
         // Garantir que onSupabaseReady atualize o ref
         if (typeof onSupabaseReady === 'function') {
             onSupabaseReady((client) => {
@@ -404,7 +404,7 @@ function App() {
                 const data = await buscarTodasEntregas();
                 // SEMPRE normalizar e setar, mesmo se vazio
                 const normalized = Array.isArray(data) ? data.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null, cliente: it.cliente || it.cli || it.customer || '', endereco: it.endereco || it.address || '' })) : [];
-                
+
                 if (mounted) {
                     setEntregas(normalized);
                     setEntregasEmEspera(normalized);
@@ -413,7 +413,7 @@ function App() {
                     console.log('✅ Entregas carregadas com sucesso:', normalized.length);
                     console.log('✅ ESTADO entregasEmEspera agora:', normalized);
                 }
-                
+
                 // Carregar motoristas também
                 try {
                     console.log('🔵 Tentando carregar motoristas...');
@@ -421,7 +421,7 @@ function App() {
                     if (sb && typeof sb.from === 'function') {
                         const { data: motoristas, error: motorErr } = await sb.from('motoristas').select('*').order('id');
                         console.log('🔵 Resposta motoristas:', { motoristas, motorErr, count: motoristas?.length });
-                        
+
                         if (motorErr) {
                             console.error('❌ Erro ao carregar motoristas:', motorErr);
                         } else if (motoristas && mounted) {
@@ -576,7 +576,7 @@ function App() {
         // DESABILITADO: causa múltiplas chamadas a carregarDados
         // Apenas o useEffect de buscarTodasEntregas (linha ~500) deve rodar
         return;
-        
+
         try {
             onSupabaseReady(() => {
                 try {
@@ -625,7 +625,7 @@ function App() {
     useEffect(() => {
         // DESABILITADO TEMPORARIAMENTE: ResizeObserver pode disparar muito e travar
         return;
-        
+
         if (!mapContainerRef.current) return;
         let ro = null;
         let t = null;
@@ -661,7 +661,7 @@ function App() {
     useEffect(() => {
         // DESABILITADO TEMPORARIAMENTE: pode causar re-renders ao desenhar polylines
         return;
-        
+
         try {
             if (!mapRef.current || !draftPreview || draftPreview.length === 0) {
                 try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { }
@@ -683,14 +683,14 @@ function App() {
         } catch (e) { console.warn('Erro desenhando draft polyline', e); }
         return () => { try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { } };
     }, [draftPreview, pontoPartida, mapCenterState]);
-    
+
     // Nominatim: não precisa de inicialização (fetch direto HTTP)
-    
+
     // Draft point: set when gestor seleciona um endereço
     useEffect(() => {
         // DESABILITADO TEMPORARIAMENTE: pode causar re-renders excessivos
         return;
-        
+
         if (!enderecoCoords || !enderecoEntrega) { setDraftPoint(null); return; }
         try {
             setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: Number(enderecoCoords.lat), lng: Number(enderecoCoords.lng), tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
@@ -703,7 +703,7 @@ function App() {
     useEffect(() => {
         // DESABILITADO TEMPORARIAMENTE: causa loops infinitos ao depender de entregasEmEspera
         return;
-        
+
         let mounted = true;
         const list = Array.isArray(entregasEmEspera) ? entregasEmEspera.slice() : [];
         if (draftPoint) list.push(draftPoint);
@@ -762,12 +762,12 @@ function App() {
                 setPredictions([]);
                 return;
             }
-            
+
             // Debounce para evitar muitas requisições
             if (searchTimeoutRef.current) {
                 clearTimeout(searchTimeoutRef.current);
             }
-            
+
             searchTimeoutRef.current = setTimeout(async () => {
                 try {
                     const results = await searchNominatim(q);
@@ -788,7 +788,7 @@ function App() {
         try {
             setEnderecoFromHistory(false);
             setEnderecoEntrega(pred.display_name || '');
-            
+
             // Nominatim já retorna lat/lng na busca, não precisa de segunda chamada!
             if (pred.lat != null && pred.lng != null) {
                 const lat = Number(pred.lat);
@@ -810,7 +810,7 @@ function App() {
         console.log('🔵 carregarDados CHAMADO - hasLoadedOnce:', hasLoadedOnce.current);
         // MODIFICADO: permitir carregar pelo menos 1 vez, mas não bloquear completamente
         // O useEffect inicial já carrega via buscarTodasEntregas, mas este pode ser chamado para refresh
-        
+
         // If module-level client is not ready yet, DO NOT register callback (prevents recursion)
         if (!supabaseRef.current || typeof supabaseRef.current.from !== 'function') {
             console.log('❌ carregarDados ABORTADO - supabase não pronto');
@@ -895,9 +895,9 @@ function App() {
 
                 // FORCED: do not filter — show everything while debugging
                 try { setAllEntregas(Array.isArray(list) ? list.slice() : []); } catch (e) { setAllEntregas([]); }
-                try { 
+                try {
                     console.log('🟢 carregarDados: setando entregasEmEspera com', list.length, 'itens');
-                    setEntregasEmEspera(Array.isArray(list) ? list.slice() : []); 
+                    setEntregasEmEspera(Array.isArray(list) ? list.slice() : []);
                 } catch (e) { setEntregasEmEspera([]); }
                 // Mirror into debug entregas state so debug UI shows the data (and set hasLoadedOnce)
                 try { setEntregas(Array.isArray(list) ? list.slice() : []); hasLoadedOnce.current = true; } catch (e) { setEntregas([]); hasLoadedOnce.current = true; }
@@ -1091,7 +1091,7 @@ function App() {
         // DESABILITADO: causa múltiplas chamadas a carregarDados que quebram hasLoadedOnce
         // Apenas o useEffect inicial (buscarTodasEntregas) deve carregar dados
         return;
-        
+
         async function handleReady() {
             try {
                 // If the module-level flag is already true, accept it and load immediately
@@ -1166,7 +1166,7 @@ function App() {
                 const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`, {
                     headers: { 'User-Agent': 'ProjetoEntregas/1.0' }
                 });
-                
+
                 if (resp.ok) {
                     const j = await resp.json();
                     const addr = j.address || {};
@@ -1239,14 +1239,14 @@ function App() {
         if (!rotaAtiva || rotaAtiva.length === 0) {
             return [];
         }
-        
+
         const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
         return orderedRota.filter(e => {
             const status = String(e.status || '').toLowerCase().trim();
             // Apenas mostrar entregas com coordenadas VÁLIDAS
-            const hasValidCoords = e.lat != null && e.lng != null && 
-                                   Number.isFinite(Number(e.lat)) && 
-                                   Number.isFinite(Number(e.lng));
+            const hasValidCoords = e.lat != null && e.lng != null &&
+                Number.isFinite(Number(e.lat)) &&
+                Number.isFinite(Number(e.lng));
             return !statusInvalidos.includes(status) && hasValidCoords;
         });
     }, [orderedRota, rotaAtiva]);
@@ -1266,15 +1266,15 @@ function App() {
     React.useEffect(() => {
         if (rotaFinalizada && mapRef.current) {
             console.log('🏁 Rota finalizada! Limpando mapa...');
-            
+
             // Limpar estado de rota ativa após 2 segundos
             const timer = setTimeout(() => {
                 console.log('🧹 LIMPEZA FINAL: Removendo TODAS as entregas do mapa');
-                
+
                 // Limpar TODOS os estados de entregas
                 setRotaAtiva([]);
                 setMotoristaDaRota(null);
-                
+
                 // CRÍTICO: Garantir que entregasEmEspera não mantenha itens finalizados
                 setEntregasEmEspera(prev => {
                     // Remover todas as entregas que já foram concluídas
@@ -1284,20 +1284,20 @@ function App() {
                         return !statusFinais.includes(status);
                     });
                 });
-                
+
                 // Resetar zoom para visão geral
                 try {
                     if (mapRef.current && mapRef.current.setZoom) {
                         mapRef.current.setZoom(13);
                         console.log('🗺️ Zoom resetado para visão geral');
                     }
-                    
+
                     // Centralizar no motorista se disponível, senão na cidade
                     const motoristaOnline = frota.find(m => m.esta_online && m.lat && m.lng);
                     if (motoristaOnline && mapRef.current.setCenter) {
-                        mapRef.current.setCenter({ 
-                            lat: Number(motoristaOnline.lat), 
-                            lng: Number(motoristaOnline.lng) 
+                        mapRef.current.setCenter({
+                            lat: Number(motoristaOnline.lat),
+                            lng: Number(motoristaOnline.lng)
                         });
                         console.log('📍 Mapa centralizado no motorista');
                     } else if (mapRef.current.setCenter) {
@@ -1307,10 +1307,10 @@ function App() {
                 } catch (e) {
                     console.warn('Erro ao resetar mapa:', e);
                 }
-                
+
                 console.log('✅ Mapa limpo e pronto para próxima rota!');
             }, 2000); // 2 segundos de delay para feedback visual
-            
+
             return () => clearTimeout(timer);
         }
     }, [rotaFinalizada, frota, mapCenterState]);
@@ -1493,7 +1493,7 @@ function App() {
                     waypts.splice(limit, 0, { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) });
                 }
             }
-            
+
             // BUSCAR ROTA OSRM para desenhar linha seguindo ruas
             try {
                 const baseDest = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
@@ -1642,14 +1642,14 @@ function App() {
             routingInProgressRef.current = true;
             // capture previous distance for audit
             const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
-            
+
             // Usar supabaseRef para evitar erro "Cannot read properties of null"
             const sb = supabaseRef.current || supabase;
             if (!sb || typeof sb.from !== 'function') {
                 console.warn('recalcRotaForMotorista: supabase não disponível');
                 return;
             }
-            
+
             // Fetch motorista to ensure online and get current lat/lng
             const { data: mdata, error: merr } = await sb.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId);
             if (merr) { console.warn('recalcRotaForMotorista: erro ao buscar motorista:', merr); return; }
@@ -1675,7 +1675,7 @@ function App() {
             const { data: remData } = await qR;
             // normalize motorista_id to string for consistent comparisons
             const remainingForDriver = Array.isArray(remData) ? remData.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null })) : [];
-            if (!remainingForDriver || remainingForDriver.length === 0) return; 
+            if (!remainingForDriver || remainingForDriver.length === 0) return;
 
             // Cache guard: avoid recalculating if remaining set hasn't changed recently
             try {
@@ -1966,25 +1966,25 @@ function App() {
             lat = Number(enderecoCoords.lat);
             lng = Number(enderecoCoords.lng);
         }
-        
+
         // Preparar observações
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
         const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
-        
-        if (!clienteVal || !enderecoVal) { 
-            alert('Preencha nome do cliente e endereço.'); 
-            return; 
+
+        if (!clienteVal || !enderecoVal) {
+            alert('Preencha nome do cliente e endereço.');
+            return;
         }
-        
+
         // IMPORTANTE: Se não tiver coordenadas, tentar geocodificar com Nominatim
         // MAS se falhar, SALVAR MESMO ASSIM (fallback gracioso - user requirement)
         if (lat === null || lng === null) {
             console.log('🔍 Tentando geocodificar com Nominatim:', enderecoVal);
-            
+
             try {
                 const result = await geocodeNominatim(enderecoVal);
-                
+
                 if (result && result.lat != null && result.lng != null) {
                     lat = result.lat;
                     lng = result.lng;
@@ -2002,15 +2002,15 @@ function App() {
                 lng = DEFAULT_MAP_CENTER.lng;
             }
         }
-        
+
         // Debug: verificar estado do supabase
         console.log('🔵 adicionarAosPendentes - supabase:', supabase, 'supabaseRef.current:', supabaseRef.current);
-        
+
         const sb = supabaseRef.current || supabase;
-        if (!sb || typeof sb.from !== 'function') { 
-            console.error('❌ Supabase não disponível:', { sb, supabase, ref: supabaseRef.current }); 
-            alert('Banco de dados indisponível no momento. Aguarde alguns segundos e tente novamente.'); 
-            return; 
+        if (!sb || typeof sb.from !== 'function') {
+            console.error('❌ Supabase não disponível:', { sb, supabase, ref: supabaseRef.current });
+            alert('Banco de dados indisponível no momento. Aguarde alguns segundos e tente novamente.');
+            return;
         }
         // Validação final: NUNCA salvar sem coordenadas válidas
         if (lat === null || lng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
@@ -2018,9 +2018,9 @@ function App() {
             alert('❌ Erro: Não é possível salvar entrega sem coordenadas exatas.');
             return;
         }
-        
+
         console.log('✅ Salvando entrega com coordenadas validadas:', { cliente: clienteVal, endereco: enderecoVal, lat, lng });
-        
+
         const { error } = await sb.from('entregas').insert([{
             cliente: clienteVal,
             endereco: enderecoVal,
@@ -2047,16 +2047,16 @@ function App() {
             console.warn('❌ excluirPedido: id inválido', id);
             return;
         }
-        
+
         const sb = supabaseRef.current || supabase;
         if (!sb || typeof sb.from !== 'function') {
             console.warn('❌ excluirPedido: supabase not initialized');
             return;
         }
-        
+
         console.log('🗑️ Excluindo entrega ID:', parsedId);
         const { error } = await sb.from('entregas').delete().eq('id', parsedId);
-        
+
         if (error) {
             console.error('❌ Erro ao excluir entrega:', error);
         } else {
@@ -2074,13 +2074,13 @@ function App() {
         }
 
         // Atualização otimista: atualizar estado local ANTES do banco
-        setAllEntregas(prev => 
+        setAllEntregas(prev =>
             prev.map(e => e.id === entregaId ? { ...e, status: 'concluida' } : e)
         );
-        setEntregasEmEspera(prev => 
+        setEntregasEmEspera(prev =>
             prev.map(e => e.id === entregaId ? { ...e, status: 'concluida' } : e)
         );
-        setRotaAtiva(prev => 
+        setRotaAtiva(prev =>
             prev.map(e => e.id === entregaId ? { ...e, status: 'concluida' } : e)
         );
 
@@ -2107,13 +2107,13 @@ function App() {
         }
 
         // Atualização otimista: atualizar estado local ANTES do banco
-        setAllEntregas(prev => 
+        setAllEntregas(prev =>
             prev.map(e => e.id === entregaId ? { ...e, status: 'falha' } : e)
         );
-        setEntregasEmEspera(prev => 
+        setEntregasEmEspera(prev =>
             prev.map(e => e.id === entregaId ? { ...e, status: 'falha' } : e)
         );
-        setRotaAtiva(prev => 
+        setRotaAtiva(prev =>
             prev.map(e => e.id === entregaId ? { ...e, status: 'falha' } : e)
         );
 
@@ -2148,12 +2148,12 @@ function App() {
         }
         // Garantir que usamos UUID como string (nunca converter para Number)
         const motoristaIdVal = String(selectedDriver.id);
-        
+
         // Obter referência do Supabase uma única vez para toda a função
         const sb = supabaseRef.current || supabase;
-        
+
         const nomeCompleto = `${selectedDriver.nome || ''} ${selectedDriver.sobrenome || ''}`.trim();
-        
+
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🚀 INICIANDO ENVIO DE ROTA');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -2162,13 +2162,13 @@ function App() {
         console.log('🔌 Status:', selectedDriver.esta_online ? 'Online ✅' : 'Offline ⚠️');
         console.log('📦 Entregas a enviar:', entregasEmEspera.length);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        
+
         setDispatchLoading(true);
         try {
             try { audioRef.current.play().catch(() => { }); } catch (e) { }
             let rotaOtimizada = [];
             let tempoEstimado = 0;
-            
+
             // Otimizar com algoritmo local (Nearest Neighbor)
             try {
                 try { setDistanceCalculating(true); } catch (e) { }
@@ -2177,24 +2177,24 @@ function App() {
             } catch (e) {
                 console.warn('⚠️ Otimização local falhou:', e);
             }
-            
+
             // FALLBACK: Se otimização retornar vazio, usar TODAS as entregas em espera
             if (!rotaOtimizada || rotaOtimizada.length === 0) {
                 console.warn('⚠️ Otimização retornou 0 entregas - usando lista completa de espera');
                 rotaOtimizada = [...entregasEmEspera]; // Clonar array
-                
+
                 // Adicionar ordem sequencial básica
                 rotaOtimizada = rotaOtimizada.map((e, idx) => ({
                     ...e,
                     ordem: idx + 1,
                     ordem_logistica: idx + 1
                 }));
-                
+
                 console.log('✅ Rota criada com ordem sequencial:', rotaOtimizada.length, 'entregas');
             }
-            
+
             console.log('🗺️ Rota final para despacho:', rotaOtimizada.length, 'paradas');
-            
+
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
@@ -2220,11 +2220,11 @@ function App() {
                     alert('❌ Erro: Sistema não está conectado ao banco de dados.');
                     return;
                 }
-                
+
                 console.log('💾 Atualizando entregas no banco de dados...');
                 console.log('   Campo motorista_id =', motoristaIdVal);
                 console.log('   Campo status =', statusValue);
-                
+
                 let updErr = null;
                 try {
                     // Atualizar EXCLUSIVAMENTE por ID (UUID) - nunca por nome
@@ -2290,7 +2290,7 @@ function App() {
                     }
                 }
             } catch (e) { /* non-blocking */ }
-            
+
             // NOTIFICAR MOTORISTA: usar tabela motoristas em vez de broadcast (mais confiável)
             if (!sb || typeof sb.from !== 'function') {
                 console.error('❌ Supabase não disponível para notificação');
@@ -2313,7 +2313,7 @@ function App() {
                         })),
                         timestamp: new Date().toISOString()
                     };
-                    
+
                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
                     console.log('📡 NOTIFICANDO MOTORISTA VIA POSTGRES UPDATE');
                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -2322,17 +2322,17 @@ function App() {
                     console.log('📦 Total de entregas:', rotaOtimizada.length);
                     console.log('🔍 Dados completos:', dadosParaMotorista);
                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    
+
                     // Atualizar tabela motoristas EXCLUSIVAMENTE por ID (UUID)
                     // O celular está escutando UPDATE nessa tabela via postgres_changes
                     // IMPORTANTE: ultima_atualizacao é o gatilho que o celular observa
                     const { error: notifError } = await sb
                         .from('motoristas')
-                        .update({ 
+                        .update({
                             ultima_atualizacao: new Date().toISOString()  // ✅ Gatilho para o celular
                         })
                         .eq('id', motoristaIdVal);  // FILTRO POR ID (UUID) - NÃO POR NOME!
-                        
+
                     if (notifError) {
                         console.error('❌ Erro ao atualizar motorista:', notifError);
                         throw notifError;
@@ -2341,18 +2341,18 @@ function App() {
                         console.log('✅ Campo ultima_atualizacao atualizado → Celular vai detectar');
                         console.log('📱 Celular buscará: motorista_id=' + motoristaIdVal + ' + status=em_rota');
                     }
-                    
+
                 } catch (notifError) {
                     console.error('❌ Erro ao notificar motorista:', notifError);
                     console.error('❌ Stack:', notifError.stack);
                     alert('⚠️ Aviso: A rota foi salva, mas houve um erro ao notificar o motorista: ' + (notifError.message || notifError));
                 }
             }
-            
+
             setRotaAtiva(rotaOtimizada);
             setMotoristaDaRota(driver);
             setAbaAtiva('Visão Geral');
-            
+
             // 🧹 LIMPEZA AUTOMÁTICA: Limpar entregas da lista após envio bem-sucedido
             console.log('🧹 Limpando entregas enviadas da lista...');
             setEntregasEmEspera(prev => {
@@ -2360,22 +2360,22 @@ function App() {
                 return prev.filter(e => !idsEnviados.includes(e.id));
             });
             console.log('✅ Dashboard limpo - entregas enviadas removidas da lista');
-            
+
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('✅ ROTA ENVIADA COM SUCESSO!');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('👤 Motorista:', driver.nome, driver.sobrenome);
             console.log('🆔 ID do Motorista:', motoristaIdVal);
             console.log('📦 Total de entregas:', rotaOtimizada.length);
-            console.log('📍 Lista de paradas:', rotaOtimizada.map((e, i) => `${i+1}. ${e.cliente} - ${e.endereco}`).join('\n'));
+            console.log('📍 Lista de paradas:', rotaOtimizada.map((e, i) => `${i + 1}. ${e.cliente} - ${e.endereco}`).join('\n'));
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            
+
             await carregarDados();
-            
+
             // Alerta de sucesso detalhado
             const msgSucesso = `✅ Rota enviada com sucesso!\n\n👤 Motorista: ${driver.nome || 'motorista'}\n📦 Entregas: ${rotaOtimizada.length}\n📡 Status: ${rotaOtimizada.length > 0 ? 'Notificação enviada' : 'Sem entregas'}`;
             alert(msgSucesso);
-            
+
             // Recalcular e desenhar rota otimizada para o motorista designado
             try { await recalcRotaForMotorista(String(motoristaIdVal)); } catch (e) { console.warn('⚠️ Falha ao recalcular rota após assignDriver:', e); }
         } catch (e) {
@@ -2537,7 +2537,7 @@ function App() {
                                             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                                             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                                         />
-                                        
+
                                         {/* Motoristas online */}
                                         {(frota || []).filter(m => m.aprovado === true && m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(motorista => (
                                             <Marker
@@ -2545,7 +2545,7 @@ function App() {
                                                 position={[Number(motorista.lat), Number(motorista.lng)]}
                                                 icon={createMotoristaIcon(fullName(motorista))}
                                             >
-                                                <Tooltip permanent direction="top" offset={[0, -24]}>
+                                                <Tooltip permanent direction="top" offset={[0, -10]}>
                                                     <strong>{fullName(motorista)}</strong>
                                                 </Tooltip>
                                                 <Popup>
@@ -2556,30 +2556,30 @@ function App() {
                                                 </Popup>
                                             </Marker>
                                         ))}
-                                        
+
                                         {/* Entregas em espera (pendentes) */}
                                         {(() => {
                                             const statusInvalidos = ['concluida', 'concluída', 'finalizada', 'entregue', 'cancelada', 'cancelado'];
                                             return (entregasEmEspera || []).filter(e => {
                                                 const status = String(e.status || '').toLowerCase().trim();
-                                                const hasValidCoords = e.lat != null && e.lng != null && 
-                                                                       Number.isFinite(Number(e.lat)) && 
-                                                                       Number.isFinite(Number(e.lng)) &&
-                                                                       isValidSC(Number(e.lat), Number(e.lng));
+                                                const hasValidCoords = e.lat != null && e.lng != null &&
+                                                    Number.isFinite(Number(e.lat)) &&
+                                                    Number.isFinite(Number(e.lng)) &&
+                                                    isValidSC(Number(e.lat), Number(e.lng));
                                                 return !statusInvalidos.includes(status) && hasValidCoords;
                                             });
                                         })().map((entrega, idx) => {
                                             const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
                                             let pinColor = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' ? '#c084fc' : '#2563eb');
                                             const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
-                                            
+
                                             return (
                                                 <Marker
                                                     key={`entrega-${entrega.id}`}
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
                                                     icon={createNumberedIcon(num, pinColor)}
                                                 >
-                                                    <Tooltip permanent direction="top" offset={[0, -18]} className="entrega-tooltip" opacity={0.95}>
+                                                    <Tooltip permanent direction="top" offset={[0, -10]} className="entrega-tooltip" opacity={0.95}>
                                                         <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
                                                     </Tooltip>
                                                     <Popup>
@@ -2592,21 +2592,21 @@ function App() {
                                                 </Marker>
                                             );
                                         })}
-                                        
+
                                         {/* Entregas ativas (rota em andamento) */}
                                         {(entregasAtivasNoMapa || []).map((entrega, idx) => {
                                             if (!isValidSC(Number(entrega.lat), Number(entrega.lng))) return null;
                                             const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
                                             let pinColor = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' ? '#c084fc' : '#10b981'); // Verde para ativas
                                             const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
-                                            
+
                                             return (
                                                 <Marker
                                                     key={`ativa-${entrega.id}`}
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
                                                     icon={createNumberedIcon(num, pinColor)}
                                                 >
-                                                    <Tooltip permanent direction="top" offset={[0, -18]} className="entrega-tooltip" opacity={0.95}>
+                                                    <Tooltip permanent direction="top" offset={[0, -10]} className="entrega-tooltip" opacity={0.95}>
                                                         <span style={{ color: pinColor, fontWeight: 'bold' }}>{num}</span>
                                                     </Tooltip>
                                                     <Popup>
@@ -2619,7 +2619,7 @@ function App() {
                                                 </Marker>
                                             );
                                         })}
-                                        
+
                                         {/* Polyline da rota OSRM (seguindo ruas) */}
                                         {routeGeometry && routeGeometry.length > 0 && (
                                             <Polyline
