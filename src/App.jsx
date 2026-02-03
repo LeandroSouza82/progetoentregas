@@ -548,15 +548,11 @@ function App() {
     const [nomeCliente, setNomeCliente] = useState('');
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const enderecoRef = useRef(null);
-    const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Autocomplete
+    const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Nominatim
     const [predictions, setPredictions] = useState([]);
     const [historySuggestions, setHistorySuggestions] = useState([]);
-    const predictionServiceRef = useRef(null);
-    const placesServiceRef = useRef(null);
-    const predictionTimerRef = useRef(null);
-    const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
-    // Google Maps: ativado para Places Autocomplete
-    const gmapsLoaded = typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places ? true : false;
+    const searchTimeoutRef = useRef(null); // debounce para Nominatim
+    const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history
     const [recentList, setRecentList] = useState([]);
     const [allEntregas, setAllEntregas] = useState([]); // raw entregas from DB (no filters)
     const [user, setUser] = useState(null);
@@ -706,41 +702,8 @@ function App() {
         return () => { try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { } };
     }, [draftPreview, pontoPartida, mapCenterState]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
-    const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
-
-    // Autocomplete (Places) — inicializar serviços quando Google estiver carregado
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        if (abaAtiva !== 'Nova Carga') return;
-
-        // Initialize services when Google loaded
-        try {
-            if (gmapsLoaded && window.google && window.google.maps && window.google.maps.places) {
-                if (!predictionServiceRef.current && window.google.maps.places.AutocompleteService) {
-                    predictionServiceRef.current = new window.google.maps.places.AutocompleteService();
-                    console.log('✅ AutocompleteService inicializado');
-                }
-                if (!placesServiceRef.current && window.google.maps.places.PlacesService) {
-                    try { 
-                        placesServiceRef.current = new window.google.maps.places.PlacesService(document.createElement('div')); 
-                        console.log('✅ PlacesService inicializado');
-                    } catch (e) { 
-                        placesServiceRef.current = null; 
-                    }
-                }
-                // if we couldn't create either service, mark unavailable briefly
-                if (!predictionServiceRef.current && !placesServiceRef.current) {
-                    try { setGoogleUnavailable(true); setTimeout(() => setGoogleUnavailable(false), 60000); } catch (e) { }
-                }
-            }
-        } catch (e) { 
-            console.warn('AutocompleteService init failed', e); 
-            try { setGoogleUnavailable(true); setTimeout(() => setGoogleUnavailable(false), 60000); } catch (err) { } 
-        }
-
-        return () => { /* nothing to clean for services */ };
-    }, [abaAtiva, gmapsLoaded]);
-
+    // Nominatim: não precisa de inicialização (fetch direto HTTP)
+    
     // Draft point: set when gestor seleciona um endereço
     useEffect(() => {
         // DESABILITADO TEMPORARIAMENTE: pode causar re-renders excessivos
@@ -810,63 +773,48 @@ function App() {
         } catch (e) { setHistorySuggestions([]); }
     }
 
-    // GOOGLE MAPS PLACES: buscar predições de endereço
+    // NOMINATIM: buscar sugestões de endereço
     async function fetchPredictions(q) {
         try {
-            if (!predictionServiceRef.current || !q || q.length < 3) {
+            if (!q || q.length < 3) {
                 setPredictions([]);
                 return;
             }
             
-            const request = {
-                input: q,
-                componentRestrictions: { country: 'br' },
-                types: ['address']
-            };
+            // Debounce para evitar muitas requisições
+            if (searchTimeoutRef.current) {
+                clearTimeout(searchTimeoutRef.current);
+            }
             
-            predictionServiceRef.current.getPlacePredictions(request, (results, status) => {
-                if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+            searchTimeoutRef.current = setTimeout(async () => {
+                try {
+                    const results = await searchNominatim(q);
                     setPredictions(results);
-                } else {
+                } catch (e) {
+                    console.warn('Nominatim search error:', e);
                     setPredictions([]);
-                    if (status === 'ZERO_RESULTS') {
-                        // Normal, sem resultados
-                    } else {
-                        console.warn('Places Autocomplete status:', status);
-                        setGoogleUnavailable(true);
-                        setTimeout(() => setGoogleUnavailable(false), 60000);
-                    }
                 }
-            });
+            }, 500); // 500ms debounce
         } catch (e) {
             console.warn('fetchPredictions error:', e);
             setPredictions([]);
         }
     }
 
-    // GOOGLE MAPS PLACES: ao clicar numa sugestão, buscar coordenadas
+    // NOMINATIM: ao clicar numa sugestão, usar coordenadas já retornadas
     async function handlePredictionClick(pred) {
         try {
             setEnderecoFromHistory(false);
-            setEnderecoEntrega(pred.description || '');
+            setEnderecoEntrega(pred.display_name || '');
             
-            // Buscar detalhes do lugar (lat/lng) usando PlacesService
-            if (placesServiceRef.current && pred.place_id) {
-                placesServiceRef.current.getDetails(
-                    { placeId: pred.place_id, fields: ['geometry', 'formatted_address'] },
-                    (place, status) => {
-                        if (status === window.google.maps.places.PlacesServiceStatus.OK && place && place.geometry && place.geometry.location) {
-                            const lat = place.geometry.location.lat();
-                            const lng = place.geometry.location.lng();
-                            console.log('✅ Coordenadas capturadas do Google Places:', { lat, lng });
-                            setEnderecoCoords({ lat, lng });
-                        } else {
-                            console.warn('Places Details falhou:', status);
-                            setEnderecoCoords(null);
-                        }
-                    }
-                );
+            // Nominatim já retorna lat/lng na busca, não precisa de segunda chamada!
+            if (pred.lat != null && pred.lng != null) {
+                const lat = Number(pred.lat);
+                const lng = Number(pred.lng);
+                console.log('✅ Coordenadas capturadas do Nominatim:', { lat, lng });
+                setEnderecoCoords({ lat, lng });
             } else {
+                console.warn('Predição sem coordenadas válidas');
                 setEnderecoCoords(null);
             }
         } catch (e) {
@@ -1232,51 +1180,25 @@ function App() {
             if (!mounted) return;
             const { latitude, longitude } = pos.coords || {};
             try {
-                // Primeiro: tentar Geocoder do Google se carregado
-                if (window.google && window.google.maps && window.google.maps.Geocoder) {
-                    const geocoder = new window.google.maps.Geocoder();
-                    const results = await new Promise((resolve, reject) => {
-                        geocoder.geocode({ location: { lat: latitude, lng: longitude } }, (res, status) => {
-                            if (status === 'OK') resolve(res); else reject(status);
-                        });
-                    });
-                    let city = '';
-                    let state = '';
-                    for (const r of results || []) {
-                        for (const comp of r.address_components || []) {
-                            if ((comp.types || []).includes('locality')) city = comp.long_name || city;
-                            if ((comp.types || []).includes('administrative_area_level_1')) state = comp.short_name || state;
-                        }
-                        if (city && state) break;
+                // Usar Nominatim (OpenStreetMap) para reverse geocoding
+                const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`, {
+                    headers: { 'User-Agent': 'ProjetoEntregas/1.0' }
+                });
+                
+                if (resp.ok) {
+                    const j = await resp.json();
+                    const addr = j.address || {};
+                    const city = addr.city || addr.town || addr.village || addr.county || '';
+                    const state = addr.state || addr.region || '';
+                    if (city || state) {
+                        setGestorLocation(`${city || 'São Paulo'}, ${state || 'BR'}`);
+                    } else {
+                        setGestorLocation('São Paulo, BR');
                     }
-                    if (!city && results && results[0]) {
-                        for (const comp of results[0].address_components || []) {
-                            if (!city && (comp.types || []).includes('locality')) city = comp.long_name || city;
-                            if (!state && (comp.types || []).includes('administrative_area_level_1')) state = comp.short_name || state;
-                        }
-                    }
-                    if (city || state) setGestorLocation(`${city || 'São Paulo'}, ${state || 'BR'}`);
-                    else setGestorLocation('São Paulo, BR');
                     return;
                 }
-
-                // Fallback: usar Nominatim (OpenStreetMap)
-                try {
-                    const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
-                    if (resp.ok) {
-                        const j = await resp.json();
-                        const addr = j.address || {};
-                        const city = addr.city || addr.town || addr.village || addr.county || '';
-                        const state = addr.state || addr.region || '';
-                        if (city || state) setGestorLocation(`${city || 'São Paulo'}, ${state || 'BR'}`);
-                        else setGestorLocation('São Paulo, BR');
-                        return;
-                    }
-                } catch (e) {
-                    // swallow and fallback
-                }
             } catch (e) {
-                // swallow
+                console.warn('Reverse geocoding falhou:', e);
             }
             if (mounted) setGestorLocation('São Paulo, BR');
         };
@@ -2253,9 +2175,8 @@ function App() {
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        // GOOGLE MAPS DESABILITADO - modo texto apenas, aceitar entrada manual
 
-        // Coordenadas: usar se disponíveis, senão deixar null
+        // Coordenadas: usar se disponíveis via Nominatim
         let lat = null;
         let lng = null;
         if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
@@ -2263,39 +2184,39 @@ function App() {
             lng = Number(enderecoCoords.lng);
         }
         
-        // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
+        // Preparar observações
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
         const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
-        if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
         
-        // GEOCODIFICAÇÃO OBRIGATÓRIA antes do salvamento
+        if (!clienteVal || !enderecoVal) { 
+            alert('Preencha nome do cliente e endereço.'); 
+            return; 
+        }
+        
+        // IMPORTANTE: Se não tiver coordenadas, tentar geocodificar com Nominatim
+        // MAS se falhar, SALVAR MESMO ASSIM (fallback gracioso - user requirement)
         if (lat === null || lng === null) {
-            // Geocoding é OBRIGATÓRIO - sistema não deve salvar sem coordenadas
-            if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.Geocoder) {
-                alert('❌ Google Maps não disponível. Não é possível adicionar entregas no momento.');
-                return;
-            }
+            console.log('🔍 Tentando geocodificar com Nominatim:', enderecoVal);
             
             try {
-                const geocoder = new window.google.maps.Geocoder();
-                const result = await new Promise((resolve, reject) => {
-                    geocoder.geocode({ address: enderecoVal }, (results, status) => {
-                        if (status === 'OK' && results && results[0]) {
-                            const location = results[0].geometry.location;
-                            resolve({ lat: location.lat(), lng: location.lng() });
-                        } else {
-                            reject(new Error('Geocoding falhou: ' + status));
-                        }
-                    });
-                });
-                lat = result.lat;
-                lng = result.lng;
-                console.log('✅ Endereço geocodificado com sucesso:', enderecoVal, '->', { lat, lng });
+                const result = await geocodeNominatim(enderecoVal);
+                
+                if (result && result.lat != null && result.lng != null) {
+                    lat = result.lat;
+                    lng = result.lng;
+                    console.log('✅ Endereço geocodificado com sucesso:', enderecoVal, '->', { lat, lng });
+                } else {
+                    console.warn('⚠️ Nominatim não encontrou coordenadas - salvando com lat/lng da sede');
+                    // FALLBACK GRACIOSO: usar coordenadas da sede
+                    lat = DEFAULT_MAP_CENTER.lat;
+                    lng = DEFAULT_MAP_CENTER.lng;
+                }
             } catch (geocodeError) {
-                console.error('❌ ERRO DE GEOCODIFICAÇÃO:', geocodeError);
-                alert('❌ Não foi possível encontrar as coordenadas exatas para o endereço "' + enderecoVal + '".\n\nPor favor, verifique o endereço e tente novamente.\n\nDetalhes: ' + geocodeError.message);
-                return; // BLOQUEIA o salvamento
+                console.warn('⚠️ Geocoding falhou, usando coordenadas da sede:', geocodeError);
+                // FALLBACK GRACIOSO: usar coordenadas da sede
+                lat = DEFAULT_MAP_CENTER.lat;
+                lng = DEFAULT_MAP_CENTER.lng;
             }
         }
         
