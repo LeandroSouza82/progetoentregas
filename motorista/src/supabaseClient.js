@@ -40,4 +40,15 @@ if (!localStorage.getItem(storageKey('frota'))) {
 if (!localStorage.getItem(storageKey('entregas'))) { writeTable('entregas', []); }
 
 export const supabase = { from(table) { return createQuery(table); } };
+
+/**
+ * Função mock para compatibilidade com o App do motorista que espera esse export.
+ * Como este é um client mock síncrono, executamos o callback imediatamente.
+ */
+export function onSupabaseReady(callback) {
+    if (typeof callback === 'function') {
+        callback(supabase);
+    }
+}
+
 export default supabase;

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import DriverApp from './DriverApp';
-import supabase, { onSupabaseReady } from './supabaseClient'; // Certifique-se que o arquivo existe
+import supabase, { onSupabaseReady } from '../../src/supabaseClient'; // Usar o Supabase real do projeto
 import MapaLogistica from '../../src/MapaLogistica';
 // keep imports minimal for map rendering via MapaLogistica
 
@@ -117,6 +116,32 @@ function InternalMobileApp() {
         return () => { mounted = false; };
     }, []);
 
+    // 📡 ATIVAÇÃO DO REALTIME: Atualiza a lista quando houver mudanças no banco de dados
+    useEffect(() => {
+        const mId = motorista && motorista.id ? String(motorista.id) : null;
+        if (!mId || !supabase || typeof supabase.channel !== 'function') return;
+
+        console.log('📡 [CELULAR] Ativando Realtime para entregas do motorista:', mId);
+
+        const channel = supabase.channel(`entregas_motorista_${mId}`)
+            .on('postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'entregas',
+                    filter: `motorista_id=eq.${mId}`
+                },
+                (payload) => {
+                    console.log('🔄 [REALTIME] Mudança detectada na tabela entregas!', payload.eventType);
+                    carregarRota(); // Recarrega os dados na tela do motorista imediatamente
+                }
+            ).subscribe();
+
+        return () => {
+            if (channel) channel.unsubscribe();
+        };
+    }, [motorista?.id]);
+
     // Safety stub: prevent ref errors from missing helpers elsewhere
     const scheduleRetry = () => { };
 
@@ -142,33 +167,28 @@ function InternalMobileApp() {
         if (carregando) return;
         setCarregando(true);
         try {
-            // Pega entregas sem depender de filtros sensíveis — o App irá filtrar localmente por status esperado
-            const res = await supabase
+            const mId = motorista && motorista.id ? String(motorista.id) : null;
+            if (!mId) {
+                console.warn('[motorista] carregarRota: motoristaId ausente');
+                setEntregas([]);
+                return;
+            }
+
+            // Busca entregas do motorista (em rota e as já concluídas/falhas para o pino ficar no mapa)
+            const { data, error } = await supabase
                 .from('entregas')
-                .select('*');
+                .select('*')
+                .eq('motorista_id', mId)
+                .in('status', ['em_rota', 'entregue', 'falha'])
+                .order('ordem_logistica', { ascending: true });
 
-            // Debug raw entregas for mapping issues
-            try { console.log('[motorista] Entregas Brutas:', res && res.data); } catch (e) { }
-
-            // Regra: Motorista deve ver apenas entregas com status 'em_rota'
-            const raw = Array.isArray(res.data) ? res.data.slice() : (res.data || []);
-            const filtered = raw.filter(p => {
-                const s = String(p?.status || '').trim().toLowerCase();
-                return s === 'em_rota' || s === 'em rota';
-            });
-
-            // Fallback ordering: ordem_logistica > ordem > id
-            let finalData = filtered.slice();
-            finalData.sort((a, b) => (
-                (Number(a.ordem_logistica) && Number(a.ordem_logistica) > 0 ? Number(a.ordem_logistica) : (Number(a.ordem) || a.id || 0)) -
-                (Number(b.ordem_logistica) && Number(b.ordem_logistica) > 0 ? Number(b.ordem_logistica) : (Number(b.ordem) || b.id || 0))
-            ));
-
-            if (!res.error && finalData) {
+            if (!error && data) {
+                const finalData = Array.isArray(data) ? data : [];
                 setEntregas(finalData);
-                setSelectedId(prev => prev || (finalData.length > 0 ? finalData[0].id : null));
-            } else if (res.error) {
-                console.error('[motorista] carregarRota: erro do supabase', res.error);
+                setSelectedId(prev => prev || (finalData.length > 0 ? (finalData.find(e => e.status === 'em_rota') || finalData[0]).id : null));
+                console.log('✅ [CELULAR] Rota sincronizada. Entregas:', finalData.length);
+            } else if (error) {
+                console.error('[motorista] carregarRota: erro do supabase', error);
             }
         } catch (err) {
             console.error('[motorista] carregarRota: exceção', err);
@@ -197,27 +217,47 @@ function InternalMobileApp() {
     const finalizarEntrega = async (id) => {
         if (!window.confirm("Confirmar entrega realizada?")) return;
 
-        // Atualiza no banco
+        // IMPORTANTE: Status 'entregue' para o pino ficar verde instantaneamente no Dashboard
         const { error } = await supabase
             .from('entregas')
-            .update({ status: 'Entregue' })
+            .update({ status: 'entregue' })
             .eq('id', id);
 
         if (!error) {
-            // Remove da lista local instantaneamente para a próxima subir
-            const remaining = entregas.filter(item => item.id !== id);
-            setEntregas(remaining);
-            alert("✅ Entrega confirmada! Carregando a próxima...");
+            // Atualizar lista local
+            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'entregue' } : item));
+            alert("✅ Entrega confirmada! O pino no dashboard ficará verde agora.");
 
-            // Se não houver mais entregas em rota, marca o motorista como disponível
-            if (remaining.length === 0) {
-                try {
-                    const { error: e2 } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motorista.id);
-                    if (e2) console.error('[motorista] finalizarEntrega: falha ao atualizar motoristas', e2);
-                } catch (err) {
-                    console.error('[motorista] finalizarEntrega: exceção atualizando motoristas', err);
+            // Se for a última entrega, o motorista volta a ficar disponível se desejar
+            try {
+                if (motorista && motorista.id) {
+                    await supabase.from('motoristas').update({ esta_online: true }).eq('id', motorista.id);
                 }
-            }
+            } catch (err) { /* ignore */ }
+        } else {
+            alert("Erro ao confirmar entrega. Verifique sua conexão.");
+        }
+    };
+
+    // Função para Reportar Falha (Nova Funcionalidade)
+    const reportarFalha = async (id) => {
+        const motivo = window.prompt("Qual o motivo da falha? (Ex: Cliente ausente, Endereço não localizado)");
+        if (motivo === null) return;
+        if (!motivo.trim()) { alert("Informe o motivo."); return; }
+
+        if (!window.confirm("Confirmar FALHA na entrega?")) return;
+
+        // IMPORTANTE: Status 'falha' para o pino ficar vermelho instantaneamente no Dashboard
+        const { error } = await supabase
+            .from('entregas')
+            .update({ status: 'falha', observacoes: motivo })
+            .eq('id', id);
+
+        if (!error) {
+            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'falha', observacoes: motivo } : item));
+            alert("❌ Falha registrada com sucesso. O gestor verá o pino vermelho.");
+        } else {
+            alert("Erro ao reportar falha: " + error.message);
         }
     };
 
@@ -269,15 +309,15 @@ function InternalMobileApp() {
         return `${ordem * 8} min`;
     }
 
-    // A tarefa atual é a selecionada pelo motorista (ou a primeira)
-    const tarefaAtual = selectedId ? entregas.find(e => e.id === selectedId) : (entregas.length > 0 ? entregas[0] : null);
-    const proximasTarefas = entregas.filter(e => e.id !== (tarefaAtual ? tarefaAtual.id : null));
+    // A tarefa atual para exibição no card principal (apenas se estiver em rota)
+    const tarefaAtual = selectedId
+        ? (entregas.find(e => e.id === selectedId && e.status === 'em_rota') || entregas.find(e => e.status === 'em_rota'))
+        : (entregas.find(e => e.status === 'em_rota') || null);
 
-    // Ordena entregas pela propriedade 'ordem' se presente, senão por id
-    // Valid SC coordinates helper (manager-specified bounds)
-    const isValidSC = (lat, lng) => lat < -25.0 && lat > -30.0 && lng < -54.0 && lng > -48.0;
-
-    const orderedRota = entregas && entregas.slice ? entregas.slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0)) : [];
+    // Ordena entregas pela propriedade 'ordem_logistica'
+    const orderedRota = useMemo(() => {
+        return [...entregas].sort((a, b) => (a.ordem_logistica || 0) - (b.ordem_logistica || 0));
+    }, [entregas]);
     // markers filtered to SC region only (ensure numeric comparison)
     const markersParaMostrar = (orderedRota || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng)));
 
@@ -405,81 +445,112 @@ function InternalMobileApp() {
 
                 {carregando ? (
                     <div style={{ textAlign: 'center', padding: '40px', color: theme.textLight }}>Buscando rota...</div>
-                ) : !tarefaAtual ? (
-                    // TELA DE DESCANSO (SEM ENTREGAS)
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: theme.textLight }}>
-                        <div style={{ fontSize: '60px', marginBottom: '20px' }}>🎉</div>
-                        <h3>Tudo entregue!</h3>
-                        <p style={{ textAlign: 'center', maxWidth: '250px' }}>Aguarde o gestor enviar novas rotas.</p>
-                        <button onClick={carregarRota} style={{ marginTop: '20px', padding: '10px 20px', background: '#e5e7eb', border: 'none', borderRadius: '20px', fontWeight: 'bold', color: '#374151' }}>Atualizar</button>
-                    </div>
                 ) : (
-                    // CARTÃO DA ENTREGA ATUAL (CARD GIGANTE)
                     <>
-                        <div style={{ marginBottom: '10px' }}>
-                            <span style={{ background: theme.header, color: '#fff', padding: '5px 12px', borderRadius: '15px', fontSize: '12px', fontWeight: 'bold' }}>PRÓXIMA PARADA</span>
-                        </div>
-
-                        <div style={{
-                            backgroundColor: theme.card,
-                            borderRadius: '24px',
-                            padding: '25px',
-                            boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '20px'
-                        }}>
-                            {/* Tempo estimado para entrega */}
-                            <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '14px', fontWeight: 'bold' }}>
-                                ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem || 1)}
+                        {!tarefaAtual ? (
+                            <div style={{
+                                backgroundColor: theme.card,
+                                borderRadius: '24px',
+                                padding: '25px',
+                                textAlign: 'center',
+                                boxShadow: '0 10px 30px rgba(0,0,0,0.08)'
+                            }}>
+                                <div style={{ fontSize: '50px', marginBottom: '10px' }}>🎉</div>
+                                <h3 style={{ color: theme.textMain }}>Rota Concluída!</h3>
+                                <p style={{ color: theme.textLight }}>O mapa e a lista abaixo continuam visíveis para sua conferência.</p>
+                                <button onClick={carregarRota} style={{ marginTop: '10px', padding: '10px 20px', background: theme.primary, border: 'none', borderRadius: '20px', fontWeight: 'bold', color: '#fff', cursor: 'pointer' }}>🔄 Sincronizar Agora</button>
                             </div>
-                            {/* Dados do Cliente */}
-                            <div>
-                                <h1 style={{ margin: '0 0 5px 0', color: theme.textMain, fontSize: '22px' }}>{tarefaAtual.cliente}</h1>
-                                <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 {tarefaAtual.endereco}</p>
+                        ) : (
+                            // CARTÃO DA ENTREGA ATUAL (CARD GIGANTE)
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                <div style={{ marginBottom: '10px' }}>
+                                    <span style={{ background: theme.header, color: '#fff', padding: '5px 12px', borderRadius: '15px', fontSize: '12px', fontWeight: 'bold' }}>PRÓXIMA PARADA</span>
+                                </div>
+
+                                <div style={{
+                                    backgroundColor: theme.card,
+                                    borderRadius: '24px',
+                                    padding: '25px',
+                                    boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '20px'
+                                }}>
+                                    {/* Tempo estimado para entrega */}
+                                    <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '14px', fontWeight: 'bold' }}>
+                                        ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem || 1)}
+                                    </div>
+                                    {/* Dados do Cliente */}
+                                    <div>
+                                        <h1 style={{ margin: '0 0 5px 0', color: theme.textMain, fontSize: '22px' }}>{tarefaAtual.cliente}</h1>
+                                        <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 {tarefaAtual.endereco}</p>
+                                    </div>
+
+                                    {/* Recado/Obs removido (campo 'msg' não existe) */}
+
+                                    {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                        <button
+                                            onClick={() => abrirGPS('waze', tarefaAtual.lat, tarefaAtual.lng)}
+                                            style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                                        >
+                                            🚙 WAZE
+                                        </button>
+                                        <button
+                                            onClick={() => abrirGPS('maps', tarefaAtual.lat, tarefaAtual.lng)}
+                                            style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                                        >
+                                            🗺️ MAPS
+                                        </button>
+                                    </div>
+
+                                    <hr style={{ border: 'none', borderTop: '1px solid #f3f4f6', margin: '5px 0' }} />
+
+                                    {/* BOTÃO DE FINALIZAR */}
+                                    <button
+                                        onClick={() => finalizarEntrega(tarefaAtual.id)}
+                                        style={{
+                                            width: '100%',
+                                            padding: '20px',
+                                            borderRadius: '18px',
+                                            border: 'none',
+                                            background: theme.secondary,
+                                            color: '#fff',
+                                            fontWeight: '800',
+                                            fontSize: '18px',
+                                            cursor: 'pointer',
+                                            borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                            borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                            transition: 'background 0.3s',
+                                            marginBottom: '10px'
+                                        }}
+                                    >
+                                        ✅ FINALIZAR ENTREGA
+                                    </button>
+
+                                    {/* BOTÃO DE FALHA */}
+                                    <button
+                                        onClick={() => reportarFalha(tarefaAtual.id)}
+                                        style={{
+                                            width: '100%',
+                                            padding: '15px',
+                                            borderRadius: '18px',
+                                            border: 'none',
+                                            background: '#ef4444', // Vermelho alerta
+                                            color: '#fff',
+                                            fontWeight: '700',
+                                            fontSize: '16px',
+                                            cursor: 'pointer',
+                                            borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                            borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                            transition: 'background 0.3s'
+                                        }}
+                                    >
+                                        ❌ FALHA / NÃO ENTREGUE
+                                    </button>
+                                </div>
                             </div>
-
-                            {/* Recado/Obs removido (campo 'msg' não existe) */}
-
-                            {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                <button
-                                    onClick={() => abrirGPS('waze', tarefaAtual.lat, tarefaAtual.lng)}
-                                    style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                                >
-                                    🚙 WAZE
-                                </button>
-                                <button
-                                    onClick={() => abrirGPS('maps', tarefaAtual.lat, tarefaAtual.lng)}
-                                    style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                                >
-                                    🗺️ MAPS
-                                </button>
-                            </div>
-
-                            <hr style={{ border: 'none', borderTop: '1px solid #f3f4f6', margin: '5px 0' }} />
-
-                            {/* BOTÃO DE FINALIZAR */}
-                            <button
-                                onClick={() => finalizarEntrega(tarefaAtual.id)}
-                                style={{
-                                    width: '100%',
-                                    padding: '20px',
-                                    borderRadius: '18px',
-                                    border: 'none',
-                                    background: theme.secondary,
-                                    color: '#fff',
-                                    fontWeight: '800',
-                                    fontSize: '18px',
-                                    cursor: 'pointer',
-                                    borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                    borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                    transition: 'background 0.3s'
-                                }}
-                            >
-                                ✅ FINALIZAR ENTREGA
-                            </button>
-                        </div>
+                        )}
                     </>
                 )}
 
@@ -535,4 +606,4 @@ function InternalMobileApp() {
     );
 }
 
-export default function App() { return <DriverApp />; }
+export default function App() { return <InternalMobileApp />; }
