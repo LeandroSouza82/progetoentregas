@@ -133,7 +133,8 @@ function InternalMobileApp() {
                 },
                 (payload) => {
                     console.log('🔄 [REALTIME] Mudança detectada na tabela entregas!', payload.eventType);
-                    carregarRota(); // Recarrega os dados na tela do motorista imediatamente
+                    // Força a recarga ignorando o estado de 'carregando' para garantir atualização imediata
+                    carregarRota(true);
                 }
             ).subscribe();
 
@@ -162,19 +163,17 @@ function InternalMobileApp() {
         }
     }
 
-    async function carregarRota() {
-        // Prevent re-entrant calls while an existing load is in progress
-        if (carregando) return;
+    async function carregarRota(force = false) {
+        if (carregando && !force) return;
         setCarregando(true);
         try {
             const mId = motorista && motorista.id ? String(motorista.id) : null;
             if (!mId) {
-                console.warn('[motorista] carregarRota: motoristaId ausente');
                 setEntregas([]);
+                setCarregando(false);
                 return;
             }
 
-            // Busca entregas do motorista (em rota e as já concluídas/falhas para o pino ficar no mapa)
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
@@ -183,15 +182,11 @@ function InternalMobileApp() {
                 .order('ordem_logistica', { ascending: true });
 
             if (!error && data) {
-                const finalData = Array.isArray(data) ? data : [];
-                setEntregas(finalData);
-                setSelectedId(prev => prev || (finalData.length > 0 ? (finalData.find(e => e.status === 'em_rota') || finalData[0]).id : null));
-                console.log('✅ [CELULAR] Rota sincronizada. Entregas:', finalData.length);
-            } else if (error) {
-                console.error('[motorista] carregarRota: erro do supabase', error);
+                setEntregas(data);
+                setSelectedId(prev => prev || (data.length > 0 ? (data.find(e => e.status === 'em_rota') || data[0]).id : null));
             }
         } catch (err) {
-            console.error('[motorista] carregarRota: exceção', err);
+            console.error('[motorista] erro ao carregar rota', err);
         } finally {
             setCarregando(false);
         }
@@ -478,7 +473,7 @@ function InternalMobileApp() {
                                 }}>
                                     {/* Tempo estimado para entrega */}
                                     <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '14px', fontWeight: 'bold' }}>
-                                        ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem || 1)}
+                                        ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem_logistica || 1)}
                                     </div>
                                     {/* Dados do Cliente */}
                                     <div>
@@ -591,7 +586,7 @@ function InternalMobileApp() {
                                         <div>
                                             <div style={{ fontWeight: '700' }}>{task.cliente}</div>
                                             <div style={{ fontSize: '12px', color: theme.textLight }}>{task.endereco.substring(0, 40)}</div>
-                                            <div style={{ fontSize: '11px', color: theme.textLight, marginTop: '2px' }}>⏱️ {estimarTempoEntrega(task.ordem || (idx + 1))}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textLight, marginTop: '2px' }}>⏱️ {estimarTempoEntrega(task.ordem_logistica || (idx + 1))}</div>
                                         </div>
                                     </div>
                                     <div style={{ fontSize: '16px' }}>📦</div>

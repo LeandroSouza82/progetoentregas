@@ -25,41 +25,38 @@ const DEFAULT_MAP_CENTER = { lat: -27.5969, lng: -48.5495 };
 
 
 // Ícones de Ponto de Entrega (Checkpoints) - Bolinhas/Gotas coloridas
-function createPinIcon(tipo, status, obs = '') {
+function createPinIcon(tipo, status, num = null) {
     const statusLower = String(status || '').toLowerCase().trim();
     const tipoLower = String(tipo || '').toLowerCase().trim();
 
-    // Configuração de Cores Dinâmicas (Novo Padrão Unificado)
-    let color = '#9b59b6'; // Default Roxo (Outros tipos em rota)
+    // Configuração de Cores Dinâmicas
+    let color = '#9b59b6'; // Default Roxo
 
-    // 1. Status 'em_rota' -> Cores por Tipo (Pendente/Ativa)
     if (statusLower === 'em_rota') {
         if (tipoLower === 'entrega') color = '#3498db'; // Azul Entrega
         else if (tipoLower === 'recolha') color = '#f39c12'; // Laranja Recolha
-    }
-    // 2. Status 'entregue' = Sucesso (Verde)
-    else if (statusLower === 'entregue') {
+    } else if (['entregue', 'concluido', 'concluída'].includes(statusLower)) {
         color = '#2ecc71'; // Verde
-    }
-    // 3. Status 'falha' = Erro/Problema (Vermelho)
-    else if (statusLower === 'falha' || statusLower === 'recusado') {
+    } else if (statusLower === 'falha' || statusLower === 'recusado') {
         color = '#e74c3c'; // Vermelho
     }
 
-    // SVG Pin (Gota de mapa padrão)
     const html = `
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="36" height="36" style="filter: drop-shadow(0 2px 3px rgba(0,0,0,0.3)); transition: fill 0.3s ease;">
-            <path fill="${color}" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-            <circle cx="12" cy="9" r="3.5" fill="#ffffff" opacity="0.9" />
-        </svg>
+        <div style="position: relative;">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="38" height="38" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
+                <path fill="${color}" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+                <circle cx="12" cy="9" r="6" fill="#ffffff" />
+            </svg>
+            ${num ? `<div style="position: absolute; top: 18px; left: 50%; transform: translate(-50%, -100%); color: ${color}; font-weight: 900; font-size: 13px; font-family: 'Inter', sans-serif;">${num}</div>` : ''}
+        </div>
     `;
 
     return L.divIcon({
         html: html,
         className: 'custom-pin-point',
-        iconSize: [36, 36],
-        iconAnchor: [18, 36],
-        popupAnchor: [0, -36]
+        iconSize: [38, 38],
+        iconAnchor: [19, 38],
+        popupAnchor: [0, -38]
     });
 }
 
@@ -233,13 +230,59 @@ function App() {
         return rotaOrdenada;
     };
 
+    const otimizarTodasAsRotas = async () => {
+        try {
+            const confirmed = confirm('⚡ Deseja reorganizar TODAS as rotas ativas usando Inteligência Logística?\n\nIsso recalculará o trajeto mais eficiente para cada motorista com base em sua localização atual.');
+            if (!confirmed) return;
+
+            setDistanceCalculating(true);
+            const sb = supabaseRef.current || supabase;
+
+            // 1. Buscar todos os motoristas online que possuem entregas em rota
+            const { data: motoristas, error: mErr } = await sb.from('motoristas').select('id').eq('esta_online', true);
+            if (mErr) throw mErr;
+
+            if (!motoristas || motoristas.length === 0) {
+                alert('📭 Nenhum motorista online para reorganizar.');
+                return;
+            }
+
+            let otimizados = 0;
+            for (const m of motoristas) {
+                // BLINDAGEM: Não mexer na bicicleta do Leandro teste (ID 1)
+                if (String(m.id) === '1') continue;
+
+                // Verificar se este motorista tem entregas 'em_rota'
+                const { data: countData } = await sb.from('entregas').select('id', { count: 'exact' }).eq('motorista_id', m.id).eq('status', 'em_rota');
+                if (countData && countData.length > 0) {
+                    await recalcRotaForMotorista(m.id);
+                    otimizados++;
+                }
+            }
+
+            if (otimizados > 0) {
+                alert(`✅ Sucesso! ${otimizados} rotas foram reorganizadas e sincronizadas.`);
+            } else {
+                alert('ℹ️ Nenhum motorista com carga ativa para otimizar.');
+            }
+        } catch (error) {
+            console.error('Erro na otimização:', error);
+            alert('❌ Falha ao reorganizar rotas: ' + error.message);
+        } finally {
+            setDistanceCalculating(false);
+            await carregarDados();
+        }
+    };
+
     async function otimizarRotaLocal(pontoPartida, listaEntregas, motoristaId = null) {
-        const remaining = (listaEntregas || []).filter(p => {
-            const status = String(p.status || '').trim().toLowerCase();
-            return status === 'em_rota';
-        });
-        if (remaining.length === 0) return [];
-        const comCoordenadas = remaining.filter(p => p.lat && p.lng && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)) && isValidSC(Number(p.lat), Number(p.lng)));
+        // Usar a lista fornecida diretamente (o chamador já filtra o que é relevante)
+        const comCoordenadas = (listaEntregas || []).filter(p =>
+            p.lat && p.lng &&
+            !isNaN(Number(p.lat)) &&
+            !isNaN(Number(p.lng)) &&
+            isValidSC(Number(p.lat), Number(p.lng))
+        );
+
         if (comCoordenadas.length === 0) return [];
 
         const sb = supabaseRef.current || supabase;
@@ -261,16 +304,29 @@ function App() {
         const baseCoord = (pontoPartida && pontoPartida.lat != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : DEFAULT_MAP_CENTER;
         const ordered = nearestNeighborRoute(originLatLng, comCoordenadas, baseCoord);
 
-        if (motoristaId != null) {
-            try {
-                // Persistência em lote para evitar 1000 chamadas
-                const updates = ordered.map((p, i) => sb.from('entregas').update({ ordem_logistica: i + 1 }).eq('id', p.id));
-                await Promise.all(updates);
-                console.log(`✅ ordem_logistica persistida para ${ordered.length} entregas`);
-            } catch (e) { console.warn('Falha ao persistir ordem_logistica:', e); }
-        }
         return ordered;
     }
+
+    // ✅ FUNÇÃO: REORGANIZAR FILA DE DESPACHO
+    const otimizarFilaDespacho = async () => {
+        if (!entregasEmEspera || entregasEmEspera.length === 0) {
+            alert('⚠️ Fila vazia para reorganizar.');
+            return;
+        }
+        setDistanceCalculating(true);
+        try {
+            console.log('🔄 Reorganizando fila de despacho...');
+            const optimized = await otimizarRotaLocal(mapCenterState, entregasEmEspera);
+            setEntregasEmEspera(optimized);
+            setRotaOrganizada(true); // ✅ LIBERA O ENVIO
+            alert('✅ Rota otimizada com sucesso! O botão ENVIAR ROTA está liberado.');
+        } catch (error) {
+            console.error('❌ Erro ao otimizar fila:', error);
+            alert('❌ Erro ao reorganizar a fila.');
+        } finally {
+            setDistanceCalculating(false);
+        }
+    };
 
     // Update ref when supabase becomes ready (async)
     React.useEffect(() => {
@@ -450,6 +506,8 @@ function App() {
     const [distanceCalculating, setDistanceCalculating] = useState(false);
     const [routeGeometry, setRouteGeometry] = useState(null); // Geometria OSRM para desenhar rota
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
+    const [rotaOrganizada, setRotaOrganizada] = useState(false); // ✅ Trava de segurança para envio
+    const [totalDistanceFila, setTotalDistanceFila] = useState(0); // ✅ Contador da fila de despacho
     const [logsHistory, setLogsHistory] = useState([]);
     const [showLogsPopover, setShowLogsPopover] = useState(false);
 
@@ -702,7 +760,7 @@ function App() {
                 // Compute estimated distance for preview (non-persistent)
                 try {
                     const pts = (optimizedLocal && optimizedLocal.length > 0) ? optimizedLocal : list;
-                    const dist = computeRouteDistanceKm(origin, pts, pontoPartida || mapCenterState || DEFAULT_MAP_CENTER);
+                    const dist = computeRouteDistanceKm(origin, pts, null);
                     setEstimatedDistanceKm(Number(dist.toFixed(1)));
                 } catch (e) { /* ignore */ } finally { try { setDistanceCalculating(false); } catch (e) { } }
             } catch (e) {
@@ -1436,8 +1494,8 @@ function App() {
 
     // Ordena a rota ativa pelo campo 'ordem' (caixeiro viajante) para visualização
     const orderedRota = rotaAtiva && rotaAtiva.slice ? rotaAtiva.slice().sort((a, b) => {
-        const orderA = a.ordem_logistica || a.ordem || 0;
-        const orderB = b.ordem_logistica || b.ordem || 0;
+        const orderA = a.ordem_logistica || 0;
+        const orderB = b.ordem_logistica || 0;
         return orderA - orderB;
     }) : [];
 
@@ -1739,11 +1797,15 @@ function App() {
 
             // 1. OSRM (Priority)
             try {
+                // REGRA ATUALIZADA: allPoints deve terminar no ÚLTIMO ponto da lista otimizada se includeHQ for false
                 const allPoints = [
                     [origin.lng, origin.lat],
-                    ...waypts.map(w => [w.lng, w.lat]),
-                    [baseDest.lng, baseDest.lat]
+                    ...waypts.map(w => [w.lng, w.lat])
                 ];
+
+                if (includeHQ) {
+                    allPoints.push([baseDest.lng, baseDest.lat]);
+                }
 
                 // Busca geometria compatível com Leaflet (arrays de [lat,lng])
                 const osrmResult = await getOSRMRoute(allPoints);
@@ -1759,13 +1821,18 @@ function App() {
             if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.DirectionsService) {
                 try {
                     const directionsService = new window.google.maps.DirectionsService();
-                    const dsWaypoints = waypts.map(w => ({ location: w, stopover: true }));
+
+                    // Se includeHQ for falso, o destino é o ÚLTIMO waypoint
+                    const realDestination = (includeHQ || waypts.length === 0) ? baseDest : waypts[waypts.length - 1];
+                    const finalWaypoints = (includeHQ || waypts.length <= 1) ? waypts : waypts.slice(0, -1);
+                    const dsWaypoints = finalWaypoints.map(w => ({ location: w, stopover: true }));
+
                     const request = {
                         origin,
-                        destination: baseDest,
+                        destination: realDestination,
                         travelMode: window.google.maps.TravelMode.DRIVING,
                         waypoints: dsWaypoints,
-                        optimizeWaypoints: true
+                        optimizeWaypoints: false
                     };
 
                     const res = await new Promise((resolve, reject) =>
@@ -1798,11 +1865,9 @@ function App() {
             }
 
             // 3. Fallback Final: Linha Reta
-            const straightPath = [
-                [origin.lat, origin.lng],
-                ...waypts.map(w => [w.lat, w.lng]),
-                [baseDest.lat, baseDest.lng]
-            ];
+            const straightPath = [[origin.lat, origin.lng], ...waypts.map(w => [w.lat, w.lng])];
+            if (includeHQ) straightPath.push([baseDest.lat, baseDest.lng]);
+
             setRouteGeometry(straightPath);
             return { meters: 0, secs: 0 };
 
@@ -1819,216 +1884,118 @@ function App() {
         try {
             if (!motoristaId) return;
 
-            // VALIDAÇÃO CRÍTICA: verificar se há entregas antes de processar
-            if (!entregasEmEspera || entregasEmEspera.length === 0) {
-                console.warn('recalcRotaForMotorista: nenhuma entrega disponível para roteirizar');
+            // BLINDAGEM: Não mexer na bicicleta do Leandro teste (ID 1)
+            if (String(motoristaId) === '1') {
+                console.log('recalcRotaForMotorista: Protegido — ignorando ID 1');
                 return;
             }
 
-            // Prevent concurrent routing operations to avoid resource exhaustion (ERR_INSUFFICIENT_RESOURCES)
-            if (routingInProgressRef.current) {
-                console.warn('recalcRotaForMotorista: route calculation already in progress; skipping');
-                try { setMensagemGeral('Roteamento em andamento — aguarde o término antes de reexecutar.'); } catch (e) { }
-                return;
-            }
+            // Prevent concurrent routing operations
+            if (routingInProgressRef.current) return;
             routingInProgressRef.current = true;
-            // capture previous distance for audit
-            const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
 
-            // Usar supabaseRef para evitar erro "Cannot read properties of null"
+            const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
             const sb = supabaseRef.current || supabase;
-            if (!sb || typeof sb.from !== 'function') {
-                console.warn('recalcRotaForMotorista: supabase não disponível');
-                return;
-            }
+            if (!sb || typeof sb.from !== 'function') return;
 
             // Fetch motorista to ensure online and get current lat/lng
             const { data: mdata, error: merr } = await sb.from('motoristas').select('id,lat,lng,esta_online').eq('id', motoristaId);
             if (merr) { console.warn('recalcRotaForMotorista: erro ao buscar motorista:', merr); return; }
             const motor = mdata && mdata[0] ? mdata[0] : null;
-            if (!motor) return;
-            if (motor.esta_online !== true) return; // RULE: only online drivers receive routing
+            if (!motor || motor.esta_online !== true) return;
 
-            // Determine origin: prefer current driver lat/lng, fallback to sede/mapCenter
+            // Determine origin: prefer current driver lat/lng
             let origin = null;
             if (motor.lat != null && motor.lng != null) {
                 origin = { lat: Number(motor.lat), lng: Number(motor.lng) };
-                // Update pontoPartida to the driver's current location (dynamic)
-                try { setPontoPartida(origin); } catch (e) { /* ignore */ }
             } else {
-                // fallback to company HQ / mapCenterState
-                origin = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
-                try { setPontoPartida(origin); } catch (e) { /* ignore */ }
+                origin = (pontoPartida && pontoPartida.lat != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
             }
 
-            // Fetch remaining deliveries for this motorista (or ALL when DEBUG_FORCE_SHOW_ALL)
+            // Fetch remaining deliveries for this motorista
             let qR = sb.from('entregas').select('*').in('status', ['em_rota']).order('ordem_logistica', { ascending: true });
             if (!DEBUG_FORCE_SHOW_ALL && motoristaId != null) qR = qR.eq('motorista_id', motoristaId);
             const { data: remData } = await qR;
-            // normalize motorista_id to string for consistent comparisons
             const remainingForDriver = Array.isArray(remData) ? remData.map(it => ({ ...it, motorista_id: it.motorista_id != null ? String(it.motorista_id) : null })) : [];
             if (!remainingForDriver || remainingForDriver.length === 0) return;
 
-            // Cache guard: avoid recalculating if remaining set hasn't changed recently
-            try {
-                const hash = JSON.stringify((remainingForDriver || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
-                const cacheKey = String(motoristaId) + '|' + hash;
-                const cached = lastRouteCacheRef.current.get(cacheKey);
-                const MAX_CACHE_AGE_MS = 60 * 1000; // 60s
-                if (cached && (Date.now() - (cached.timestamp || 0) < MAX_CACHE_AGE_MS)) {
-                    // reuse cached result to avoid calling Google again
-                    try {
-                        if (cached.drawResult) {
-                            if (cached.drawResult.meters) setEstimatedDistanceKm(Number((cached.drawResult.meters / 1000).toFixed(1)));
-                            if (cached.drawResult.secs) { setEstimatedTimeSec(cached.drawResult.secs); setEstimatedTimeText(formatDuration(cached.drawResult.secs)); }
-                        }
-                        if (cached.optimized && Array.isArray(cached.optimized)) {
-                            const optimizedWithOrder = (cached.optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: String(motoristaId) }));
-                            setRotaAtiva(optimizedWithOrder);
-                        }
-                        try { return; } catch (e) { }
-                    } catch (e) { /* ignore cache read issues */ }
+            // Hashing for cache
+            const hash = JSON.stringify((remainingForDriver || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
+            const cacheKey = String(motoristaId) + '|' + hash;
+            const cached = lastRouteCacheRef.current.get(cacheKey);
+            const MAX_CACHE_AGE_MS = 60 * 1000;
+            if (cached && (Date.now() - (cached.timestamp || 0) < MAX_CACHE_AGE_MS)) {
+                if (cached.drawResult) {
+                    if (cached.drawResult.meters) setEstimatedDistanceKm(Number((cached.drawResult.meters / 1000).toFixed(1)));
+                    if (cached.drawResult.secs) { setEstimatedTimeSec(cached.drawResult.secs); setEstimatedTimeText(formatDuration(cached.drawResult.secs)); }
                 }
-            } catch (e) { /* ignore hashing issues */ }
-
-            // Compute optimized order using local algorithm (Nearest Neighbor + Haversine)
-            try { setDistanceCalculating(true); } catch (e) { }
-            let optimized = await otimizarRotaLocal(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
-            // Safety: avoid processing extremely large routes in one go to preserve browser stability
-            try {
-                if (Array.isArray(optimized) && optimized.length > 200) {
-                    try { setMensagemGeral('Rota muito longa — processando primeiros 200 pontos para estabilidade.'); } catch (e) { }
-                    optimized = optimized.slice(0, 200);
+                if (cached.optimized && Array.isArray(cached.optimized)) {
+                    const optimizedWithOrder = (cached.optimized || []).map((p, i) => ({ ...p, ordem_logistica: i + 1, motorista_id: String(motoristaId) }));
+                    setRotaAtiva(optimizedWithOrder);
                 }
-            } catch (e) { /* ignore */ }
-            try { setDistanceCalculating(false); } catch (e) { }
+                return;
+            }
 
-            // Draw on map (include HQ if necessary). Always pass company HQ as the destination to keep base as final point
-            const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            // ensure UI shows calculating while we call Directions
+            // Otimizar
             try { setDistanceCalculating(true); } catch (e) { }
+            let optimized = await otimizarRotaLocal(origin, remainingForDriver, motoristaId);
+            if (Array.isArray(optimized) && optimized.length > 200) optimized = optimized.slice(0, 200);
+
             let drawResult = null;
             try {
-                drawResult = await drawRouteOnMap(origin, optimized, includeHQ, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
-                // Immediately reflect distance/time on UI from Google response (don't wait DB)
-                try {
-                    if (drawResult && typeof drawResult.meters === 'number') {
-                        setEstimatedDistanceKm(Number((drawResult.meters / 1000).toFixed(1)));
-                    }
-                    if (drawResult && typeof drawResult.secs === 'number') {
-                        setEstimatedTimeSec(drawResult.secs);
-                        try { setEstimatedTimeText(formatDuration(drawResult.secs)); } catch (e) { }
-                    }
-                } catch (e) { /* ignore UI update errors */ }
-                // cache final result per motorista and remaining hash
-                try {
-                    const hash2 = JSON.stringify((remainingForDriver || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
-                    const cacheKey2 = String(motoristaId) + '|' + hash2;
-                    lastRouteCacheRef.current.set(cacheKey2, { optimized, drawResult, timestamp: Date.now() });
-                } catch (e) { /* ignore cache set */ }
+                // Desenhar sem mover câmera centralmente
+                drawResult = await drawRouteOnMap(origin, optimized, false, mapCenterState || DEFAULT_MAP_CENTER, motoristaId);
+                if (drawResult) {
+                    if (typeof drawResult.meters === 'number') setEstimatedDistanceKm(Number((drawResult.meters / 1000).toFixed(1)));
+                    if (typeof drawResult.secs === 'number') { setEstimatedTimeSec(drawResult.secs); setEstimatedTimeText(formatDuration(drawResult.secs)); }
+                }
+                lastRouteCacheRef.current.set(cacheKey, { optimized, drawResult, timestamp: Date.now() });
             } finally {
                 try { setDistanceCalculating(false); } catch (e) { }
             }
 
-            // Persist ordem_logistica per item (batched to avoid blocking UI and resource exhaustion)
+            // Persistência batched - APENAS ordem_logistica
             let newOrderIds = [];
             let allOk = true;
-            const failedUpdates = [];
-            try {
-                if (Array.isArray(optimized) && motoristaId != null) {
-                    const BATCH_SIZE = 10;
-                    const updates = (optimized || []).map((item, i) => ({ id: item && item.id, ordem: Number(i + 1) })).filter(u => u.id);
-                    for (let start = 0; start < updates.length; start += BATCH_SIZE) {
-                        const batch = updates.slice(start, start + BATCH_SIZE);
-                        // perform batch updates in parallel, but await the batch to yield to the event loop
-                        await Promise.all(batch.map(async (u) => {
-                            newOrderIds.push(u.id);
-                            try {
-                                const { data: updData, error } = await sb.from('entregas').update({ ordem_logistica: u.ordem }).eq('id', u.id);
-                                if (error) {
-                                    allOk = false;
-                                    failedUpdates.push({ id: u.id, error });
-                                    console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', u.id, error && error.message ? error.message : error);
-                                } else {
-                                    // successful update — no verbose console logging to avoid log pressure
-                                }
-                            } catch (err) {
-                                allOk = false;
-                                failedUpdates.push({ id: u.id, error: err });
-                                console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', u.id, err && err.message ? err.message : err);
-                            }
-                        }));
-                        // small pause to yield and avoid freezing the browser
-                        await new Promise(res => setTimeout(res, 150));
-                    }
-                    // Refresh data so other components see updated ordem_logistica
-                    try { await carregarDados(); } catch (err) { /* non-blocking */ }
-                }
-            } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
-            // If any updates failed, surface a non-blocking message and log details
-            try {
-                if (failedUpdates.length > 0) {
-                    const ids = failedUpdates.map(f => f.id).slice(0, 10);
-                    const msg = `Falha ao gravar ordem_logistica para ${failedUpdates.length} entregas (ex.: ${ids.join(', ')}). Verifique logs.`;
-                    try { setMensagemGeral(msg); } catch (e) { }
-                    console.warn('recalcRotaForMotorista: failedUpdates details:', failedUpdates.slice(0, 20));
-                }
-            } catch (e) { /* ignore */ }
-
-            // After persistence, create an audit log entry with previous/new distances and the new order
-            try {
-                if (motoristaId != null) {
-                    if (!allOk) {
-                        console.error('recalcRotaForMotorista: nem todas atualizações foram concluídas com sucesso. Log de auditoria não será gravado.');
-                        try { alert('Atenção: algumas atualizações falharam. Verifique os logs.'); } catch (e) { }
-                    } else {
+            if (Array.isArray(optimized) && motoristaId != null) {
+                const updates = optimized.map((item, i) => ({ id: item.id, seq: i + 1 })).filter(u => u.id);
+                for (let start = 0; start < updates.length; start += 10) {
+                    const batch = updates.slice(start, start + 10);
+                    await Promise.all(batch.map(async (u) => {
+                        newOrderIds.push(u.id);
                         try {
-                            const prevDist = Number(previousDistanceKm) || null;
-                            const newDist = Number((drawResult && drawResult.meters ? drawResult.meters / 1000 : (estimatedDistanceKm || null))) || null;
-                            const payload = [{ motorista_id: motoristaId, distancia_antiga: prevDist, distancia_nova: newDist, created_at: (new Date()).toISOString(), nova_ordem: Array.isArray(newOrderIds) ? newOrderIds : [] }];
-                            const { data: logData, error: logErr } = await sb.from('logs_roteirizacao').insert(payload);
-                            if (logErr) { console.error('recalcRotaForMotorista: falha ao gravar log_roteirizacao', logErr); try { setMensagemGeral('Falha ao gravar log de auditoria: ' + (logErr && logErr.message ? logErr.message : JSON.stringify(logErr))); } catch (e) { } }
-                            else { console.log('recalcRotaForMotorista: log_roteirizacao gravado', logData); }
-                            // refresh local logs preview
-                            try { await fetchLogsForMotorista(String(motoristaId)); } catch (e) { /* ignore */ }
-                        } catch (e) { console.error('recalcRotaForMotorista: exceção ao gravar log_roteirizacao', e); }
-                    }
+                            const { error } = await sb.from('entregas').update({ ordem_logistica: u.seq }).eq('id', u.id);
+                            if (error) allOk = false;
+                        } catch (err) { allOk = false; }
+                    }));
+                    await new Promise(res => setTimeout(res, 100));
                 }
-            } catch (e) { /* ignore */ }
+                try { await carregarDados(); } catch (err) { }
+            }
 
-            // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
-            try {
-                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: String(motoristaId) }));
-                setRotaAtiva(optimizedWithOrder);
-                const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
-                if (foundDriver) setMotoristaDaRota(foundDriver);
-                // ensure visual feedback: set distance/time from draw result if available
-                try {
-                    if (drawResult && drawResult.meters) setEstimatedDistanceKm(Number((drawResult.meters / 1000).toFixed(1)));
-                    if (drawResult && drawResult.secs) setEstimatedTimeSec(drawResult.secs);
-                } catch (e) { /* ignore */ }
-            } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
+            // Audit Log
+            if (allOk && motoristaId != null) {
+                const newDist = (drawResult && drawResult.meters) ? drawResult.meters / 1000 : (estimatedDistanceKm || null);
+                await sb.from('logs_roteirizacao').insert([{
+                    motorista_id: motoristaId,
+                    distancia_antiga: previousDistanceKm,
+                    distancia_nova: newDist,
+                    created_at: new Date().toISOString(),
+                    nova_ordem: newOrderIds
+                }]);
+                try { await fetchLogsForMotorista(String(motoristaId)); } catch (e) { }
+            }
 
-            // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
-            try {
-                const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: String(motoristaId) }));
-                setRotaAtiva(optimizedWithOrder);
-                const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
-                if (foundDriver) setMotoristaDaRota(foundDriver);
-                // ensure visual feedback: set distance/time if drawRouteOnMap couldn't
-                try {
-                    if (estimatedDistanceKm == null || estimatedTimeSec == null) {
-                        const originForCalc = pontoPartida || mapCenterState || DEFAULT_MAP_CENTER;
-                        const dist = computeRouteDistanceKm(originForCalc, optimizedWithOrder, originForCalc);
-                        if (dist && dist > 0 && (estimatedDistanceKm == null)) setEstimatedDistanceKm(Number(dist.toFixed(1)));
-                    }
-                } catch (e) { /* ignore */ }
-            } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
+            // UI Update - APENAS ordem_logistica
+            const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem_logistica: i + 1, motorista_id: String(motoristaId) }));
+            setRotaAtiva(optimizedWithOrder);
+            const foundDriver = (frota || []).find(m => String(m.id) === String(motoristaId));
+            if (foundDriver) setMotoristaDaRota(foundDriver);
+
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
         } finally {
-            // release routing lock with a small grace period
-            try { setTimeout(() => { routingInProgressRef.current = false; }, 400); } catch (e) { routingInProgressRef.current = false; }
+            routingInProgressRef.current = false;
         }
     }, [pontoPartida, mapCenterState]);
 
@@ -2049,6 +2016,36 @@ function App() {
     }
 
     useEffect(() => { try { if (motoristaDaRota && motoristaDaRota.id) fetchLogsForMotorista(String(motoristaDaRota.id)); else setLogsHistory([]); } catch (e) { /* ignore */ } }, [motoristaDaRota]);
+
+    // ✅ CÁLCULO DE DISTÂNCIA TOTAL DO ROTEIRO (O TERMÔMETRO)
+    useEffect(() => {
+        const calcularDistanciaFila = async () => {
+            if (!entregasEmEspera || entregasEmEspera.length === 0) {
+                setTotalDistanceFila(0);
+                return;
+            }
+
+            try {
+                const origin = mapCenterState || DEFAULT_MAP_CENTER;
+                let total = 0;
+                let current = { lat: Number(origin.lat), lng: Number(origin.lng) };
+
+                for (const p of entregasEmEspera) {
+                    if (p.lat && p.lng) {
+                        const target = { lat: Number(p.lat), lng: Number(p.lng) };
+                        const d = haversineDistance(current.lat, current.lng, target.lat, target.lng);
+                        total += d;
+                        current = target;
+                    }
+                }
+                setTotalDistanceFila(Number(total.toFixed(2)));
+            } catch (err) {
+                console.warn('Erro ao calcular distância da fila:', err);
+            }
+        };
+
+        calcularDistanciaFila();
+    }, [entregasEmEspera, mapCenterState]);
 
     // Realtime: Conexão FORÇADA para atualização instantânea (Pinos Verdes/Vermelhos)
     useEffect(() => {
@@ -2581,6 +2578,7 @@ function App() {
                 alert("✅ Salvo com sucesso!");
                 setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor('');
                 setEnderecoCoords(null); setDraftPoint(null);
+                setRotaOrganizada(false);
                 carregarDados();
             } else {
                 alert('❌ Erro ao salvar: ' + error.message);
@@ -2614,6 +2612,7 @@ function App() {
             console.error('❌ Erro ao cancelar entrega:', error);
         } else {
             console.log('✅ Entrega cancelada com sucesso!');
+            setRotaOrganizada(false);
             carregarDados();
         }
     };
@@ -2702,6 +2701,12 @@ function App() {
         // Garantir que usamos UUID como string (nunca converter para Number)
         const motoristaIdVal = String(selectedDriver.id);
 
+        // BLINDAGEM: Não mexer na bicicleta do Leandro teste (ID 1)
+        if (motoristaIdVal === '1') {
+            alert('🚫 O sistema Adecell protegeu a bicicleta do Leandro teste. Selecione outro motorista.');
+            return;
+        }
+
         // Obter referência do Supabase uma única vez para toda a função
         const sb = supabaseRef.current || supabase;
 
@@ -2747,7 +2752,6 @@ function App() {
                 // Adicionar ordem sequencial básica
                 rotaOtimizada = rotaOtimizada.map((e, idx) => ({
                     ...e,
-                    ordem: idx + 1,
                     ordem_logistica: idx + 1
                 }));
 
@@ -2782,104 +2786,66 @@ function App() {
                     return;
                 }
 
-                console.log('💾 Atualizando entregas no banco de dados...');
-                console.log('   Campo motorista_id =', motoristaIdVal);
-                console.log('   Campo status =', statusValue);
-
+                console.log('💾 Atualizando entregas no banco de dados com sequência integrada...');
                 let updErr = null;
+
                 try {
-                    // Atualizar EXCLUSIVAMENTE por ID (UUID) - nunca por nome
-                    let q = sb.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
-                    if (q && typeof q.in === 'function') {
-                        const { data: updData, error } = await q.in('id', assignedIds);
-                        updErr = error;
-                        if (!updErr) {
-                            console.log('✅ Entregas atualizadas no banco (bulk update)');
+                    // LOOP DE PERSISTÊNCIA INTEGRADA: Garante que Ordem chegue ANTES do Status no celular
+                    for (let i = 0; i < rotaOtimizada.length; i++) {
+                        const pedido = rotaOtimizada[i];
+                        const ordemSeq = parseInt(i + 1, 10); // 🔧 CONVERSÃO ESTRITA PARA INT4
 
-                            // GRAVAÇÃO DA ORDEM LOGÍSTICA (Crucial para o Motorista)
-                            console.log('📦 Gravando sequência de entrega no banco...');
-                            for (let i = 0; i < rotaOtimizada.length; i++) {
-                                const pedido = rotaOtimizada[i];
-                                const ordemSeq = i + 1;
-                                try {
-                                    await sb.from('entregas')
-                                        .update({ ordem_logistica: ordemSeq })
-                                        .eq('id', pedido.id);
-                                } catch (errOrder) {
-                                    console.error(`❌ Erro ao salvar ordem da entrega ${pedido.id}:`, errOrder);
-                                }
-                            }
-                            console.log('✅ Sequência logística gravada!');
+                        // ✅ HARDENING: Garantir que o ID do motorista seja coerente com o banco (parseInt se for numérico)
+                        const motoristaIdParaBanco = !isNaN(parseInt(motoristaIdVal, 10)) && !String(motoristaIdVal).includes('-')
+                            ? parseInt(motoristaIdVal, 10)
+                            : motoristaIdVal;
 
-                            setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
-                        } else {
-                            console.error('❌ Erro no bulk update:', error);
+                        // ✅ PAYLOAD MÍNIMO E SEGURO - Apenas colunas confirmadas que existem
+                        const payload = {
+                            motorista_id: motoristaIdParaBanco,
+                            status: statusValue,
+                            ordem_logistica: ordemSeq // 🔢 INT4 PURO
+                        };
+
+                        // 📝 LOG DE TIPO ANTES DO UPDATE
+                        console.log(`💡 Tentando gravar int4 na entrega ${pedido.id}:`, typeof payload.ordem_logistica, payload.ordem_logistica);
+
+                        // ✅ HARDENING: Garantir que o ID da entrega seja coerente (parseInt se for numérico)
+                        const targetId = !isNaN(parseInt(pedido.id, 10)) && !String(pedido.id).includes('-')
+                            ? parseInt(pedido.id, 10)
+                            : pedido.id;
+
+                        const { error } = await sb.from('entregas').update(payload).eq('id', targetId);
+                        if (error) {
+                            updErr = error;
+                            console.error(`❌ Erro ao salvar entrega ${pedido.id}:`, error);
+                            break;
                         }
-                    } else {
-                        // Fallback: update one by one
-                        for (const id of assignedIds) {
-                            try {
-                                const { error } = await sb.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
-                                if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
-                            } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
-                        }
-                        if (!updErr) setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
                     }
                 } catch (err) {
                     updErr = err;
-                    console.error('Erro ao tentar atualizar entregas (bulk ou individual):', err && err.message ? err.message : err);
+                    console.error('Erro ao tentar atualizar entregas individualmente:', err);
                 }
 
-                // Update local rotaOtimizada objects with ordem for UI only
+                // Update local objects for UI
                 for (let i = 0; i < rotaOtimizada.length; i++) {
                     const pedido = rotaOtimizada[i];
-                    const pid = pedido.id;
-                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_logistica: i + 1, motorista_id: motoristaIdVal, id: pid };
+                    rotaOtimizada[i] = { ...pedido, ordem_logistica: parseInt(i + 1, 10), motorista_id: motoristaIdVal };
                 }
 
-                // Update estimated distance (after assignment)
-                try {
-                    const originForCalc = mapCenterState || pontoPartida || DEFAULT_MAP_CENTER;
-                    const dist = computeRouteDistanceKm(originForCalc, rotaOtimizada, originForCalc);
-                    setEstimatedDistanceKm(Number(dist.toFixed(1)));
-                } catch (e) { /* ignore */ }
-
-                // Only close modal and clear selection if update succeeded
+                // Somente encerra se a gravação no banco foi 100% OK
                 if (!updErr) {
-                    console.log('✅ Bulk update bem-sucedido - sincronizando estado local...');
-                    // Forçar atualização do estado local IMEDIATAMENTE
-                    setEntregasEmEspera(prev => {
-                        const updated = prev.filter(p => !assignedIdsStr.includes(String(p.id)));
-                        console.log(`🔄 Estado local atualizado: ${prev.length} → ${updated.length} entregas`);
-                        return updated;
-                    });
+                    console.log('✅ Todas as entregas gravadas com sucesso!');
+                    setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
                     setShowDriverSelect(false);
                     setSelectedMotorista(null);
                 } else {
-                    console.error('❌ Bulk update falhou - mantendo modal aberto');
-                    alert('❌ Erro ao atualizar entregas no banco de dados. Verifique a conexão e tente novamente.');
+                    console.error('❌ Falha na gravação total das entregas - cancelando envio.');
+                    alert('❌ Erro: Falha ao salvar a sequência logística. O envio foi interrompido para evitar erros na lista do motorista.');
                     setDispatchLoading(false);
                     return;
                 }
             }
-            // Persist ordem_logistica per entrega (cada pedido precisa da sua ordem específica)
-            try {
-                for (let i = 0; i < rotaOtimizada.length; i++) {
-                    const pid = rotaOtimizada[i].id;
-                    if (pid === undefined || pid === null) continue;
-                    try {
-                        const { error: ordErr } = await sb.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                        if (ordErr) {
-                            console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
-                        } else {
-                            console.log(`✅ Ordem ${i + 1} atribuída à entrega ${pid}`);
-                        }
-                    } catch (e) {
-                        console.error('Erro na requisição ordem_logistica:', e && e.message);
-                    }
-                }
-            } catch (e) { /* non-blocking */ }
-
             // NOTIFICAR MOTORISTA: usar tabela motoristas em vez de broadcast (mais confiável)
             if (!sb || typeof sb.from !== 'function') {
                 console.error('❌ Supabase não disponível para notificação');
@@ -2896,7 +2862,7 @@ function App() {
                             endereco: e.endereco,
                             lat: e.lat,
                             lng: e.lng,
-                            ordem: idx + 1,
+                            ordem_logistica: idx + 1,
                             tipo: e.tipo,
                             status: 'em_rota'
                         })),
@@ -3037,6 +3003,23 @@ function App() {
                         opacity: 1;
                         transform: translateY(0);
                     }
+                }
+
+                .btn-sidebar-glow {
+                    position: relative;
+                    transition: all 0.3s ease;
+                    border: 1px solid rgba(59, 130, 246, 0.2) !important;
+                }
+
+                .btn-sidebar-glow:hover {
+                    box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+                    transform: translateY(-2px);
+                    background: rgba(59, 130, 246, 0.2) !important;
+                    border-color: rgba(59, 130, 246, 0.5) !important;
+                }
+
+                .btn-sidebar-glow:active {
+                    transform: translateY(0);
                 }
                 
                 /* CSS do botão ADICIONAR À LISTA */
@@ -3215,7 +3198,7 @@ function App() {
                                                 <Marker
                                                     key={`${entrega.id}-${entrega.status}`} // Chave composta para forçar render imediato (Realtime)
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
-                                                    icon={createPinIcon(tipo, status, entrega.observacoes)}
+                                                    icon={createPinIcon(tipo, status, num)}
                                                     draggable={false}
                                                 >
                                                     <Tooltip permanent direction="top" offset={[0, -42]} className="pin-tooltip" opacity={0.98}>
@@ -3272,7 +3255,7 @@ function App() {
                                                 <Marker
                                                     key={`${entrega.id}-${entrega.status}`} // Chave composta para forçar render imediato (Realtime)
                                                     position={[Number(entrega.lat), Number(entrega.lng)]}
-                                                    icon={createPinIcon(tipo, status, entrega.observacoes)}
+                                                    icon={createPinIcon(tipo, status, num)}
                                                     draggable={false}
                                                 >
                                                     <Tooltip permanent direction="top" offset={[0, -42]} className="pin-tooltip" opacity={0.98}>
@@ -3335,23 +3318,29 @@ function App() {
                                         🚲
                                     </button>
                                 </div>
-                                <div style={{ display: 'flex', gap: '8px', marginBottom: '15px', height: '42px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '15px' }}>
                                     <button
                                         onClick={() => setShowHistory(true)}
                                         className="btn-sidebar-glow"
-                                        style={{ flex: 1, background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
+                                        style={{ height: '42px', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
                                     >
                                         📜 Históricos
+                                    </button>
+                                    <button
+                                        onClick={otimizarTodasAsRotas}
+                                        className="btn-sidebar-glow"
+                                        style={{ height: '42px', background: 'rgba(139, 92, 246, 0.1)', color: '#a78bfa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase', border: '1px solid rgba(139, 92, 246, 0.2)' }}
+                                    >
+                                        ⚡ Reorganizar
                                     </button>
                                     <button
                                         onClick={() => {
                                             setIsFilteringRoute(!isFilteringRoute);
                                             if (typeof carregarDados === 'function') carregarDados();
-                                            console.log('📡 Atualização de cores (Check Rotas) disparada');
                                         }}
                                         className="btn-sidebar-glow"
                                         style={{
-                                            flex: 1,
+                                            height: '42px',
                                             background: isFilteringRoute ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.1)',
                                             color: isFilteringRoute ? '#4ade80' : '#60a5fa',
                                             borderRadius: '8px',
@@ -3359,10 +3348,10 @@ function App() {
                                             fontWeight: '800',
                                             cursor: 'pointer',
                                             textTransform: 'uppercase',
-                                            border: isFilteringRoute ? '1px solid #22c55e' : 'none'
+                                            border: isFilteringRoute ? '1px solid #22c55e' : '1px solid rgba(59, 130, 246, 0.2)'
                                         }}
                                     >
-                                        {isFilteringRoute ? '✔️ Rotas On' : '🚫 Check Rotas'}
+                                        ✔️ Check Rotas
                                     </button>
                                     <button
                                         onClick={(e) => {
@@ -3370,7 +3359,7 @@ function App() {
                                             if (typeof handleLimparConcluidos === 'function') { try { handleLimparConcluidos(e); } catch (err) { } }
                                         }}
                                         className="btn-sidebar-glow"
-                                        style={{ flex: 1, background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
+                                        style={{ height: '42px', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
                                     >
                                         🚫 Limpar
                                     </button>
@@ -3882,9 +3871,16 @@ function App() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
                             <h2>Fila de Preparação</h2>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <div>Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null && estimatedTimeText != null) ? `${estimatedDistanceKm} KM | ${estimatedTimeText}` : (distanceCalculating ? 'Calculando...' : 'Calculando...')}</span></div>
-                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px' }}>📜</button>
+                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ fontSize: '13px' }}>
+                                        🏁 <span style={{ opacity: 0.7 }}>DISTÂNCIA TOTAL:</span> <span style={{ color: theme.success, fontSize: '15px' }}>{totalDistanceFila} KM</span>
+                                    </div>
+                                    <div style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)' }}></div>
+                                    <div style={{ fontSize: '13px' }}>
+                                        ⏱️ <span style={{ opacity: 0.7 }}>PREVISÃO:</span> <span style={{ color: theme.primary, fontSize: '15px' }}>{estimatedDistanceKm != null ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'CALCULANDO...' : '---')}</span>
+                                    </div>
+
+                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px', marginLeft: '8px' }}>📜</button>
                                     {showLogsPopover && (
                                         <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
                                             <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
@@ -3900,13 +3896,25 @@ function App() {
                                     )}
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>
+                                    <button onClick={otimizarFilaDespacho} style={{ ...btnStyle(rotaOrganizada ? '#fbbf24' : '#f59e0b'), width: 'auto', border: rotaOrganizada ? 'none' : '2px solid #ffffff44' }}>
                                         🔄 REORGANIZAR ROTA
                                         {pendingRecalcCount > 0 && (
                                             <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
                                         )}
                                     </button>
-                                    <button onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} style={{ ...btnStyle(theme.success), width: 'auto' }}>ENVIAR ROTA</button>
+                                    <button 
+                                        disabled={!rotaOrganizada} 
+                                        onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} 
+                                        style={{ 
+                                            ...btnStyle(theme.success), 
+                                            width: 'auto', 
+                                            opacity: rotaOrganizada ? 1 : 0.5, 
+                                            filter: rotaOrganizada ? 'none' : 'grayscale(1)',
+                                            cursor: rotaOrganizada ? 'pointer' : 'not-allowed' 
+                                        }}
+                                    >
+                                        {rotaOrganizada ? '🚀 ENVIAR ROTA' : '🔒 BLOQUEADO'}
+                                    </button>
                                 </div>
                             </div>
                         </div>
