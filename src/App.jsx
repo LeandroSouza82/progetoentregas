@@ -5,6 +5,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import supabase, { subscribeToTable, onSupabaseReady, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, buscarTodasEntregas } from './supabaseClient';
 import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, getOSRMRoute } from './geoUtils';
+import HistoricoEntregas from './components/HistoricoEntregas';
 import {
     isValidSC,
     fetchPredictions as getMapboxPredictions,
@@ -344,6 +345,9 @@ function App() {
     const [entregas, setEntregas] = useState([]); // debug-visible entregas (sempre array)
     const [frota, setFrota] = useState([]); // agora vem de `motoristas`
     const [totalEntregas, setTotalEntregas] = useState(0);
+    const [historicoCompleto, setHistoricoCompleto] = useState([]);
+    const [showHistory, setShowHistory] = useState(false);
+    const [isFilteringRoute, setIsFilteringRoute] = useState(false);
     const DEBUG_FORCE_SHOW_ALL = true; // força mostrar tudo temporariamente (debug)
     const [avisos, setAvisos] = useState([]);
     const [gestorPhone, setGestorPhone] = useState(null);
@@ -1124,6 +1128,36 @@ function App() {
         setLoadingFrota(false);
     }, []);
 
+    // Função para buscar TODO o histórico do banco de dados (sem filtro de data)
+    const buscarHistoricoCompleto = React.useCallback(async () => {
+        const sb = supabaseRef.current || supabase;
+        if (!sb || typeof sb.from !== 'function') return;
+
+        try {
+            console.log('📜 Buscando histórico completo das entregas...');
+            const { data, error } = await sb
+                .from('entregas')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                console.error('❌ Erro ao buscar histórico completo:', error);
+            } else if (data) {
+                setHistoricoCompleto(data);
+                console.log(`✅ ${data.length} registros de histórico carregados.`);
+            }
+        } catch (e) {
+            console.error('❌ Erro inesperado ao buscar histórico:', e);
+        }
+    }, []);
+
+    // Atualizar histórico quando a gaveta for aberta
+    useEffect(() => {
+        if (showHistory) {
+            buscarHistoricoCompleto();
+        }
+    }, [showHistory, buscarHistoricoCompleto]);
+
     // Approve / Reject handlers for Gestão de Motoristas
     // New admin-facing approve by id
     const aprovarMotorista = async (id) => {
@@ -1442,7 +1476,7 @@ function App() {
                 Number.isFinite(Number(e.lat)) &&
                 Number.isFinite(Number(e.lng));
 
-            return ['em_rota', 'entregue', 'falha'].includes(status) && hasValidCoords;
+            return ['em_rota', 'entregue', 'falha', 'concluido', 'concluída'].includes(status) && hasValidCoords;
         });
     }, [rotaAtiva]);
 
@@ -1497,20 +1531,8 @@ function App() {
                     };
                     playSound();
 
-                    // LIMPEZA TOTAL: Zerar TODOS os estados
-                    console.log('🧽 LIMPEZA TOTAL: Zerando estados e localStorage');
-
-                    setEntregasEmEspera([]);
-                    setRotaAtiva([]);
-                    setMotoristaDaRota(null);
-
-                    // Limpar localStorage para evitar pinos fantasmas no refresh
-                    try {
-                        localStorage.removeItem('adecell_historico_entregas');
-                        console.log('✅ localStorage limpo');
-                    } catch (err) {
-                        console.warn('⚠️ Erro ao limpar localStorage:', err);
-                    }
+                    // Rota finalizada - Apenas manter os pinos cinzas/verdes conforme solicitado
+                    console.log('✅ Rota finalizada detectada. Mantendo pinos para visualização.');
 
                     // Marcar que áudio foi tocado para esta rota
                     rotaFinalizadaAudioTocadoRef.current = true;
@@ -1519,58 +1541,13 @@ function App() {
                 }
             }
 
-            // Limpar estado de rota ativa após 2 segundos
-            const timer = setTimeout(() => {
-                console.log('🧹 LIMPEZA FINAL: Removendo TODAS as entregas do mapa');
+            // AVISO: Auto-limpeza desativada a pedido do usuário. 
+            // Os pinos verdes agora permanecem no mapa. A limpeza deve ser manual no botão 'Limpar'.
+            console.log('✅ Rota concluída (Áudio tocado). Pinos permanecem visíveis.');
 
-                // Limpar TODOS os estados de entregas
-                setRotaAtiva([]);
-                setMotoristaDaRota(null);
-
-                // Resetar flag de áudio para próxima rota
-                rotaFinalizadaAudioTocadoRef.current = false;
-
-                // CRÍTICO: Garantir que entregasEmEspera não mantenha itens finalizados (verdes E vermelhos)
-                setEntregasEmEspera(prev => {
-                    // Remover TODAS as entregas que já foram concluídas (VERDES) ou falharam (VERMELHAS)
-                    const statusFinais = ['concluida', 'concluída', 'finalizada', 'entregue', 'concluido', 'falha', 'erro', 'cancelada', 'cancelado'];
-                    return prev.filter(e => {
-                        const status = String(e.status || '').toLowerCase().trim();
-                        return !statusFinais.includes(status);
-                    });
-                });
-
-                // Resetar zoom para visão geral
-                try {
-                    if (mapRef.current && mapRef.current._loaded) {
-                        // Centralizar no motorista se disponível, senão na cidade
-                        const motoristaOnline = frota.find(m => m.esta_online && m.lat && m.lng);
-                        if (motoristaOnline) {
-                            mapRef.current.setView(
-                                [Number(motoristaOnline.lat), Number(motoristaOnline.lng)],
-                                13,
-                                { animate: true }
-                            );
-                            console.log('📍 Mapa centralizado no motorista');
-                        } else {
-                            mapRef.current.setView(
-                                [mapCenterState.lat, mapCenterState.lng],
-                                13,
-                                { animate: true }
-                            );
-                            console.log('📍 Mapa centralizado na cidade');
-                        }
-                    }
-                } catch (e) {
-                    console.warn('Erro ao resetar mapa:', e);
-                }
-
-                console.log('✅ Mapa limpo e pronto para próxima rota!');
-            }, 2000); // 2 segundos de delay para feedback visual
-
-            return () => clearTimeout(timer);
+            return () => { }; // Removido o timer de limpeza automática
         }
-    }, [rotaFinalizada, frota, mapCenterState, rotaAtiva]); // Adicionar rotaAtiva como dependência
+    }, [rotaFinalizada, frota, mapCenterState, rotaAtiva]);
 
     // REMOVIDO: Ajuste automático de bounds (dependia do Google Maps LatLngBounds)
     // Com Leaflet, pode ser implementado usando map.fitBounds() se necessário
@@ -2170,39 +2147,40 @@ function App() {
     }, [supabaseConnectedLocal]);
 
     // Auto-zoom / fitBounds behavior for Leaflet Map when pontos mudam (only SC-valid points)
+    // ESTABILIZAÇÃO GURMET: Só dispara fitBounds se a contagem de pinos mudar significativamente
+    // ou se for o primeiro carregamento da rota. Evita o bug de "pular na bike".
+    const lastPinsCountRef = useRef(0);
     useEffect(() => {
-        // 1. BLINDAGEM DO LEAFLET (Evita erro _leaflet_pos undefined)
-        // Só continua se mapRef existe E tem método getPane (garantia de inicialização)
         if (!mapRef.current || typeof mapRef.current.getPane !== 'function') return;
-
         const map = mapRef.current;
+        if (!map._loaded) return;
 
-        // Garantir que o mapa está pronto antes de comandos
-        if (!map._loaded) {
+        const pinsDeliveries = (orderedRota || []).filter(p => isValidSC(Number(p.lat), Number(p.lng))).map(p => [Number(p.lat), Number(p.lng)]);
+        const motoCoords = (frota || []).filter(m => m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(m => [Number(m.lat), Number(m.lng)]);
+
+        const todosOsPontos = [...pinsDeliveries, ...motoCoords];
+
+        // Se não mudou o número de entregas, não pula a câmera (evita jitter/jump ao atualizar GPS)
+        if (pinsDeliveries.length === lastPinsCountRef.current && pinsDeliveries.length > 0) {
             return;
         }
 
-        const pontos = [
-            ...orderedRota.filter(p => isValidSC(Number(p.lat), Number(p.lng))).map(p => [Number(p.lat), Number(p.lng)]),
-            ...((frota || []).filter(m => m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(m => [Number(m.lat), Number(m.lng)]))
-        ].filter(pt => pt && pt.length >= 2 && !isNaN(Number(pt[0])) && !isNaN(Number(pt[1])));
+        lastPinsCountRef.current = pinsDeliveries.length;
 
-        if (!pontos || pontos.length === 0) {
-            try {
-                map.setView([DEFAULT_MAP_CENTER.lat, DEFAULT_MAP_CENTER.lng], 12, { animate: true });
-            } catch (e) { } // Ignore center errors
+        if (todosOsPontos.length === 0) return;
+
+        // Se SÓ houver moto (sem entregas), NÃO pula nela (mantém o contexto)
+        if (pinsDeliveries.length === 0) {
+            console.log('ℹ️ Estabilização: Apenas moto detectada, mantendo câmera fixa.');
             return;
         }
 
-        // Usar Leaflet LatLngBounds (não Google Maps)
         try {
-            const bounds = L.latLngBounds(pontos);
+            const bounds = L.latLngBounds(todosOsPontos);
             if (bounds.isValid()) {
                 map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
             }
-        } catch (e) {
-            /* Silently ignore errors - resilience first */
-        }
+        } catch (e) { }
     }, [orderedRota, frota]);
 
     // Remover motoristas sem atualização há mais de 2 minutos (evita 'fantasmas')
@@ -3130,29 +3108,6 @@ function App() {
                         <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <button
-                            onClick={() => {
-                                console.log('🔄 Sincronização manual do mapa solicitada');
-                                carregarDados();
-                                alert('✅ Mapa sincronizado com o banco de dados!');
-                            }}
-                            style={{
-                                padding: '8px 16px',
-                                borderRadius: '8px',
-                                border: '1px solid rgba(59, 130, 246, 0.4)',
-                                background: 'rgba(59, 130, 246, 0.1)',
-                                color: '#3B82F6',
-                                cursor: 'pointer',
-                                fontWeight: '600',
-                                fontSize: '13px',
-                                transition: 'all 0.2s ease'
-                            }}
-                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.2)'}
-                            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(59, 130, 246, 0.1)'}
-                            title="Forçar sincronização dos status do banco de dados"
-                        >
-                            🔄 Sincronizar Mapa
-                        </button>
                         <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                         <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
                     </div>
@@ -3224,8 +3179,7 @@ function App() {
 
                                         {/* Entregas em espera (pendentes) */}
                                         {(() => {
-                                            if (filterStatus === 'OK' || filterStatus === 'FAIL') return []; // Filtro cirúrgico do Dashboard
-
+                                            // REMOVIDO: Filtro por filterStatus para garantir que pinos não somam ao mudar visão do Dashboard
                                             const statusInvalidos = ['arquivado', 'cancelada', 'cancelado'];
                                             const todayStr = new Date().toDateString(); // Data de hoje local
 
@@ -3369,27 +3323,57 @@ function App() {
                         {/* INFO LATERAL */}
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '25px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '15px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <h3 style={{ margin: 0, color: theme.textMain, fontSize: '16px' }}>Status da Operação</h3>
-                                    <div style={{ display: 'flex', gap: '5px' }}>
-                                        <button
-                                            onClick={gerarEntregaTeste}
-                                            style={{ background: '#4f46e5', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' }}
-                                            title="Gerar entrega teste (Leandro)"
-                                        >
-                                            🚲 Teste
-                                        </button>
-                                        <button
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                // Limpa da visão local os que já foram arquivados (concluidos ou falhas)
-                                                if (typeof handleLimparConcluidos === 'function') { try { handleLimparConcluidos(e); } catch (err) { } }
-                                            }}
-                                            style={{ background: '#334155', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' }}
-                                        >
-                                            🧹 Limpar
-                                        </button>
-                                    </div>
+                                <div style={{ position: 'relative', marginBottom: '10px', textAlign: 'center' }}>
+                                    <h3 style={{ margin: 0, color: theme.textMain, fontSize: '15px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }}>STATUS DA OPERAÇÃO</h3>
+                                    <button
+                                        onClick={gerarEntregaTeste}
+                                        style={{ position: 'absolute', right: -10, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', fontSize: '14px', cursor: 'pointer', opacity: 0.5, transition: 'opacity 0.2s' }}
+                                        title="Gerar entrega teste (Leandro)"
+                                        onMouseEnter={(e) => e.target.style.opacity = 1}
+                                        onMouseLeave={(e) => e.target.style.opacity = 0.5}
+                                    >
+                                        🚲
+                                    </button>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px', marginBottom: '15px', height: '42px' }}>
+                                    <button
+                                        onClick={() => setShowHistory(true)}
+                                        className="btn-sidebar-glow"
+                                        style={{ flex: 1, background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
+                                    >
+                                        📜 Históricos
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setIsFilteringRoute(!isFilteringRoute);
+                                            if (typeof carregarDados === 'function') carregarDados();
+                                            console.log('📡 Atualização de cores (Check Rotas) disparada');
+                                        }}
+                                        className="btn-sidebar-glow"
+                                        style={{
+                                            flex: 1,
+                                            background: isFilteringRoute ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.1)',
+                                            color: isFilteringRoute ? '#4ade80' : '#60a5fa',
+                                            borderRadius: '8px',
+                                            fontSize: '10px',
+                                            fontWeight: '800',
+                                            cursor: 'pointer',
+                                            textTransform: 'uppercase',
+                                            border: isFilteringRoute ? '1px solid #22c55e' : 'none'
+                                        }}
+                                    >
+                                        {isFilteringRoute ? '✔️ Rotas On' : '🚫 Check Rotas'}
+                                    </button>
+                                    <button
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            if (typeof handleLimparConcluidos === 'function') { try { handleLimparConcluidos(e); } catch (err) { } }
+                                        }}
+                                        className="btn-sidebar-glow"
+                                        style={{ flex: 1, background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
+                                    >
+                                        🚫 Limpar
+                                    </button>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: '10px' }}>
                                     {/* Botão TOTAL */}
@@ -4131,6 +4115,14 @@ function App() {
                 setSelectedMotorista={setSelectedMotorista}
                 theme={theme}
                 loading={dispatchLoading}
+            />
+
+            {/* Renderizar o Componente de Histórico Profissional */}
+            <HistoricoEntregas
+                isOpen={showHistory}
+                onClose={() => setShowHistory(false)}
+                entregas={historicoCompleto}
+                theme={theme}
             />
         </div>
     );
