@@ -114,19 +114,19 @@ export async function geocodePhoton(address) {
         const b = DEFAULT_BOUNDS;
         const bbox = `${b.west},${b.south},${b.east},${b.north}`;
         const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(address)}&bbox=${bbox}&limit=1&lang=pt`;
-        
+
         const response = await fetch(url);
         if (!response.ok) return null;
-        
+
         const data = await response.json();
         if (!data || !data.features || data.features.length === 0) return null;
-        
+
         const result = data.features[0];
         const lat = result.geometry.coordinates[1];
         const lng = result.geometry.coordinates[0];
-        
+
         if (!isValidSC(lat, lng)) return null;
-        
+
         return { lat, lng, display_name: result.properties.name || address };
     } catch (e) { return null; }
 }
@@ -139,18 +139,55 @@ export async function geocodeNominatim(address) {
         const b = DEFAULT_BOUNDS;
         const viewbox = `${b.west},${b.south},${b.east},${b.north}`;
         const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&viewbox=${viewbox}&bounded=1&limit=1`;
-        
+
         const response = await fetch(url, { headers: { 'User-Agent': 'Adecell_Logistica_v2' } });
         if (!response.ok) return null;
-        
+
         const data = await response.json();
         if (!data || data.length === 0) return null;
-        
+
         const lat = parseFloat(data[0].lat);
         const lng = parseFloat(data[0].lon);
-        
+
         if (!isValidSC(lat, lng)) return null;
-        
+
         return { lat, lng, display_name: data[0].display_name };
     } catch (e) { return null; }
+}
+
+/**
+ * UTILIDADES GEOGR�FICAS
+ */
+
+export function haversineKm(a, b) {
+    if (!a || !b) return 0;
+    const toRad = (deg) => deg * Math.PI / 180;
+    const R = 6371; // Earth radius in km
+    const dLat = toRad(Number(b.lat || 0) - Number(a.lat || 0));
+    const dLon = toRad(Number(b.lng || 0) - Number(a.lng || 0));
+    const lat1 = toRad(Number(a.lat || 0));
+    const lat2 = toRad(Number(b.lat || 0));
+    const sinHalf = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(sinHalf), Math.sqrt(1 - sinHalf));
+    return R * c;
+}
+
+export function computeRouteDistanceKm(origin, list = [], base = null) {
+    try {
+        const pts = [];
+        if (origin && origin.lat != null && origin.lng != null) pts.push({ lat: Number(origin.lat), lng: Number(origin.lng) });
+        (list || []).forEach(p => { if (p && p.lat != null && p.lng != null) pts.push({ lat: Number(p.lat), lng: Number(p.lng) }); });
+        if (base && base.lat != null && base.lng != null) pts.push({ lat: Number(base.lat), lng: Number(base.lng) });
+        if (pts.length < 2) return 0;
+        let sum = 0;
+        for (let i = 1; i < pts.length; i++) sum += haversineKm(pts[i - 1], pts[i]);
+        return sum;
+    } catch (e) { return 0; }
+}
+
+/**
+ * LIMPEZA LOCAL: Funcionalidade migrada para o estado interno do Dashboard
+ */
+export async function arquivarEntregasConcluidas(supabaseClient, ids = []) {
+    return { success: true, count: ids.length };
 }
