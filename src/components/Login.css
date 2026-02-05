@@ -1,0 +1,421 @@
+/* ===================================
+   RESET GLOBAL - Elimina espaços vazios
+   =================================== */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow-x: hidden;
+}
+
+/* ===================================
+   LOGIN CONTAINER - Fundo em Tela Cheia
+   =================================== */
+.login-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    min-height: 100vh;
+    margin: 0;
+    padding: 1.5rem;
+    background-image: url('/assets/bg-login.jpg.jpeg');
+    background-size: cover !important;
+    background-position: center !important;
+    background-repeat: no-repeat;
+    background-color: #1a3a5c;
+    /* Fallback */
+    overflow: hidden;
+}
+
+/* ===================================
+   OVERLAY ESCURO - Contraste
+   =================================== */
+.login-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.6);
+    /* Overlay escuro 60% */
+    z-index: 1;
+}
+
+/* ===================================
+   CARD DE LOGIN - Centralizado (Glassmorphism Premium)
+   =================================== */
+.login-card {
+    position: relative !important;
+    z-index: 2 !important;
+    background: rgba(255, 255, 255, 0.2) !important;
+    /* Vidro fosco */
+    -webkit-backdrop-filter: blur(15px) !important;
+    /* Safari */
+    backdrop-filter: blur(15px) !important;
+    /* Efeito de vidro fosco */
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2) inset !important;
+    padding: 2.5rem 2rem !important;
+    width: 100% !important;
+    max-width: 400px !important;
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+    text-align: center !important;
+}
+
+/* ===================================
+   LOGO - Topo do Card
+   =================================== */
+.login-logo {
+    width: 100%;
+    max-width: 200px;
+    display: block;
+    margin: 0 auto 1.5rem;
+    height: auto;
+    object-fit: contain;
+}
+
+/* ===================================
+   HEADER - Título e Slogan
+   =================================== */
+.login-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.login-title {
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    color: #ffffff !important;
+    /* Branco para contraste no vidro fosco */
+    margin: 0 0 0.5rem 0 !important;
+    letter-spacing: -0.5px !important;
+    text-shadow: 0 3px 6px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.6) !important;
+    /* Sombra escura forte */
+}
+
+.login-slogan {
+    font-size: 0.9375rem !important;
+    color: #f3f4f6 !important;
+    /* Cinza muito claro */
+    margin: 0 !important;
+    font-weight: 500 !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.7) !important;
+}
+
+/* ===================================
+   MENSAGEM DE ERRO
+   =================================== */
+.login-error {
+    background-color: #fee2e2;
+    border: 1px solid #fca5a5;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
+    text-align: left;
+}
+
+.login-error span {
+    color: #dc2626;
+    font-size: 0.875rem;
+    font-weight: 500;
+    display: block;
+    line-height: 1.5;
+}
+
+/* ===================================
+   MENSAGEM DE SUCESSO
+   =================================== */
+.login-success {
+    background-color: rgba(16, 185, 129, 0.2) !important;
+    border: 1px solid rgba(16, 185, 129, 0.4) !important;
+    border-radius: 8px !important;
+    padding: 0.75rem 1rem !important;
+    margin-bottom: 1.5rem !important;
+    text-align: center !important;
+}
+
+.login-success span {
+    color: #ffffff !important;
+    font-size: 0.875rem !important;
+    font-weight: 600 !important;
+    display: block !important;
+    line-height: 1.5 !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6) !important;
+}
+
+/* ===================================
+   FORMULÁRIO - Inputs e Campos
+   =================================== */
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    text-align: left;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.form-group label {
+    font-size: 0.875rem !important;
+    font-weight: 700 !important;
+    /* Negrito forte */
+    color: #ffffff !important;
+    /* Branco para alto contraste */
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6), 0 1px 2px rgba(0, 0, 0, 0.8) !important;
+    /* Sombra escura para destacar */
+    letter-spacing: 0.3px !important;
+}
+
+.form-input {
+    width: 100% !important;
+    padding: 0.875rem 1rem !important;
+    font-size: 1rem !important;
+    font-weight: 500 !important;
+    color: #000000 !important;
+    /* Texto preto para máximo contraste */
+    border: 2px solid #d1d5db !important;
+    border-radius: 8px !important;
+    transition: all 0.3s ease !important;
+    outline: none !important;
+    background-color: #ffffff !important;
+    /* Fundo branco sólido SEM transparência */
+    box-sizing: border-box !important;
+}
+
+.form-input:focus {
+    border: 2px solid #ff6b35 !important;
+    /* Borda laranja de 2px */
+    box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.25), 0 0 16px rgba(255, 107, 53, 0.4) !important;
+    /* Brilho laranja */
+    transform: translateY(-1px) !important;
+    background-color: #ffffff !important;
+    /* Forçar branco no foco também */
+}
+
+.form-input::placeholder {
+    color: #9ca3af !important;
+    font-weight: 400 !important;
+}
+
+/* ===================================
+   OPÇÕES - Lembrar-me e Esqueci Senha
+   =================================== */
+.form-options {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: -0.25rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.checkbox-label {
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    font-size: 0.875rem !important;
+    color: #ffffff !important;
+    /* Branco */
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6) !important;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    cursor: pointer;
+    accent-color: #1a3a5c;
+}
+
+.forgot-password {
+    font-size: 0.875rem !important;
+    color: #ffffff !important;
+    /* Branco */
+    text-decoration: none !important;
+    font-weight: 600 !important;
+    transition: color 0.3s ease !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6) !important;
+}
+
+.forgot-password:hover {
+    color: #ffd700 !important;
+    /* Amarelo dourado para melhor visibilidade */
+    text-decoration: underline !important;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8) !important;
+}
+
+/* ===================================
+   BOTÃO DE ENTRAR - Laranja Vibrante
+   =================================== */
+.login-button {
+    width: 100%;
+    padding: 1rem;
+    font-size: 1rem;
+    font-weight: 700;
+    /* Mais negrito */
+    color: #ffffff;
+    background: linear-gradient(135deg, #ff6b35 0%, #ff5722 100%);
+    /* Gradiente sólido */
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-top: 0.5rem;
+    box-shadow: 0 6px 16px rgba(255, 107, 53, 0.4), 0 2px 4px rgba(0, 0, 0, 0.1);
+    /* Sombra mais forte */
+}
+
+.login-button:hover:not(:disabled) {
+    background: linear-gradient(135deg, #ff5722 0%, #f4511e 100%);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(255, 107, 53, 0.5), 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.login-button:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 4px rgba(255, 107, 53, 0.2);
+}
+
+.login-button:disabled {
+    background-color: #fca5a5;
+    cursor: not-allowed;
+    opacity: 0.7;
+    transform: none;
+    box-shadow: none;
+}
+
+/* ===================================
+   FOOTER - Link de Cadastro
+   =================================== */
+.login-footer {
+    text-align: center !important;
+    margin-top: 1.5rem !important;
+    padding-top: 1.5rem !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.login-footer p {
+    font-size: 0.875rem !important;
+    color: #f3f4f6 !important;
+    /* Cinza muito claro */
+    margin: 0 !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6) !important;
+}
+
+.login-footer a {
+    color: #ffffff !important;
+    /* Branco */
+    font-weight: 600 !important;
+    text-decoration: none !important;
+    transition: color 0.3s ease !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6) !important;
+}
+
+.login-footer a:hover {
+    color: #ffd700 !important;
+    /* Amarelo dourado */
+    text-decoration: underline !important;
+}
+
+/* ===================================
+   RESPONSIVIDADE - Mobile
+   =================================== */
+
+/* Tablets */
+@media (max-width: 768px) {
+    .login-card {
+        padding: 2rem 1.5rem;
+        max-width: 450px;
+    }
+
+    .login-logo {
+        max-width: 170px;
+    }
+
+    .login-title {
+        font-size: 1.75rem;
+    }
+
+    .login-slogan {
+        font-size: 0.875rem;
+    }
+}
+
+/* Mobile Pequeno */
+@media (max-width: 480px) {
+    .login-container {
+        padding: 1rem;
+    }
+
+    .login-card {
+        padding: 1.75rem 1.25rem;
+        max-width: 100%;
+    }
+
+    .login-logo {
+        max-width: 150px;
+        margin-bottom: 1.25rem;
+    }
+
+    .login-title {
+        font-size: 1.5rem;
+    }
+
+    .login-slogan {
+        font-size: 0.8125rem;
+    }
+
+    .form-input {
+        padding: 0.75rem;
+        font-size: 0.9375rem;
+    }
+
+    .login-button {
+        padding: 0.875rem;
+    }
+
+    .form-options {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+/* Muito Pequeno */
+@media (max-width: 360px) {
+    .login-card {
+        padding: 1.5rem 1rem;
+    }
+
+    .login-logo {
+        max-width: 130px;
+    }
+
+    .login-title {
+        font-size: 1.375rem;
+    }
+}

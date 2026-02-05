@@ -1,5 +1,5 @@
 import sys
-# V10 Logística - Script de limpeza do App.jsx
+# V10 Delivery - Script de limpeza do App.jsx
 path = r'c:\progetoentregas\src\App.jsx'
 with open(path, 'r', encoding='utf-8') as f:
     content = f.read()

@@ -104,3 +104,14 @@ button:focus-visible {
 .pac-container * {
   box-sizing: border-box !important;
 }
+
+/* Animação de loading spinner */
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}

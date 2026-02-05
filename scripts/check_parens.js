@@ -1,4 +1,4 @@
-// V10 Logística - Script de validação de parênteses
+// V10 Delivery - Script de validação de parênteses
 const fs = require('fs');
 const content = fs.readFileSync('c:/progetoentregas/src/App.jsx', 'utf8');
 const lines = content.split('\n');

@@ -3,9 +3,12 @@ import { useRef, useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import supabase, { subscribeToTable, onSupabaseReady, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, buscarTodasEntregas } from './supabaseClient';
+import { supabase, subscribeToTable, onSupabaseReady, SUPABASE_READY, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, buscarTodasEntregas } from './supabaseClient';
 import { haversineDistance, nearestNeighborRoute, calculateTotalDistance, getOSRMRoute } from './geoUtils';
+
 import HistoricoEntregas from './components/HistoricoEntregas';
+import Login from './components/Login';
+import Cadastro from './components/Cadastro';
 import {
     isValidSC,
     fetchPredictions as getMapboxPredictions,
@@ -111,19 +114,21 @@ function createPinIcon(tipo, status, num = null) {
     });
 }
 
-// Ícone do motorista - LEANDRO (Bicicleta de Entrega)
+// Ícone do motorista - V10 Delivery (Motoquinha)
+// Arquivo localizado em: public/bicicleta-de-entrega.png
+// Caminho no Vite: /bicicleta-de-entrega.png (raiz do public)
 const bikeIcon = L.divIcon({
-    html: `<img src="/bicicleta-de-entrega.png" style="width: 45px; height: 45px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));" onerror="console.error('❌ Erro ao carregar imagem da moto: /bicicleta-de-entrega.png')" onload="console.log('✅ Imagem da moto carregada com sucesso')" />`,
+    html: `<img 
+        src="/bicicleta-de-entrega.png" 
+        alt="Motorista V10 Delivery" 
+        style="width: 45px; height: 45px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); display: block;" 
+        onerror="this.style.display='none'; console.error('[V10 Delivery] Erro ao carregar ícone do motorista');" 
+    />`,
     className: 'marker-motorista-limpo',
     iconSize: [45, 45],
-    iconAnchor: [22, 22],
-    popupAnchor: [0, -22]
+    iconAnchor: [22, 22], // Centro do ícone
+    popupAnchor: [0, -22] // Popup acima do ícone
 });
-
-// 🔍 DEBUG: Verificar se o ícone foi criado corretamente
-console.log('🏍️ Ícone da moto (bikeIcon) criado:', bikeIcon);
-console.log('📁 Caminho da imagem: /bicicleta-de-entrega.png');
-
 
 
 // Simple scheduler (DESABILITADO para evitar loops)
@@ -249,6 +254,234 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
 }, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme);
 
 function App() {
+    // Estados de autenticação e sessão (ORDEM IMPORTANTE: declarar antes de usar)
+    const [user, setUser] = useState(null); // Usuário autenticado
+    const [session, setSession] = useState(null); // Sessão do Supabase
+    const [sessionLoading, setSessionLoading] = useState(true); // Carregando sessão inicial
+    const [supabaseReady, setSupabaseReady] = useState(false); // Estado de conexão do Supabase
+
+    // Estado para controlar exibição da tela de cadastro
+    const [showCadastro, setShowCadastro] = useState(false); // Estado para tela de cadastro
+
+    // 🔧 PASSO 1: Monitorar estado da conexão do banco (executa primeiro)
+    React.useEffect(() => {
+        let mounted = true;
+        let checkInterval = null;
+
+        // Função para verificar se Supabase está pronto
+        const checkSupabaseConnection = () => {
+            // Verificar se já está pronto pela variável exportada
+            if (SUPABASE_READY && supabase && supabase.auth && typeof supabase.auth.getSession === 'function') {
+                if (mounted) {
+                    setSupabaseReady(true);
+                    if (checkInterval) clearInterval(checkInterval);
+                }
+                return true;
+            }
+            return false;
+        };
+
+        // Verificar imediatamente
+        if (!checkSupabaseConnection()) {
+            
+            // Registrar callback para ser notificado quando estiver pronto
+            onSupabaseReady(() => {
+                if (mounted) {
+                    setSupabaseReady(true);
+                    if (checkInterval) clearInterval(checkInterval);
+                }
+            });
+
+            // Polling de segurança (verificar a cada 500ms por até 20 segundos)
+            let attempts = 0;
+            const maxAttempts = 40; // 40 * 500ms = 20 segundos
+
+            checkInterval = setInterval(() => {
+                attempts++;
+
+                if (checkSupabaseConnection()) {
+                    clearInterval(checkInterval);
+                } else if (attempts >= maxAttempts) {
+                    console.error('❌ [V10 Delivery] Timeout: Banco não respondeu após 20 segundos');
+                    clearInterval(checkInterval);
+                    if (mounted) {
+                        // Mesmo sem banco, desbloquear para mostrar mensagem de erro
+                        setSupabaseReady(true);
+                    }
+                }
+            }, 500);
+        }
+
+        return () => {
+            mounted = false;
+            if (checkInterval) clearInterval(checkInterval);
+        };
+    }, []);
+
+    // 🔐 PASSO 2: Verificar sessão e configurar autenticação (só executa após banco estar pronto)
+    React.useEffect(() => {
+        // SÓ EXECUTAR quando Supabase estiver confirmado como pronto
+        if (!supabaseReady) {
+            return;
+        }
+
+        let subscription = null;
+        let mounted = true;
+
+        const initAuth = async () => {
+            try {
+                // 🛑 Atraso de Segurança para injeção completa do objeto
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                // ⚠️ Bypass: Tenta recuperar do escopo global se o import local falhar
+                let authClient = supabase?.auth;
+                if (!authClient && typeof window !== 'undefined' && window.supabase?.auth) {
+                    console.warn('⚠️ [V10 Delivery] Recuperando supabase.auth do escopo global');
+                    authClient = window.supabase.auth;
+                }
+
+                // ✅ VERIFICAÇÃO ROBUSTA: Se ainda não tiver Auth, tenta revalidar
+                if (!authClient || typeof authClient.getSession !== 'function') {
+                    console.warn('⚠️ [V10 Delivery] Auth incompleto. Revalidando conexão...');
+                    await checkSupabaseConnection();
+
+                    // Última tentativa de atribuição
+                    authClient = supabase?.auth || window.supabase?.auth;
+
+                    if (!authClient) {
+                        // Erro fatal claro para o desenvolvedor
+                        console.error('❌ [V10 Delivery] FALHA CRÍTICA: Supabase Auth não carregou.');
+                        console.error('Dica: Verifique se VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY estão no .env.local');
+
+                        // Mesmo falhando, libera a UI para não travar em tela branca (modo offline)
+                        if (mounted) setSessionLoading(false);
+                        return;
+                    }
+                }
+
+                // ✅ PRIORIDADE DE SESSÃO: Verificar sessão existente ANTES de mostrar Login
+                console.log('🔍 [V10 Delivery] Verificando sessão existente...');
+                const { data: { session } } = await authClient.getSession();
+
+                if (!mounted) return;
+
+                if (session && session.user) {
+                    console.log('✅ [V10 Delivery] Sessão válida encontrada:', session.user.email);
+                    console.log('🚀 [V10 Delivery] Redirecionando direto para o mapa');
+                    setSession(session);
+                    setUser(session.user);
+                } else {
+                    console.log('ℹ️ [V10 Delivery] Nenhuma sessão válida - mostrando login');
+                    setSession(null);
+                    setUser(null);
+                }
+
+                // SÓ libera a tela após terminar a verificação de sessão
+                setSessionLoading(false);
+
+                // ✅ LISTENER ATIVO: Observar mudanças de autenticação
+                const { data: { subscription: authSubscription } } = authClient.onAuthStateChange((_event, newSession) => {
+                    if (!mounted) return;
+
+                    console.log('🔄 [V10 Delivery] Auth state changed:', _event);
+
+                    // Atualizar estados apenas se houver mudança real
+                    if (_event === 'SIGNED_IN' && newSession && newSession.user) {
+                        console.log('✅ [V10 Delivery] Login detectado:', newSession.user.email);
+                        setSession(newSession);
+                        setUser(newSession.user);
+                    } else if (_event === 'SIGNED_OUT') {
+                        console.log('🚪 [V10 Delivery] Logout detectado');
+                        setSession(null);
+                        setUser(null);
+                    } else if (_event === 'TOKEN_REFRESHED' && newSession) {
+                        console.log('🔄 [V10 Delivery] Token atualizado');
+                        setSession(newSession);
+                        setUser(newSession.user);
+                    }
+                });
+
+                subscription = authSubscription;
+            } catch (error) {
+                console.error('❌ [V10 Delivery] Erro ao inicializar autenticação:', error);
+                if (mounted) setSessionLoading(false);
+            }
+        };
+
+        initAuth();
+
+        return () => {
+            mounted = false;
+            if (subscription) {
+                subscription.unsubscribe();
+            }
+        };
+    }, [supabaseReady]); // ✅ Dependência: só executa quando supabaseReady mudar para true
+
+    // 🚪 Função de logout
+    const handleLogout = async () => {
+        try {
+            if (!supabase || !supabase.auth) {
+                console.warn('⚠️ Supabase não disponível para logout');
+                // Limpar estados locais de qualquer forma
+                setUser(null);
+                setSession(null);
+                setShowCadastro(false);
+                return;
+            }
+
+            const { error } = await supabase.auth.signOut();
+            if (error) throw error;
+
+            // Limpar estados locais
+            setUser(null);
+            setSession(null);
+            setShowCadastro(false);
+
+            console.log('✅ Logout realizado com sucesso');
+        } catch (error) {
+            console.error('❌ Erro ao fazer logout:', error);
+            alert('Erro ao sair: ' + error.message);
+        }
+    };
+
+    // 👤 Efeito: Buscar Nome do Perfil na tabela profiles
+    React.useEffect(() => {
+        const fetchProfileName = async () => {
+            if (!user) {
+                setPrimeiroNome(null);
+                return;
+            }
+
+            try {
+                // Tentar buscar na tabela profiles
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('full_name')
+                    .eq('id', user.id)
+                    .single();
+
+                if (data && data.full_name) {
+                    // Lógica para extrair apenas o primeiro nome
+                    const nome = data.full_name.trim().split(' ')[0];
+                    // Capitalizar a primeira letra para ficar bonito
+                    const nomeFormatado = nome.charAt(0).toUpperCase() + nome.slice(1).toLowerCase();
+                    setPrimeiroNome(nomeFormatado);
+                } else {
+                    // Fallback: usar parte do email
+                    const emailPart = user.email ? user.email.split('@')[0] : 'Administrador';
+                    setPrimeiroNome(emailPart.charAt(0).toUpperCase() + emailPart.slice(1));
+                }
+            } catch (err) {
+                console.error('Erro ao buscar perfil:', err);
+                // Fallback de segurança
+                setPrimeiroNome('Administrador');
+            }
+        };
+
+        fetchProfileName();
+    }, [user]);
+
     // Estados principais
     const [loadingFrota, setLoadingFrota] = useState(false);
     const [darkMode, setDarkMode] = useState(true);
@@ -565,6 +798,7 @@ function App() {
     const [avisos, setAvisos] = useState([]);
     const [gestorPhone, setGestorPhone] = useState(null);
     const [nomeGestor, setNomeGestor] = useState(null);
+    const [primeiroNome, setPrimeiroNome] = useState(null); // Novo estado para nome do perfil
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [isGeocoding, setIsGeocoding] = useState(false); // Estado de loading para geocodificação
@@ -785,8 +1019,6 @@ function App() {
 
     const [historicoFilter, setHistoricoFilter] = useState(''); // Filtro de pesquisa do histórico
     const [allEntregas, setAllEntregas] = useState([]); // raw entregas from DB (no filters)
-    const [user, setUser] = useState(null);
-    const [session, setSession] = useState(null);
     const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
     const rotaFinalizadaAudioTocadoRef = useRef(false); // Flag para garantir execução única do áudio
@@ -803,7 +1035,7 @@ function App() {
                 // Limitar a 15 endereços mais recentes para não sobrecarregar
                 const limited = recentList.slice(0, 15);
                 localStorage.setItem('adecell_historico_entregas', JSON.stringify(limited));
-                console.log('💾 Histórico sincronizado com localStorage:', limited.length, 'itens');
+                // Log removido para limpar console
             } catch (err) {
                 console.warn('⚠️ Erro ao sincronizar histórico com localStorage:', err);
             }
@@ -1197,14 +1429,19 @@ function App() {
     };
 
     const carregarDados = React.useCallback(async () => {
-        console.log('🔵 carregarDados CHAMADO - hasLoadedOnce:', hasLoadedOnce.current);
         // MODIFICADO: permitir carregar pelo menos 1 vez, mas não bloquear completamente
         // O useEffect inicial já carrega via buscarTodasEntregas, mas este pode ser chamado para refresh
 
-        // If module-level client is not ready yet, DO NOT register callback (prevents recursion)
-        if (!supabaseRef.current || typeof supabaseRef.current.from !== 'function') {
-            console.log('❌ carregarDados ABORTADO - supabase não pronto');
-            return;
+        // Aguardar inicialização do Supabase com timeout
+        const MAX_WAIT_MS = 3000;
+        const startTime = Date.now();
+
+        while (!supabaseRef.current || typeof supabaseRef.current.from !== 'function') {
+            if (Date.now() - startTime > MAX_WAIT_MS) {
+                console.warn('⚠️ [V10 Delivery] Timeout aguardando cliente Supabase - modo OFFLINE');
+                return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
         // REMOVIDO: Guard supabaseConnectedLocal que estava bloqueando execução
         // use local ref for client
@@ -1780,13 +2017,13 @@ function App() {
         // TRAVA CRÍTICA: NÃO executar durante carregamento inicial (refresh)
         // Só permitir limpeza após dados terem sido carregados pelo menos uma vez
         if (!hasLoadedOnce.current) {
-            console.log('⚠️ Bloqueando limpeza de mapa - carregamento inicial ainda não completou');
+            // Log removido para limpar console
             return;
         }
 
         // TRAVA ADICIONAL: Só limpar se houver uma rota ativa (não limpar em dashboard vazio)
         if (!rotaAtiva || rotaAtiva.length === 0) {
-            console.log('⚠️ Bloqueando limpeza de mapa - sem rota ativa');
+            // Log removido para limpar console
             return;
         }
 
@@ -2960,7 +3197,7 @@ function App() {
 
         // BLINDAGEM: Não mexer na bicicleta do Leandro teste (ID 1)
         if (motoristaIdVal === '1') {
-            alert('🚫 O sistema Adecell protegeu a bicicleta do Leandro teste. Selecione outro motorista.');
+            alert('🚫 O sistema V10 Delivery protegeu a bicicleta do Leandro teste. Selecione outro motorista.');
             return;
         }
 
@@ -3301,6 +3538,62 @@ function App() {
         }
     } catch (e) { /* ignore */ }
 
+    // Mostrar loading enquanto verifica sessão
+    if (sessionLoading) {
+        return (
+            <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                height: '100vh',
+                background: 'linear-gradient(135deg, #1a3a5c 0%, #2d5a7b 100%)',
+                color: '#ffffff',
+                fontFamily: 'Inter, Roboto, sans-serif'
+            }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '18px', marginBottom: '20px' }}>Carregando...</div>
+                    <div style={{
+                        width: '40px',
+                        height: '40px',
+                        border: '4px solid rgba(255, 255, 255, 0.3)',
+                        borderTop: '4px solid #ff6b35',
+                        borderRadius: '50%',
+                        animation: 'spin 1s linear infinite',
+                        margin: '0 auto'
+                    }}></div>
+                </div>
+            </div>
+        );
+    }
+
+    // Renderizar tela de cadastro
+    if (showCadastro) {
+        return <Cadastro
+            onCadastroSuccess={async (user) => {
+                console.log('✅ Usuário cadastrado:', user?.email);
+                setShowCadastro(false);
+                // Não precisa carregar dados - o onAuthStateChange vai atualizar user/session
+            }}
+            onVoltarLogin={() => {
+                setShowCadastro(false);
+            }}
+        />;
+    }
+
+    // Renderizar tela de login se NÃO houver sessão válida
+    if (!session || !user) {
+        return <Login
+            onLoginSuccess={async (userData) => {
+                console.log('✅ Login realizado com sucesso:', userData?.email);
+                // O onAuthStateChange já vai atualizar user/session automaticamente
+                // Não precisa fazer nada aqui para evitar loops
+            }}
+            onIrParaCadastro={() => {
+                setShowCadastro(true);
+            }}
+        />;
+    }
+
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
             {/* Animação CSS para sugestão fuzzy search */}
@@ -3404,7 +3697,7 @@ function App() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                             <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1a365d,#f6ad55)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <h2 className="dashboard-title" style={{ margin: 0, fontSize: '22px', fontFamily: "Inter, Roboto, sans-serif", fontWeight: '700', background: 'linear-gradient(to right, #1a365d, #f6ad55)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 LOGÍSTICA</h2>
+                                <h2 className="dashboard-title" style={{ margin: 0, fontSize: '22px', fontFamily: "Inter, Roboto, sans-serif", fontWeight: '700', background: 'linear-gradient(to right, #1a365d, #f6ad55)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 DELIVERY</h2>
                                 <div style={{ fontSize: '13px', color: '#a9b8d3', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '8px' }} title="Motoristas online">Online: <strong style={{ color: '#60a5fa' }}>{motoristasOnlineCount}</strong></div>
                             </div>
                         </div>
@@ -3437,7 +3730,8 @@ function App() {
                         </div>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                             <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
-                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
+                            <button onClick={handleLogout} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,107,53,0.3)', background: 'rgba(255,107,53,0.1)', color: '#ff6b35', cursor: 'pointer', fontWeight: '600' }} title="Sair do sistema">Sair</button>
+                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {primeiroNome || 'Administrador'}</div>
                         </div>
                     </div>
                 </div>
@@ -3483,13 +3777,7 @@ function App() {
                                         {(() => {
                                             const motoristasOnline = (frota || []).filter(m => m.aprovado === true && m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng)));
 
-                                            // 🔍 DEBUG: Log total de motoristas online filtrados
-                                            console.log('🚛 Motoristas online no mapa:', motoristasOnline.length, motoristasOnline.map(m => ({
-                                                id: m.id,
-                                                nome: fullName(m),
-                                                lat: m.lat,
-                                                lng: m.lng
-                                            })));
+                                            // 🔍 DEBUG: Log total de motoristas online filtrados (REMOVIDO PARA LIMPEZA)
 
                                             return motoristasOnline.map(motorista => {
                                                 const lat = Number(motorista.lat);
@@ -3506,13 +3794,7 @@ function App() {
                                                     return null;
                                                 }
 
-                                                // 🔍 DEBUG: Log coordenadas do motorista sendo renderizado
-                                                console.log(`🏍️ Renderizando motorista ${fullName(motorista)}:`, {
-                                                    lat,
-                                                    lng,
-                                                    aprovado: motorista.aprovado,
-                                                    esta_online: motorista.esta_online
-                                                });
+                                                // 🔍 DEBUG: Log coordenadas do motorista sendo renderizado (REMOVIDO PARA LIMPEZA)
 
                                                 return (
                                                     <Marker
@@ -5349,4 +5631,6 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
     );
 }
 
+// Exportação padrão do componente V10 Delivery
+// Garante exportação default para evitar erro do Vite
 export default App;

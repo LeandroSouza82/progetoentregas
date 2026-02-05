@@ -1,81 +1,39 @@
-// Unified Supabase client (real or node-friendly mock)
-// - In browser: uses real @supabase/supabase-js client (env),
-// - In Node (when `localStorage` is polyfilled), uses an in-memory mock compatible with tests.
+import { createClient } from '@supabase/supabase-js';
 
-let supabase = null;
-let HAS_SUPABASE_CREDENTIALS = false;
-let subscribeToTable = null;
+// ==========================================
+// CONFIGURAÇÃO DE AMBIENTE
+// ==========================================
 
-// Connection state and diagnostics
-let SUPABASE_CONNECTED = false;
-let lastSupabaseError = null;
-const supabaseConnectedHandlers = [];
-function onSupabaseConnected(cb) {
-    if (typeof cb !== 'function') return;
-    if (SUPABASE_CONNECTED) {
-        try { setTimeout(cb, 0); } catch (e) { /* swallow */ }
-    } else {
-        supabaseConnectedHandlers.push(cb);
-    }
-}
-function _notifySupabaseConnected() {
-    SUPABASE_CONNECTED = true;
-    try { supabaseConnectedHandlers.forEach(fn => { try { fn(); } catch (e) { /* swallow */ } }); } catch (e) { }
-    supabaseConnectedHandlers.length = 0;
-}
+const isNode = typeof window === 'undefined';
 
-async function checkSupabaseConnection() {
-    // Returns { connected: boolean, error: any }
-    lastSupabaseError = null;
-    if (!supabase || typeof supabase.from !== 'function') {
-        lastSupabaseError = new Error('Supabase client is not initialized');
-        SUPABASE_CONNECTED = false;
-        return { connected: false, error: lastSupabaseError };
-    }
+// Credenciais (Fallback Hardcoded para garantir funcionamento se .env falhar)
+const HARDCODED_URL = 'https://uqxoadxqcwidxqsfayem.supabase.co';
+const HARDCODED_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxeG9hZHhxY3dpZHhxc2ZheWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxODksImV4cCI6MjA4NDAyMTE4OX0.q9_RqSx4YfJxlblPS9fwrocx3HDH91ff1zJvPbVGI8w';
+
+// Tentativa segura de ler env (Node compatible)
+const getEnv = (key) => {
     try {
-        const res = await supabase.from('entregas').select('id').limit(1);
-        if (res && res.error) {
-            lastSupabaseError = res.error;
-            SUPABASE_CONNECTED = false;
-            console.error('[supabaseClient] healthcheck error fetching entregas:', res.error);
-            return { connected: false, error: res.error };
+        if (!isNode && import.meta && import.meta.env) {
+            return import.meta.env[key];
         }
-        // success
-        SUPABASE_CONNECTED = true;
-        lastSupabaseError = null;
-        console.info('[supabaseClient] healthcheck OK. entregas sample count:', Array.isArray(res.data) ? res.data.length : 0);
-        try { _notifySupabaseConnected(); } catch (e) { }
-        return { connected: true, error: null };
-    } catch (e) {
-        lastSupabaseError = e;
-        SUPABASE_CONNECTED = false;
-        console.error('[supabaseClient] healthcheck failed with exception:', e);
-        return { connected: false, error: e };
-    }
-}
-function getLastSupabaseError() { return lastSupabaseError; }
+    } catch (e) { }
+    return null;
+};
 
-// Ready hook: callers can register to be notified when the Supabase client finishes initialization.
-let SUPABASE_READY = false;
-const supabaseReadyHandlers = [];
-function onSupabaseReady(cb) {
-    if (typeof cb !== 'function') return;
-    // Only invoke immediately when we truly have a ready supabase client
-    if (SUPABASE_READY && supabase && typeof supabase.from === 'function') {
-        try { setTimeout(() => cb(supabase), 0); } catch (e) { /* swallow */ }
-    } else {
-        supabaseReadyHandlers.push(cb);
-    }
-}
+const supabaseUrl = getEnv('VITE_SUPABASE_URL') || HARDCODED_URL;
+const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY') || HARDCODED_KEY;
 
-function _notifySupabaseReady() {
-    SUPABASE_READY = true;
-    try { supabaseReadyHandlers.forEach(fn => { try { fn(supabase); } catch (e) { /* swallow */ } }); } catch (e) { }
-    supabaseReadyHandlers.length = 0;
-}
+// ==========================================
+// INICIALIZAÇÃO DO CLIENTE
+// ==========================================
 
-// Node/mock path when running without window (test scripts set global.localStorage)
-if (typeof window === 'undefined') {
+let clientInstance = null;
+let hasCreds = false;
+let subscribeFn = null;
+
+if (isNode) {
+    console.log('[SUPABASE] Ambiente Node detectado. Carregando Mock...');
+    // --- MOCK LOGIC FOR NODE ---
     // minimal mock similar to motorista/src/supabaseClient.js
     function storageKey(table) { return `mock_${table}`; }
     function readTable(table) {
@@ -114,186 +72,133 @@ if (typeof window === 'undefined') {
         };
     }
 
-    // seed defaults for tests
-    if (!localStorage.getItem(storageKey('frota'))) {
-        writeTable('frota', [{ id: 1, nome: 'Carlos Oliveira', status: 'Online', veiculo: 'Fiorino', placa: 'ABC-1234', fone: '5511999990000' }]);
+    // seed defaults for tests if localStorage exists (Node with polyfill)
+    if (typeof localStorage !== 'undefined') {
+        if (!localStorage.getItem(storageKey('frota'))) {
+            writeTable('frota', [{ id: 1, nome: 'Carlos Oliveira', status: 'Online', veiculo: 'Fiorino', placa: 'ABC-1234', fone: '5511999990000' }]);
+        }
     }
-    if (!localStorage.getItem(storageKey('entregas'))) { writeTable('entregas', []); }
-    if (!localStorage.getItem(storageKey('logs_roteirizacao'))) { writeTable('logs_roteirizacao', []); }
 
-    supabase = { from(table) { return createQuery(table); } };
-    HAS_SUPABASE_CREDENTIALS = false;
+    clientInstance = { from(table) { return createQuery(table); }, auth: { getSession: () => Promise.resolve({ data: { session: null } }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => { } } } }) } };
+    hasCreds = false;
 
-    // Mark ready in the mock path so any registered handlers run in tests
-    try { _notifySupabaseReady(); } catch (e) { }
-
-    subscribeToTable = function (table, handler, opts = {}) {
-        const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 200;
-        let last = JSON.stringify(readTable(table));
-        const interval = setInterval(() => {
-            const curr = JSON.stringify(readTable(table));
-            if (curr !== last) {
-                last = curr;
-                try { handler({ data: JSON.parse(curr) }); } catch (e) { /* swallow */ }
-            }
-        }, pollMs);
-        return () => clearInterval(interval);
+    subscribeFn = function (table, handler, opts = {}) {
+        return () => { };
     };
 
 } else {
-    // Browser / real Supabase path
-    // Use dynamic import without top-level await to stay compatible with build targets.
-    import('@supabase/supabase-js').then(({ createClient }) => {
-        try {
-            // 🎯 VITE: Usar APENAS import.meta.env (process.env NÃO funciona na Vercel/Vite)
-            const supabaseUrl = import.meta?.env?.VITE_SUPABASE_URL;
-            const supabaseAnonKey = import.meta?.env?.VITE_SUPABASE_ANON_KEY;
+    // --- BROWSER / REAL CLIENT ---
+    console.log('[SUPABASE] Inicializando cliente real...');
 
-            // 🔍 DIAGNÓSTICO: Verificar quais variáveis estão disponíveis
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('🔧 SUPABASE CLIENT - Verificando credenciais...');
-            console.log('📋 Runtime:', typeof import.meta !== 'undefined' ? 'Vite/Browser' : 'Node');
-            console.log('📋 import.meta.env disponível:', import.meta?.env ? 'SIM' : 'NÃO');
-            console.log('📋 VITE_SUPABASE_URL:', supabaseUrl ? `✅ ${supabaseUrl.substring(0, 30)}...` : '❌ AUSENTE');
-            console.log('📋 VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? `✅ ${supabaseAnonKey.substring(0, 20)}...` : '❌ AUSENTE');
+    if (!supabaseUrl || !supabaseAnonKey) {
+        console.error('❌ [V10 Delivery] FALHA CRÍTICA: URL ou Key do Supabase ausentes.');
+        clientInstance = null;
+    } else {
+        clientInstance = createClient(supabaseUrl, supabaseAnonKey);
+        hasCreds = true;
 
-            // ⚠️ VALIDAÇÃO RIGOROSA
-            if (!supabaseUrl) {
-                console.error('❌ ERRO CRÍTICO: VITE_SUPABASE_URL não está definido!');
-                console.error('📋 Na Vercel: Vá em Settings → Environment Variables → Adicione VITE_SUPABASE_URL');
-                console.error('📋 Localmente: Verifique se .env.local existe e contém: VITE_SUPABASE_URL=sua_url_aqui');
-                console.error('📋 IMPORTANTE: A variável DEVE começar com VITE_ para ser exposta ao cliente!');
-            }
-
-            if (!supabaseAnonKey) {
-                console.error('❌ ERRO CRÍTICO: VITE_SUPABASE_ANON_KEY não está definido!');
-                console.error('📋 Na Vercel: Vá em Settings → Environment Variables → Adicione VITE_SUPABASE_ANON_KEY');
-                console.error('📋 Localmente: Verifique se .env.local existe e contém: VITE_SUPABASE_ANON_KEY=sua_chave_aqui');
-                console.error('📋 IMPORTANTE: A variável DEVE começar com VITE_ para ser exposta ao cliente!');
-            }
-
-            // 🚨 NÃO CRIAR CLIENTE SE FALTAR CREDENCIAIS
-            if (!supabaseUrl || !supabaseAnonKey) {
-                console.error('🚨 IMPOSSÍVEL CRIAR CLIENTE SUPABASE - Credenciais ausentes!');
-                console.error('🚨 O sistema funcionará em modo OFFLINE (sem dados do banco)');
-                HAS_SUPABASE_CREDENTIALS = false;
-                supabase = null;
-                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                return;
-            }
-
-            console.log('✅ Credenciais OK - Criando cliente Supabase...');
-
-            // 🎯 CRIAR CLIENTE
-            supabase = createClient(supabaseUrl, supabaseAnonKey);
-            HAS_SUPABASE_CREDENTIALS = true;
-
-            // ✅ VERIFICAR SE CLIENTE FOI CRIADO CORRETAMENTE
-            if (!supabase) {
-                console.error('❌ FALHA: createClient retornou null/undefined');
-                HAS_SUPABASE_CREDENTIALS = false;
-            } else if (typeof supabase.from !== 'function') {
-                console.error('❌ FALHA: Cliente Supabase criado mas sem método .from()');
-                console.error('📋 Tipo do cliente:', typeof supabase);
-                console.error('📋 Métodos disponíveis:', Object.keys(supabase || {}));
-                HAS_SUPABASE_CREDENTIALS = false;
-            } else {
-                console.log('✅ Cliente Supabase criado com sucesso!');
-                console.log('✅ Método .from() disponível');
-                console.log('✅ Sistema ONLINE - Conectado ao banco de dados');
-            }
-
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-            // Notify that a client object exists (handlers may want to keep it)
-            try { _notifySupabaseReady(); } catch (e) { }
-
-            // subscribeToTable can use Supabase Realtime when available
-            subscribeToTable = function (table, handler, opts = {}) {
-                // Minimal fallback: polling using the REST endpoint when real realtime unavailable
-                const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 1000;
-                let last = null;
-                let stopped = false;
-                (async () => {
-                    while (!stopped) {
-                        try {
-                            const res = await supabase.from(table).select('*');
-                            if (res && res.error) {
-                                console.error('[supabaseClient] Error fetching table', table, res.error);
-                            }
-                            const curr = JSON.stringify(res && res.data ? res.data : []);
-                            if (curr !== last) {
-                                last = curr;
-                                handler({ data: res.data, error: res && res.error ? res.error : null });
-                            }
-                        } catch (e) { console.error('[supabaseClient] subscribeToTable polling error for', table, e); }
-                        await new Promise(r => setTimeout(r, pollMs));
-                    }
-                })();
-                return () => { stopped = true; };
-            };
-
-            // Immediately run a detailed healthcheck and surface meaningful logs/errors
-            try {
-                (async () => {
-                    try {
-                        // Validate the env variables explicitly (helps diagnosing missing/misnamed keys)
-                        const okUrl = !!supabaseUrl; const okKey = !!supabaseAnonKey;
-                        if (!okUrl || !okKey) {
-                            const msg = `[supabaseClient] Missing Supabase env variables. VITE_SUPABASE_URL:${okUrl ? 'SET' : 'MISSING'} VITE_SUPABASE_ANON_KEY:${okKey ? 'SET' : 'MISSING'}`;
-                            console.error(msg);
-                            lastSupabaseError = new Error(msg);
-                            SUPABASE_CONNECTED = false;
-                            try { _notifySupabaseReady(); } catch (e) { }
-                            return;
-                        }
-
-                        // Run the canonical check and set connection status
-                        const res = await checkSupabaseConnection();
-                        if (!res.connected) {
-                            // If the check failed, log extra context (could be RLS/permission or network issue)
-                            console.error('[supabaseClient] supabase health check failed:', res.error);
-                        }
-                    } catch (e) {
-                        console.error('[supabaseClient] healthcheck threw', e);
-                    } finally {
-                        try { _notifySupabaseReady(); } catch (e) { }
-                    }
-                })();
-            } catch (e) { /* ignore healthcheck errors */ }
-
-            // Notify any registered handlers that supabase client object is ready (may still be unconnected)
-            try { _notifySupabaseReady(); } catch (e) { }
-        } catch (e) {
-            console.warn('Failed to initialize supabase client', e);
-            lastSupabaseError = e;
-            SUPABASE_CONNECTED = false;
-            try { _notifySupabaseReady(); } catch (err) { }
+        // Log de verificação (Solicitado Pelo Usuário)
+        if (clientInstance && clientInstance.auth) {
+            console.log('✅ [V10 Delivery] supabase.auth detectado com sucesso.');
+        } else {
+            console.warn('⚠️ [V10 Delivery] CLIENTE CRIADO MAS SUPABASE.AUTH É UNDEFINED');
         }
-    }).catch(e => {
-        // If import fails, leave supabase as null and log warning but do not throw — callers should guard with HAS_SUPABASE_CREDENTIALS
-        console.warn('Supabase package failed to load dynamically:', e);
-    });
+
+        subscribeFn = function (table, handler, opts = {}) {
+            const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 1000;
+            let last = null;
+            let stopped = false;
+            (async () => {
+                while (!stopped) {
+                    try {
+                        const res = await clientInstance.from(table).select('*');
+                        const curr = JSON.stringify(res && res.data ? res.data : []);
+                        if (curr !== last) {
+                            last = curr;
+                            handler({ data: res.data, error: res && res.error ? res.error : null });
+                        }
+                    } catch (e) { /* silent */ }
+                    await new Promise(r => setTimeout(r, pollMs));
+                }
+            })();
+            return () => { stopped = true; };
+        };
+    }
 }
 
-async function buscarTodasEntregas() {
+// ==========================================
+// EXPORTS
+// ==========================================
+
+// Variáveis de Estado
+export const HAS_SUPABASE_CREDENTIALS = hasCreds;
+export let SUPABASE_CONNECTED = false; // Será atualizado pelo check
+export let SUPABASE_READY = !!clientInstance; // Pronto imediatamente pois é síncrono agora
+let lastSupabaseError = null;
+
+// Callbacks (Mantidos para compatibilidade, mas agora disparam imediatamente)
+const supabaseReadyHandlers = [];
+export function onSupabaseReady(cb) {
+    if (typeof cb !== 'function') return;
+    try { setTimeout(() => cb(clientInstance), 0); } catch (e) { }
+}
+
+const supabaseConnectedHandlers = [];
+export function onSupabaseConnected(cb) {
+    if (typeof cb !== 'function') return;
+    if (SUPABASE_CONNECTED) setTimeout(cb, 0);
+    else supabaseConnectedHandlers.push(cb);
+}
+
+function _notifySupabaseConnected() {
+    SUPABASE_CONNECTED = true;
+    try { supabaseConnectedHandlers.forEach(fn => fn()); } catch (e) { }
+    supabaseConnectedHandlers.length = 0;
+}
+
+// Função de Healthcheck
+export async function checkSupabaseConnection() {
+    lastSupabaseError = null;
+    if (!clientInstance || typeof clientInstance.from !== 'function') {
+        const err = new Error('Supabase client is not initialized');
+        lastSupabaseError = err;
+        SUPABASE_CONNECTED = false;
+        return { connected: false, error: err };
+    }
     try {
-        // wait for client if needed
-        if (!supabase || typeof supabase.from !== 'function') {
-            await new Promise((resolve) => {
-                try { onSupabaseReady(() => resolve()); } catch (e) { setTimeout(resolve, 500); }
-            });
+        const res = await clientInstance.from('entregas').select('id').limit(1);
+        if (res.error) {
+            lastSupabaseError = res.error;
+            SUPABASE_CONNECTED = false;
+            return { connected: false, error: res.error };
         }
-        if (!supabase || typeof supabase.from !== 'function') throw new Error('Supabase client unavailable');
-        const res = await supabase.from('entregas').select('*');
-        if (res && res.error) throw res.error;
-        return Array.isArray(res.data) ? res.data : [];
-    } catch (error) {
-        console.error('Erro ao buscar entregas:', error);
+        SUPABASE_CONNECTED = true;
+        _notifySupabaseConnected();
+        return { connected: true, error: null };
+    } catch (e) {
+        lastSupabaseError = e;
+        SUPABASE_CONNECTED = false;
+        return { connected: false, error: e };
+    }
+}
+
+export function getLastSupabaseError() { return lastSupabaseError; }
+
+export async function buscarTodasEntregas() {
+    if (!clientInstance) return [];
+    try {
+        const res = await clientInstance.from('entregas').select('*');
+        if (res.error) throw res.error;
+        return res.data || [];
+    } catch (e) {
+        console.warn('Erro fetch entregas:', e);
         return [];
     }
 }
 
+export const subscribeToTable = subscribeFn;
+
+// ✅ Exportação Principal Clara e Direta (Solicitado)
+export const supabase = clientInstance;
 export default supabase;
-export { supabase, HAS_SUPABASE_CREDENTIALS, subscribeToTable, onSupabaseReady, SUPABASE_READY, SUPABASE_CONNECTED, onSupabaseConnected, checkSupabaseConnection, getLastSupabaseError, lastSupabaseError, buscarTodasEntregas };
 
