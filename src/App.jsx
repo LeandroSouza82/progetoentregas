@@ -283,7 +283,7 @@ function App() {
 
         // Verificar imediatamente
         if (!checkSupabaseConnection()) {
-            
+
             // Registrar callback para ser notificado quando estiver pronto
             onSupabaseReady(() => {
                 if (mounted) {
@@ -5632,5 +5632,4 @@ function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, load
 }
 
 // Exportação padrão do componente V10 Delivery
-// Garante exportação default para evitar erro do Vite
 export default App;
