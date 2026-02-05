@@ -7,6 +7,8 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [otpCode, setOtpCode] = useState('');
+    const [showOtpInput, setShowOtpInput] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -45,11 +47,12 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                 throw new Error('Sistema de autenticação temporariamente indisponível. Tente novamente em instantes.');
             }
 
-            // 🎯 REGISTRO COM SUPABASE - Importante: enviar full_name em options.data
+            // 🎯 REGISTRO COM SUPABASE - Usando OTP por E-mail
             const { data, error: signUpError } = await supabase.auth.signUp({
                 email: email.trim(),
                 password: password,
                 options: {
+                    emailRedirectTo: 'https://v10delivery.vercel.app',
                     data: {
                         full_name: fullName.trim() // ✅ Campo para o gatilho do banco
                     }
@@ -60,16 +63,10 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                 throw signUpError;
             }
 
-            // Cadastro bem-sucedido
-            console.log('✅ [V10 Delivery] Cadastro realizado com sucesso:', data.user?.email);
-            setSuccess('✅ Cadastro realizado com sucesso! Redirecionando...');
-
-            // Aguardar 1.5s para mostrar mensagem de sucesso antes de redirecionar
-            setTimeout(() => {
-                if (typeof onCadastroSuccess === 'function') {
-                    onCadastroSuccess(data.user);
-                }
-            }, 1500);
+            // Cadastro iniciado - Mostrar campo de OTP
+            console.log('✅ [V10 Delivery] Código OTP enviado para:', email.trim());
+            setSuccess('📧 Código de verificação enviado para seu e-mail! Verifique sua caixa de entrada.');
+            setShowOtpInput(true);
 
         } catch (err) {
             console.error('❌ [V10 Delivery] Erro no cadastro:', err);
@@ -83,6 +80,57 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                 errorMessage = 'A senha deve ter no mínimo 6 caracteres.';
             } else if (err.message?.includes('Invalid email')) {
                 errorMessage = 'E-mail inválido. Verifique e tente novamente.';
+            } else if (err.message) {
+                errorMessage = err.message;
+            }
+
+            setError(errorMessage);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleVerifyOtp = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        try {
+            if (!otpCode || otpCode.trim().length !== 6) {
+                throw new Error('Por favor, digite o código de 6 dígitos enviado para seu e-mail.');
+            }
+
+            // Verificar OTP
+            const { data, error: verifyError } = await supabase.auth.verifyOtp({
+                email: email.trim(),
+                token: otpCode.trim(),
+                type: 'signup'
+            });
+
+            if (verifyError) {
+                throw verifyError;
+            }
+
+            // Verificação bem-sucedida
+            console.log('✅ [V10 Delivery] E-mail verificado com sucesso:', data.user?.email);
+            setSuccess('✅ E-mail verificado! Redirecionando...');
+
+            // Aguardar 1.5s antes de redirecionar
+            setTimeout(() => {
+                if (typeof onCadastroSuccess === 'function') {
+                    onCadastroSuccess(data.user);
+                }
+            }, 1500);
+
+        } catch (err) {
+            console.error('❌ [V10 Delivery] Erro na verificação OTP:', err);
+
+            let errorMessage = 'Código inválido. Tente novamente.';
+
+            if (err.message?.includes('Token has expired')) {
+                errorMessage = 'Código expirado. Solicite um novo código.';
+            } else if (err.message?.includes('Invalid token')) {
+                errorMessage = 'Código inválido. Verifique e tente novamente.';
             } else if (err.message) {
                 errorMessage = err.message;
             }
@@ -129,7 +177,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                 )}
 
                 {/* Formulário */}
-                <form onSubmit={handleSubmit} className="login-form">
+                <form onSubmit={showOtpInput ? handleVerifyOtp : handleSubmit} className="login-form">
                     <div className="form-group">
                         <label htmlFor="fullName">Nome Completo</label>
                         <input
@@ -140,7 +188,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                             placeholder="Seu nome completo"
                             required
                             className="form-input"
-                            disabled={loading}
+                            disabled={loading || showOtpInput}
                         />
                     </div>
 
@@ -154,7 +202,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                             placeholder="seu@email.com"
                             required
                             className="form-input"
-                            disabled={loading}
+                            disabled={loading || showOtpInput}
                         />
                     </div>
 
@@ -168,7 +216,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                             placeholder="Mínimo 6 caracteres"
                             required
                             className="form-input"
-                            disabled={loading}
+                            disabled={loading || showOtpInput}
                             minLength={6}
                         />
                     </div>
@@ -183,13 +231,32 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                             placeholder="Digite a senha novamente"
                             required
                             className="form-input"
-                            disabled={loading}
+                            disabled={loading || showOtpInput}
                             minLength={6}
                         />
                     </div>
 
-                    <button type="submit" className="login-button" disabled={loading || success}>
-                        {loading ? 'Criando conta...' : success ? '✅ Sucesso!' : 'Criar Conta'}
+                    {/* Campo de OTP (aparece após envio do formulário) */}
+                    {showOtpInput && (
+                        <div className="form-group">
+                            <label htmlFor="otpCode">Código de Verificação</label>
+                            <input
+                                type="text"
+                                id="otpCode"
+                                value={otpCode}
+                                onChange={(e) => setOtpCode(e.target.value)}
+                                placeholder="Digite o código de 6 dígitos"
+                                required
+                                className="form-input"
+                                disabled={loading}
+                                maxLength={6}
+                                style={{ textAlign: 'center', fontSize: '20px', letterSpacing: '8px' }}
+                            />
+                        </div>
+                    )}
+
+                    <button type="submit" className="login-button" disabled={loading || (success && !showOtpInput)}>
+                        {loading ? (showOtpInput ? 'Verificando...' : 'Enviando código...') : (showOtpInput ? 'Verificar Código' : 'Criar Conta')}
                     </button>
                 </form>
 
