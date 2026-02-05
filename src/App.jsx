@@ -23,6 +23,57 @@ const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'f
 // Coordenadas padrão (Florianópolis - sede)
 const DEFAULT_MAP_CENTER = { lat: -27.5969, lng: -48.5495 };
 
+// HELPER OSRM: Distância de estrada real (Pé na estrada)
+async function fetchRoadDistance(points) {
+    if (!points || points.length < 2) return 0;
+    try {
+        const coords = points.map(p => {
+            const lat = p.lat ?? p[0];
+            const lng = p.lng ?? p[1];
+            return `${lng},${lat}`;
+        }).join(';');
+        const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=false`);
+        const data = await response.json();
+        return data.routes?.[0] ? (data.routes[0].distance / 1000) : 0;
+    } catch (e) { return 0; }
+}
+
+async function fetchRoadTable(points) {
+    if (!points || points.length < 2) return null;
+    try {
+        const coords = points.map(p => {
+            const lat = p.lat ?? p[0];
+            const lng = p.lng ?? p[1];
+            return `${lng},${lat}`;
+        }).join(';');
+        const response = await fetch(`https://router.project-osrm.org/table/v1/driving/${coords}?annotations=distance`);
+        const data = await response.json();
+        return data.distances;
+    } catch (e) { return null; }
+}
+
+// 🚀 OSRM com DURAÇÃO (Tempo de Viagem) - Critério Principal para Vizinho Mais Próximo
+async function fetchRoadTableWithDuration(points) {
+    if (!points || points.length < 2) return null;
+    try {
+        const coords = points.map(p => {
+            const lat = p.lat ?? p[0];
+            const lng = p.lng ?? p[1];
+            return `${lng},${lat}`;
+        }).join(';');
+        // Solicita tanto distância quanto duração
+        const response = await fetch(`https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`);
+        const data = await response.json();
+        // Retorna objeto com ambas as matrizes
+        return {
+            durations: data.durations || null,
+            distances: data.distances || null
+        };
+    } catch (e) {
+        console.error('❌ OSRM API falhou:', e);
+        return null;
+    }
+}
 
 // Ícones de Ponto de Entrega (Checkpoints) - Bolinhas/Gotas coloridas
 function createPinIcon(tipo, status, num = null) {
@@ -202,32 +253,59 @@ function App() {
     const supabaseRef = React.useRef(supabase);
 
     // Otimização de Rota (Mudança para dentro do componente para acessar supabaseRef)
-    const otimizarRota = (pontoPartida, listaEntregas) => {
-        let rotaOrdenada = [];
-        let atual = pontoPartida;
-        let pendentes = [...listaEntregas];
-        let maxIterations = 1000;
-        while (pendentes.length > 0 && maxIterations-- > 0) {
-            let maisProximo = null;
-            let menorDistancia = Infinity;
-            let indexMaisProximo = -1;
-            pendentes.forEach((pedido, index) => {
-                if (!atual || !Array.isArray(atual) || atual.length < 2) atual = [0, 0];
-                if (!pedido || pedido.lat == null || pedido.lng == null) return;
-                const dist = Math.sqrt(Math.pow(Number(pedido.lat) - Number(atual[0]), 2) + Math.pow(Number(pedido.lng) - Number(atual[1]), 2));
-                if (dist < menorDistancia) {
-                    menorDistancia = dist;
-                    maisProximo = pedido;
-                    indexMaisProximo = index;
-                }
-            });
-            if (maisProximo) {
-                rotaOrdenada.push(maisProximo);
-                atual = [maisProximo.lat, maisProximo.lng];
-                pendentes.splice(indexMaisProximo, 1);
-            } else break;
+    const otimizarRota = async (pontoPartida, listaEntregas) => {
+        if (!listaEntregas || listaEntregas.length === 0) return [];
+
+        const start = (pontoPartida && pontoPartida.lat != null) ? pontoPartida : (Array.isArray(pontoPartida) ? { lat: pontoPartida[0], lng: pontoPartida[1] } : DEFAULT_MAP_CENTER);
+        const allPoints = [start, ...listaEntregas];
+
+        console.log('🚀 OTIMIZAR ROTA - Usando OSRM com DURAÇÃO (tempo de viagem)');
+        console.log('📍 Ponto de partida:', start);
+        console.log('📦 Total de entregas:', listaEntregas.length);
+
+        // 🔥 USA OSRM COM DURAÇÃO (tempo) ao invés de distância pura
+        const matrixData = await fetchRoadTableWithDuration(allPoints);
+
+        if (!matrixData || !matrixData.durations) {
+            console.error('❌ ERRO CRÍTICO: API OSRM não respondeu!');
+            console.error('❌ O sistema NÃO pode calcular rotas sem OSRM.');
+            console.error('❌ Verifique sua conexão com a internet ou status da API router.project-osrm.org');
+            alert('⚠️ ERRO: Não foi possível calcular a rota otimizada.\n\nA API de roteamento (OSRM) não está respondendo.\nVerifique sua conexão com a internet.');
+            // Retorna lista na ordem original sem otimizar
+            return listaEntregas;
         }
-        return rotaOrdenada;
+
+        console.log('✅ OSRM respondeu com sucesso!');
+
+        // 🎯 ALGORITMO VIZINHO MAIS PRÓXIMO usando DURAÇÃO (evita armadilhas de "linha reta enganosa")
+        const durations = matrixData.durations;
+        let ordered = [];
+        let currentIndex = 0; // Ponto de partida
+        let remaining = listaEntregas.map((p, i) => ({ ...p, matrixIdx: i + 1 }));
+
+        while (remaining.length > 0) {
+            let nearestIdx = -1;
+            let minTime = Infinity; // 🔥 DURAÇÃO ao invés de distância
+
+            for (let i = 0; i < remaining.length; i++) {
+                const timeToPoint = durations[currentIndex][remaining[i].matrixIdx];
+                if (timeToPoint < minTime) {
+                    minTime = timeToPoint;
+                    nearestIdx = i;
+                }
+            }
+
+            if (nearestIdx === -1) break;
+
+            const next = remaining.splice(nearestIdx, 1)[0];
+            ordered.push(next);
+            currentIndex = next.matrixIdx;
+
+            console.log(`📍 Próxima parada: ${next.cliente} (tempo estimado: ${(minTime / 60).toFixed(1)} min)`);
+        }
+
+        console.log('✅ Rota otimizada por TEMPO DE VIAGEM (OSRM):', ordered.map(e => e.cliente));
+        return ordered;
     };
 
     const otimizarTodasAsRotas = async () => {
@@ -301,11 +379,52 @@ function App() {
             originLatLng = (pontoPartida && pontoPartida.lat != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : DEFAULT_MAP_CENTER;
         }
 
-        const baseCoord = (pontoPartida && pontoPartida.lat != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : DEFAULT_MAP_CENTER;
-        const ordered = nearestNeighborRoute(originLatLng, comCoordenadas, baseCoord);
-
-        return ordered;
+        return await otimizarRota(originLatLng, comCoordenadas);
     }
+
+    // 🚀 FUNÇÃO: ENCONTRAR MELHOR POSIÇÃO PARA INSERIR NOVA ENTREGA
+    // Evita jogar automaticamente no início - calcula onde encaixa melhor na rota
+    const encontrarMelhorPosicaoParaInserir = async (novaEntrega, rotaExistente, motoristaOrigem) => {
+        if (!rotaExistente || rotaExistente.length === 0) {
+            // Rota vazia - nova entrega será a primeira
+            return 0;
+        }
+
+        console.log('🔍 Calculando melhor posição para inserir:', novaEntrega.cliente);
+        console.log('📍 Rota atual:', rotaExistente.map(e => e.cliente));
+
+        try {
+            // Testar inserção em cada posição possível
+            let melhorPosicao = 0;
+            let menorAcrescimo = Infinity;
+
+            for (let pos = 0; pos <= rotaExistente.length; pos++) {
+                // Criar rota teste com nova entrega nesta posição
+                const rotaTeste = [...rotaExistente];
+                rotaTeste.splice(pos, 0, novaEntrega);
+
+                // Calcular distância total desta configuração
+                const pontos = [motoristaOrigem, ...rotaTeste];
+                const distancia = await fetchRoadDistance(pontos);
+
+                console.log(`  Testando posição ${pos + 1}: ${distancia.toFixed(1)} km`);
+
+                if (distancia < menorAcrescimo) {
+                    menorAcrescimo = distancia;
+                    melhorPosicao = pos;
+                }
+            }
+
+            console.log(`✅ Melhor posição: ${melhorPosicao + 1} (economia de quilometragem)`);
+            return melhorPosicao;
+
+        } catch (error) {
+            console.error('❌ Erro ao calcular melhor posição:', error);
+            // Fallback: inserir no final
+            return rotaExistente.length;
+        }
+    };
+
 
     // ✅ FUNÇÃO: REORGANIZAR FILA DE DESPACHO
     const otimizarFilaDespacho = async () => {
@@ -313,13 +432,44 @@ function App() {
             alert('⚠️ Fila vazia para reorganizar.');
             return;
         }
+
+        if (!dispatchMotoristaId) {
+            alert('⚠️ Selecione um motorista para que possamos usar a localização GPS dele como ponto de partida.');
+            return;
+        }
+
         setDistanceCalculating(true);
         try {
-            console.log('🔄 Reorganizando fila de despacho...');
-            const optimized = await otimizarRotaLocal(mapCenterState, entregasEmEspera);
-            setEntregasEmEspera(optimized);
+            console.log('🔄 Reorganizando fila de despacho partindo do GPS do motorista:', dispatchMotoristaId);
+
+            const sb = supabaseRef.current || supabase;
+
+            // ✅ REGRA 3: Buscar entregas ATIVAS do motorista para calcular o desvio de quilometragem
+            const { data: ativas } = await sb.from('entregas')
+                .select('*')
+                .eq('motorista_id', dispatchMotoristaId)
+                .in('status', ['em_rota']);
+
+            const todasParaConcatenar = [...(ativas || []), ...entregasEmEspera];
+
+            // ✅ REGRA 3: Recalcular TUDO a partir do GPS do motorista (NN cobre o "menor desvio" de forma global)
+            const optimized = await otimizarRotaLocal(null, todasParaConcatenar, dispatchMotoristaId);
+
+            // Separar o que é novo (sem motorista ainda) do que já estava na rota
+            const novos = optimized.filter(p => !ativas?.some(a => String(a.id) === String(p.id)));
+
+            // ✅ ATUALIZAR DISTÂNCIA PREVISTA (Trajeto Real)
+            if (optimized.length > 0) {
+                const origin = (frota.find(f => String(f.id) === String(dispatchMotoristaId))) || DEFAULT_MAP_CENTER;
+                const dist = await fetchRoadDistance([origin, ...optimized]);
+                setTotalDistanceFila(dist.toFixed(1));
+            }
+
+            // Atualizar a fila de espera com a nova ordem sugerida (apenas os novos para despacho)
+            setEntregasEmEspera(novos);
+
             setRotaOrganizada(true); // ✅ LIBERA O ENVIO
-            alert('✅ Rota otimizada com sucesso! O botão ENVIAR ROTA está liberado.');
+            alert('✅ Rota otimizada! O sistema considerou a localização atual do motorista e as entregas que ele já possui.');
         } catch (error) {
             console.error('❌ Erro ao otimizar fila:', error);
             alert('❌ Erro ao reorganizar a fila.');
@@ -499,6 +649,7 @@ function App() {
     const [pendingRecalcCount, setPendingRecalcCount] = useState(0);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
+    const [dispatchMotoristaId, setDispatchMotoristaId] = useState(null); // ✅ REGRA 2: Motorista selecionado no Despacho
     // Distance and driver-select mode state
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
@@ -634,7 +785,7 @@ function App() {
     const carregamentoInicialRef = useRef(false);
     useEffect(() => {
         // DESABILITADO: causa múltiplas chamadas a carregarDados
-        // Apenas o useEffect de buscarTodasEntregas (linha ~500) deve rodar
+        // Apenas o useEffect inicial (buscarTodasEntregas) deve rodar
         return;
 
         try {
@@ -725,7 +876,14 @@ function App() {
                 return;
             }
 
-            setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: lat, lng: lng, tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
+            setDraftPoint({
+                cliente: (nomeCliente || '').trim() || 'Cliente Novo',
+                endereco: enderecoEntrega,
+                lat: lat,
+                lng: lng,
+                tipo: String(tipoEncomenda || 'Entrega').trim(),
+                id: `draft-${Date.now()}`
+            });
         } catch (e) {
             setDraftPoint(null);
         }
@@ -947,17 +1105,17 @@ function App() {
             return;
         }
 
-        const confirmar = confirm("Deseja gerar uma entrega de teste para a 'Bicicleta do Leandro'? \n\nEla entrará com status 'em_rota' conforme o novo padrão.");
+        const confirmar = confirm("Deseja gerar uma entrega de teste? \n\nEla entrará como 'pendente' na Central de Despacho.");
         if (!confirmar) return;
 
         const entregaTeste = {
-            cliente: "Leandro Teste (Bicicleta)",
+            cliente: "Pedido de Teste",
             endereco: "Centro, Florianópolis - SC",
             lat: -27.596,
             lng: -48.549,
-            status: "em_rota",
+            status: "pendente",
             tipo: "Entrega",
-            observacoes: "Entrega de teste gerada para validação do fluxo completo."
+            observacoes: "Entrega de teste gerada para validação do fluxo."
         };
 
         const { error } = await sb.from('entregas').insert([entregaTeste]);
@@ -965,7 +1123,7 @@ function App() {
         if (error) {
             alert("❌ Erro ao criar entrega de teste: " + error.message);
         } else {
-            alert("✅ Entrega de teste 'em_rota' criada com sucesso!");
+            alert("✅ Entrega de teste criada com sucesso!");
             if (typeof carregarDados === 'function') carregarDados();
         }
     };
@@ -1044,7 +1202,7 @@ function App() {
 
         // entregas: carregar todas as entregas relevantes para Central de Despacho e Histórico
         try {
-            // Buscar todas as entregas ativas (pendente, em_rota, entregue, falha)
+            // Buscar todas as entregas ativas (pendente, em_rota, entregue, falha, concluido)
             // IMPORTANTE: Incluir 'pendente' explicitamente para aparecer no Dashboard
             const { data: rawList, error: entregasErr } = await sb.from('entregas')
                 .select('id,cliente,endereco,lat,lng,status,ordem_logistica,motorista_id,tipo,created_at,observacoes')
@@ -1860,15 +2018,40 @@ function App() {
                     return { meters: meters || 0, secs: secs || 0 };
 
                 } catch (googleErr) {
-                    console.warn('Google Routing failed, falling back to straight line');
+                    console.warn('❌ Google Routing falhou, retornando estimativa conservadora');
                 }
             }
 
-            // 3. Fallback Final: Linha Reta
-            const straightPath = [[origin.lat, origin.lng], ...waypts.map(w => [w.lat, w.lng])];
-            if (includeHQ) straightPath.push([baseDest.lat, baseDest.lng]);
+            // 3. ⚠️ FALLBACK CRÍTICO: Se OSRM e Google falharem
+            console.warn('⚠️ AVISO: OSRM e Google Maps falharam. Usando estimativa conservadora.');
+            console.warn('⚠️ A distância exibida pode não ser precisa.');
 
-            setRouteGeometry(straightPath);
+            // Usar OSRM direto para pelo menos ter a distância de rua
+            try {
+                const allPoints = [
+                    [origin.lng, origin.lat],
+                    ...waypts.map(w => [w.lng, w.lat])
+                ];
+                if (includeHQ) {
+                    allPoints.push([baseDest.lng, baseDest.lat]);
+                }
+
+                const coords = allPoints.map(p => `${p[0]},${p[1]}`).join(';');
+                const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=false`);
+                const data = await response.json();
+                const distanceMeters = data.routes?.[0]?.distance || 0;
+
+                if (distanceMeters > 0) {
+                    setEstimatedDistanceKm(Number((distanceMeters / 1000).toFixed(1)));
+                    return { meters: distanceMeters, secs: 0 };
+                }
+            } catch (osrmErr) {
+                console.error('❌ OSRM direto também falhou:', osrmErr);
+            }
+
+            // Último recurso: retornar 0 e alertar
+            console.error('❌ TODAS as APIs de roteamento falharam!');
+            setRouteGeometry(null);
             return { meters: 0, secs: 0 };
 
         } catch (e) {
@@ -2027,18 +2210,8 @@ function App() {
 
             try {
                 const origin = mapCenterState || DEFAULT_MAP_CENTER;
-                let total = 0;
-                let current = { lat: Number(origin.lat), lng: Number(origin.lng) };
-
-                for (const p of entregasEmEspera) {
-                    if (p.lat && p.lng) {
-                        const target = { lat: Number(p.lat), lng: Number(p.lng) };
-                        const d = haversineDistance(current.lat, current.lng, target.lat, target.lng);
-                        total += d;
-                        current = target;
-                    }
-                }
-                setTotalDistanceFila(Number(total.toFixed(2)));
+                const distKm = await fetchRoadDistance([origin, ...entregasEmEspera]);
+                setTotalDistanceFila(Number(distKm.toFixed(2)));
             } catch (err) {
                 console.warn('Erro ao calcular distância da fila:', err);
             }
@@ -2386,13 +2559,15 @@ function App() {
         // Adicionar observações diretamente
         const observacoesFinais = observacoes;
 
+        // 🎯 REGRA 2: 'Nova Carga' ou 'Recolha' deve obrigatoriamente cair na Central de Despacho com motorista_id: null
         const { error } = await sb.from('entregas').insert([{
             cliente: cliente,
             endereco: endereco,
             tipo: String(tipo || '').trim(),
-            lat: lat,
-            lng: lng,
-            status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
+            lat, lng,
+            status: 'pendente',
+            motorista_id: null,
+            ordem_logistica: null,
             observacoes: observacoesFinais
         }]);
 
@@ -2402,9 +2577,9 @@ function App() {
             setEnderecoEntrega('');
             setObservacoesGestor('');
             setEnderecoCoords(null);
-            setEnderecoFromHistory(false);
             setDraftPoint(null);
-            try { carregarDados(); } catch (e) { }
+            setRotaOrganizada(false);
+            carregarDados();
         } else {
             alert('❌ Erro ao salvar: ' + (error.message || 'Erro desconhecido'));
         }
@@ -2565,12 +2740,16 @@ function App() {
             }
 
             console.log('💾 Salvando entrega...');
+
+            // 🎯 REGRA 2: 'Nova Carga' ou 'Recolha' deve obrigatoriamente cair na Central de Despacho com motorista_id: null
             const { error } = await sb.from('entregas').insert([{
                 cliente: clienteVal,
                 endereco: enderecoVal,
                 tipo: String(tipoEncomenda || 'Entrega').trim(),
                 lat, lng,
                 status: 'pendente',
+                motorista_id: null,
+                ordem_logistica: null,
                 observacoes: obsValue
             }]);
 
@@ -2738,7 +2917,18 @@ function App() {
             // Otimizar com algoritmo local (Nearest Neighbor)
             try {
                 try { setDistanceCalculating(true); } catch (e) { }
-                rotaOtimizada = await otimizarRotaLocal(mapCenterState, entregasEmEspera, motoristaIdVal);
+
+                // ✅ REGRA 3: Buscar entregas que já estão com o motorista para incluí-las na nova sequência
+                const { data: ativas } = await sb.from('entregas').select('*').eq('motorista_id', motoristaIdVal).in('status', ['em_rota']);
+                const todasJuntas = [...(ativas || []), ...entregasEmEspera];
+
+                console.log('📍 ENVIANDO ROTA - Ordem ANTES da otimização:', todasJuntas.map(e => `${e.id} (${e.cliente})`));
+
+                // ✅ REGRA 1: GPS do Motorista como ponto de partida (mapCenterState -> null)
+                rotaOtimizada = await otimizarRotaLocal(null, todasJuntas, motoristaIdVal);
+
+                console.log('📍 ENVIANDO ROTA - Ordem APÓS vizinho mais próximo:', rotaOtimizada.map((e, idx) => `${idx + 1}. ID ${e.id} (${e.cliente})`));
+
                 try { setDistanceCalculating(false); } catch (e) { }
             } catch (e) {
                 console.warn('⚠️ Otimização local falhou:', e);
@@ -2775,6 +2965,15 @@ function App() {
             console.log('📝 Status a aplicar:', statusValue);
             console.log('🔗 Vinculando entregas ao motorista_id:', motoristaIdVal);
 
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('📍 ORDEM QUE SERÁ GRAVADA NO BANCO:');
+            console.log(rotaOtimizada.map((e, idx) => ({
+                id: e.id,
+                cliente: e.cliente,
+                ordem_logistica: idx + 1
+            })));
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
             if (assignedIds.length === 0) {
                 console.warn('⚠️ assignDriver: nenhum pedido válido para atualizar');
                 alert('❌ Erro: Nenhuma entrega válida para enviar. Verifique se há entregas selecionadas.');
@@ -2794,6 +2993,8 @@ function App() {
                     for (let i = 0; i < rotaOtimizada.length; i++) {
                         const pedido = rotaOtimizada[i];
                         const ordemSeq = parseInt(i + 1, 10); // 🔧 CONVERSÃO ESTRITA PARA INT4
+
+                        console.log(`📝 Gravando entrega ${i + 1}/${rotaOtimizada.length}: ID ${pedido.id} (${pedido.cliente}) → ordem_logistica: ${ordemSeq}`);
 
                         // ✅ HARDENING: Garantir que o ID do motorista seja coerente com o banco (parseInt se for numérico)
                         const motoristaIdParaBanco = !isNaN(parseInt(motoristaIdVal, 10)) && !String(motoristaIdVal).includes('-')
@@ -2820,6 +3021,8 @@ function App() {
                             updErr = error;
                             console.error(`❌ Erro ao salvar entrega ${pedido.id}:`, error);
                             break;
+                        } else {
+                            console.log(`✅ Entrega ${pedido.id} → ordem ${ordemSeq} gravada com SUCESSO`);
                         }
                     }
                 } catch (err) {
@@ -2836,9 +3039,35 @@ function App() {
                 // Somente encerra se a gravação no banco foi 100% OK
                 if (!updErr) {
                     console.log('✅ Todas as entregas gravadas com sucesso!');
+
+                    // ✅ CONFIRMAÇÃO: Buscar do banco para verificar a ordem gravada
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    console.log('🔍 CONFIRMAÇÃO - Buscando ordem gravada no banco...');
+                    try {
+                        const { data: confirmacao, error: confError } = await sb
+                            .from('entregas')
+                            .select('id, cliente, ordem_logistica, status')
+                            .eq('motorista_id', motoristaIdVal)
+                            .eq('status', 'em_rota')
+                            .order('ordem_logistica', { ascending: true });
+
+                        if (confError) {
+                            console.error('❌ Erro ao buscar confirmação:', confError);
+                        } else {
+                            console.log('🔍 CONFIRMAÇÃO - Ordem gravada no banco:');
+                            console.table(confirmacao);
+                            console.log('📋 Sequência:', confirmacao.map((e, idx) => `${e.ordem_logistica}. ${e.cliente}`).join(' → '));
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Não foi possível buscar confirmação:', e);
+                    }
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
                     setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
                     setShowDriverSelect(false);
                     setSelectedMotorista(null);
+                    setDispatchMotoristaId(null); // ✅ Limpar seleção após envio
+                    setRotaOrganizada(false);     // ✅ Resetar trava de segurança
                 } else {
                     console.error('❌ Falha na gravação total das entregas - cancelando envio.');
                     alert('❌ Erro: Falha ao salvar a sequência logística. O envio foi interrompido para evitar erros na lista do motorista.');
@@ -2908,7 +3137,11 @@ function App() {
             setMotoristaDaRota(driver);
             setAbaAtiva('Visão Geral');
 
-            // 🧹 LIMPEZA AUTOMÁTICA: Limpar entregas da lista após envio bem-sucedido
+            // 🧹 LIMPEZA AUTOMÁTICA: Limpar entregas enviadas da lista...
+
+            // Atualizar a fila de espera com a nova ordem sugerida (apenas os novos para despacho)
+            setEntregasEmEspera([]);
+
             console.log('🧹 Limpando entregas enviadas da lista...');
             setEntregasEmEspera(prev => {
                 const idsEnviados = rotaOtimizada.map(e => e.id);
@@ -3031,6 +3264,23 @@ function App() {
                 button[type="submit"]:active:not(:disabled) {
                     transform: scale(0.95) !important;
                 }
+
+                /* Scrollbar Elegante (Fina) */
+                .elegant-scrollbar::-webkit-scrollbar {
+                    width: 5px;
+                }
+                .elegant-scrollbar::-webkit-scrollbar-track {
+                    background: rgba(255, 255, 255, 0.05);
+                    border-radius: 10px;
+                }
+                .elegant-scrollbar::-webkit-scrollbar-thumb {
+                    background: rgba(59, 130, 246, 0.5);
+                    border-radius: 10px;
+                    transition: all 0.3s ease;
+                }
+                .elegant-scrollbar::-webkit-scrollbar-thumb:hover {
+                    background: #3b82f6;
+                }
             `}</style>
 
             {missingSupabase && (
@@ -3103,8 +3353,6 @@ function App() {
 
 
             <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
-
-
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
                     <CardKPI titulo="TOTAL DE ENTREGAS" valor={totalEntregas} cor={theme.accent} />
@@ -3192,7 +3440,7 @@ function App() {
                                         })().map((entrega, idx) => {
                                             const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
                                             const status = String(entrega.status || '').toLowerCase();
-                                            const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
+                                            const num = (entrega.ordem_logistica && entregasEmEspera.length > 0) ? entregasEmEspera.length : (idx + 1);
 
                                             return (
                                                 <Marker
@@ -3211,11 +3459,11 @@ function App() {
                                                             <strong>🕒 Horário:</strong> {entrega.updated_at ? new Date(entrega.updated_at).toLocaleTimeString() : (entrega.created_at ? new Date(entrega.created_at).toLocaleTimeString() : 'Pendente')}<br />
                                                             <strong>🚦 Status:</strong>
                                                             <span style={{
-                                                                color: status === 'falha' ? '#ef4444' : (['entregue', 'concluida', 'concluída'].includes(status) ? '#10b981' : '#3b82f6'),
+                                                                color: status === 'falha' ? '#ef4444' : (['entregue', 'concluida', 'concluída'].includes(status) ? '#10b981' : (status === 'em_rota' ? '#2563eb' : '#3b82f6')),
                                                                 fontWeight: 'bold',
                                                                 marginLeft: '5px'
                                                             }}>
-                                                                {status.toUpperCase() || 'PENDENTE'}
+                                                                {(status === 'em_rota' ? 'EM ROTA' : status.toUpperCase()) || 'PENDENTE'}
                                                             </span><br />
                                                             {status === 'falha' && (
                                                                 <div style={{ marginTop: '5px', padding: '8px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
@@ -3249,7 +3497,7 @@ function App() {
                                         }).map((entrega, idx) => {
                                             const tipo = String(entrega.tipo || 'Entrega').toLowerCase();
                                             const status = String(entrega.status || '').toLowerCase();
-                                            const num = (entrega.ordem_logistica && entrega.ordem_logistica > 0) ? entrega.ordem_logistica : (idx + 1);
+                                            const num = (entrega.ordem_logistica && entregasEmEspera.length > 0) ? entregasEmEspera.length : (idx + 1);
 
                                             return (
                                                 <Marker
@@ -3518,7 +3766,7 @@ function App() {
 
                                     {/* 1. Substituição do Input (Visual) conforme solicitado */}
                                     {predictions && predictions.length > 0 && (
-                                        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: 'white', color: 'black', zIndex: 99999, border: '2px solid #007bff', borderRadius: '4px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '300px', overflowY: 'auto' }}>
+                                        <div className="elegant-scrollbar" style={{ position: 'absolute', top: '100%', left: 0, right: 0, backgroundColor: 'white', color: 'black', zIndex: 99999, border: '2px solid #007bff', borderRadius: '4px', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', maxHeight: '300px', overflowY: 'auto' }}>
                                             {predictions.map(p => (
                                                 <div key={p.id} onClick={() => handleSelect(p)} style={{ padding: '12px', cursor: 'pointer', borderBottom: '1px solid #eee' }}>
                                                     📍 {p.place_name}
@@ -3764,56 +4012,70 @@ function App() {
 
                         {/* Coluna Direita: Histórico (scroll) */}
                         <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-                                <h3 style={{ margin: 0, color: theme.textMain }}>Histórico de Clientes</h3>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', gap: '10px', flexWrap: 'wrap' }}>
+                                <h3 style={{ margin: 0, color: theme.textMain, fontSize: '18px' }}>Histórico de Clientes</h3>
 
-                                {/* Botão Limpar Histórico */}
-                                <button
-                                    onClick={limparHistorico}
-                                    title="Limpar todo o histórico"
-                                    style={{
-                                        background: 'rgba(244, 67, 54, 0.1)',
-                                        border: '1px solid rgba(244, 67, 54, 0.3)',
-                                        borderRadius: '8px',
-                                        padding: '8px 12px',
-                                        cursor: 'pointer',
-                                        color: '#F44336',
-                                        fontSize: '13px',
-                                        fontWeight: 500,
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        transition: 'all 0.2s ease'
-                                    }}
-                                    onMouseEnter={(e) => {
-                                        e.target.style.background = 'rgba(244, 67, 54, 0.2)';
-                                        e.target.style.transform = 'scale(1.05)';
-                                    }}
-                                    onMouseLeave={(e) => {
-                                        e.target.style.background = 'rgba(244, 67, 54, 0.1)';
-                                        e.target.style.transform = 'scale(1)';
-                                    }}
-                                >
-                                    🗑️ Limpar
-                                </button>
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    {/* Campo de pesquisa no histórico - COMPACTO */}
+                                    <input
+                                        type="text"
+                                        placeholder="🔍 Pesquisar no histórico..."
+                                        value={historicoFilter}
+                                        onChange={(e) => setHistoricoFilter(e.target.value)}
+                                        style={{
+                                            ...inputStyle,
+                                            width: '300px',
+                                            marginBottom: 0,
+                                            fontSize: '13px',
+                                            padding: '8px 12px',
+                                            height: '38px',
+                                            backgroundColor: 'rgba(255,255,255,0.03)'
+                                        }}
+                                    />
+
+                                    {/* Botão Limpar Histórico */}
+                                    <button
+                                        onClick={limparHistorico}
+                                        title="Limpar todo o histórico"
+                                        style={{
+                                            background: 'rgba(244, 67, 54, 0.1)',
+                                            border: '1px solid rgba(244, 67, 54, 0.3)',
+                                            borderRadius: '8px',
+                                            padding: '0 12px',
+                                            height: '38px',
+                                            cursor: 'pointer',
+                                            color: '#F44336',
+                                            fontSize: '13px',
+                                            fontWeight: 500,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            transition: 'all 0.2s ease',
+                                            whiteSpace: 'nowrap'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.target.style.background = 'rgba(244, 67, 54, 0.2)';
+                                            e.target.style.transform = 'scale(1.02)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.target.style.background = 'rgba(244, 67, 54, 0.1)';
+                                            e.target.style.transform = 'scale(1)';
+                                        }}
+                                    >
+                                        🗑️ Limpar
+                                    </button>
+                                </div>
                             </div>
 
-                            {/* NOVO: Campo de pesquisa no histórico */}
-                            <input
-                                type="text"
-                                placeholder="🔍 Pesquisar no histórico..."
-                                value={historicoFilter}
-                                onChange={(e) => setHistoricoFilter(e.target.value)}
-                                style={{
-                                    ...inputStyle,
-                                    marginBottom: '12px',
-                                    fontSize: '14px',
-                                    padding: '10px 12px'
-                                }}
-                            />
-
                             <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
-                            <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
+
+                            <div className="elegant-scrollbar" style={{
+                                overflowY: 'auto',
+                                maxHeight: '300px',
+                                paddingRight: '6px',
+                                scrollbarWidth: 'thin',
+                                scrollbarColor: `${theme.primary} rgba(255,255,255,0.05)`
+                            }}>
                                 {(() => {
                                     // ✅ USAR recentList (localStorage) - MOSTRA DADOS IMEDIATAMENTE
                                     const dadosHistorico = recentList && recentList.length > 0 ? recentList : [];
@@ -3868,8 +4130,67 @@ function App() {
                 {/* CENTRAL DE DESPACHO */}
                 {abaAtiva === 'Central de Despacho' && (
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-                            <h2>Fila de Preparação</h2>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
+                            <div>
+                                <h2 style={{ margin: 0 }}>Fila de Preparação</h2>
+                                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <span style={{ fontSize: '14px', fontWeight: 600, color: theme.textLight }}>MOTORISTA:</span>
+                                    <select
+                                        value={dispatchMotoristaId || ''}
+                                        onChange={(e) => {
+                                            setDispatchMotoristaId(e.target.value);
+                                            setRotaOrganizada(false); // ✅ RESETÁVEL AO MUDAR MOTORISTA
+                                        }}
+                                        style={{
+                                            padding: '8px 12px',
+                                            borderRadius: '8px',
+                                            background: 'rgba(255,255,255,0.05)',
+                                            border: '1px solid rgba(255,255,255,0.1)',
+                                            color: '#fff',
+                                            fontSize: '14px',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        <option value="">Selecione um motorista...</option>
+                                        {(frota || []).filter(m => m.esta_online).map(m => (
+                                            <option key={m.id} value={String(m.id)}>{fullName(m)} (Brasil)</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        onClick={() => {
+                                            if (entregasEmEspera.length === 0) return alert('Nenhuma entrega na fila para sugerir.');
+                                            // Sugerir motorista mais próximo do primeiro ponto da fila
+                                            const p1 = entregasEmEspera[0];
+                                            let closest = null;
+                                            let minDist = Infinity;
+                                            frota.filter(m => m.esta_online && m.lat && m.lng).forEach(m => {
+                                                const d = haversineKm({ lat: m.lat, lng: m.lng }, { lat: p1.lat, lng: p1.lng });
+                                                if (d < minDist) { minDist = d; closest = m; }
+                                            });
+                                            if (closest) {
+                                                setDispatchMotoristaId(String(closest.id));
+                                                alert(`💡 Sugestão: ${fullName(closest)} está a ${(minDist).toFixed(1)}km do primeiro ponto.`);
+                                            } else {
+                                                alert('Não há motoristas online com GPS ativo para sugestão.');
+                                            }
+                                        }}
+                                        style={{
+                                            background: 'rgba(59, 130, 246, 0.2)',
+                                            border: '1px solid #3b82f6',
+                                            color: '#60a5fa',
+                                            padding: '8px 12px',
+                                            borderRadius: '8px',
+                                            fontSize: '12px',
+                                            cursor: 'pointer'
+                                        }}
+                                    >
+                                        🪄 SUGERIR
+                                    </button>
+                                    {!dispatchMotoristaId && (
+                                        <span style={{ fontSize: '11px', color: '#fbbf24' }}>⚠️ Selecione o motorista antes de organizar.</span>
+                                    )}
+                                </div>
+                            </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '12px' }}>
                                     <div style={{ fontSize: '13px' }}>
@@ -3902,24 +4223,33 @@ function App() {
                                             <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
                                         )}
                                     </button>
-                                    <button 
-                                        disabled={!rotaOrganizada} 
-                                        onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} 
-                                        style={{ 
-                                            ...btnStyle(theme.success), 
-                                            width: 'auto', 
-                                            opacity: rotaOrganizada ? 1 : 0.5, 
-                                            filter: rotaOrganizada ? 'none' : 'grayscale(1)',
-                                            cursor: rotaOrganizada ? 'pointer' : 'not-allowed' 
+                                    <button
+                                        disabled={!rotaOrganizada || !dispatchMotoristaId}
+                                        onClick={() => {
+                                            // Se já temos o motorista selecionado, despacha direto
+                                            const m = frota.find(f => String(f.id) === String(dispatchMotoristaId));
+                                            if (m) {
+                                                assignDriver(m, entregasEmEspera);
+                                            } else {
+                                                setDriverSelectMode('dispatch');
+                                                setShowDriverSelect(true);
+                                            }
+                                        }}
+                                        style={{
+                                            ...btnStyle(theme.success),
+                                            width: 'auto',
+                                            opacity: (rotaOrganizada && dispatchMotoristaId) ? 1 : 0.5,
+                                            filter: (rotaOrganizada && dispatchMotoristaId) ? 'none' : 'grayscale(1)',
+                                            cursor: (rotaOrganizada && dispatchMotoristaId) ? 'pointer' : 'not-allowed'
                                         }}
                                     >
-                                        {rotaOrganizada ? '🚀 ENVIAR ROTA' : '🔒 BLOQUEADO'}
+                                        {(rotaOrganizada && dispatchMotoristaId) ? '🚀 ENVIAR ROTA' : '🔒 BLOQUEADO'}
                                     </button>
                                 </div>
                             </div>
                         </div>
                         {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', maxHeight: '500px', overflowY: 'auto', padding: '10px' }}>
+                            <div className="elegant-scrollbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', maxHeight: '500px', overflowY: 'auto', padding: '10px' }}>
                                 {entregasEmEspera?.map(p => (
                                     <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -3996,10 +4326,9 @@ function App() {
                             <thead>
                                 <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
                                     <th style={{ padding: '10px' }}>NOME</th>
-                                    <th>STATUS</th>
-                                    <th>VEÍCULO</th>
-                                    <th>PLACA</th>
-                                    <th>PROGRESSO</th>
+                                    <th style={{ padding: '10px' }}>EMAIL</th>
+                                    <th style={{ padding: '10px' }}>TELEFONE</th>
+                                    <th style={{ padding: '10px', textAlign: 'right' }}>AÇÕES</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -4047,6 +4376,9 @@ function App() {
                                                     <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
                                                     <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
                                                 </span>
+                                            </td>
+                                            <td style={{ padding: '10px', textAlign: 'center' }}>
+                                                {/* Botão Liberar Rota removido - fluxo simplificado */}
                                             </td>
                                         </tr>
                                     );

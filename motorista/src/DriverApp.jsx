@@ -267,6 +267,8 @@ export default function AppMotorista() {
             const newData = Array.isArray(data) ? data : [];
 
             console.log('✅ [CELULAR] Entregas carregadas:', newData.length);
+            console.log('📱 CELULAR - Entregas na ordem recebida:', newData.map((e, idx) => `${idx + 1}. ${e.cliente} (ordem_logistica: ${e.ordem_logistica})`));
+
             if (newData.length > 0) {
                 console.log('📋 IDs das entregas:', newData.map(e => e.id));
             }
@@ -428,13 +430,14 @@ export default function AppMotorista() {
                                     console.log('🚨 NOVA ROTA DETECTADA VIA UPDATE!');
                                     console.log('⏰ Timestamp:', timestamp);
                                     console.log('🎯 Diferença:', diferencaSegundos.toFixed(1), 'segundos');
+                                    console.log('🔄 Recarregando entregas do banco...');
                                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
                                     // Recarregar rota do banco de dados (busca entregas com motorista_id e status=em_rota)
                                     carregarRota();
 
                                     // Notificação sonora/visual
-                                    alert(`🚨 Nova rota recebida!\n\nAs entregas foram atualizadas.`);
+                                    alert(`🚨 Nova rota recebida!\n\nAs entregas foram atualizadas na ordem correta.`);
                                 }
                             }
 

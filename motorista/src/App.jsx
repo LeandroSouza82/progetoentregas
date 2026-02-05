@@ -37,6 +37,12 @@ const themes = {
 
 // numberedIcon replaced by numberedIconUrl (SVG data URL) for Google Maps
 
+function isValidSC(lat, lng) {
+    const latN = Number(lat);
+    const lngN = Number(lng);
+    return latN >= -29.5 && latN <= -25.8 && lngN >= -54.0 && lngN <= -48.3;
+}
+
 function InternalMobileApp() {
     // Estado da bateria (simulado)
     const [battery, setBattery] = useState({ level: 0.85, charging: false });
@@ -55,6 +61,7 @@ function InternalMobileApp() {
     const [selectedId, setSelectedId] = useState(null);
     const [carregando, setCarregando] = useState(true);
     const [darkMode, setDarkMode] = useState(false);
+    const [lastUpdateTimestamp, setLastUpdateTimestamp] = useState(Date.now()); // 🔥 Força re-render
     const theme = darkMode ? themes.dark : themes.light;
 
     // Estado do chat rápido
@@ -121,24 +128,52 @@ function InternalMobileApp() {
         const mId = motorista && motorista.id ? String(motorista.id) : null;
         if (!mId || !supabase || typeof supabase.channel !== 'function') return;
 
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('📡 [CELULAR] Ativando Realtime para entregas do motorista:', mId);
+        console.log('🔔 Escutando mudanças na tabela entregas...');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
         const channel = supabase.channel(`entregas_motorista_${mId}`)
             .on('postgres_changes',
                 {
-                    event: '*',
+                    event: '*', // Sincronia total para qualquer mudança (Insert, Update, Delete)
                     schema: 'public',
                     table: 'entregas',
                     filter: `motorista_id=eq.${mId}`
                 },
                 (payload) => {
-                    console.log('🔄 [REALTIME] Mudança detectada na tabela entregas!', payload.eventType);
-                    // Força a recarga ignorando o estado de 'carregando' para garantir atualização imediata
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    console.log('🔔 [REALTIME] Mudança detectada no banco!');
+                    console.log('📦 Tipo de evento:', payload.eventType);
+
+                    if (payload.new) {
+                        console.log('📝 Dados novos:', {
+                            id: payload.new.id,
+                            cliente: payload.new.cliente,
+                            ordem_logistica: payload.new.ordem_logistica,
+                            status: payload.new.status
+                        });
+                    }
+
+                    if (payload.old) {
+                        console.log('🗑️ Dados antigos:', {
+                            id: payload.old.id,
+                            cliente: payload.old.cliente,
+                            ordem_logistica: payload.old.ordem_logistica
+                        });
+                    }
+
+                    console.log('🔄 Recarregando lista completa do banco...');
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+                    // 🔥 FORÇA REFRESH COMPLETO: Busca do banco + atualiza timestamp
                     carregarRota(true);
+                    setLastUpdateTimestamp(Date.now());
                 }
             ).subscribe();
 
         return () => {
+            console.log('🔌 [CELULAR] Desconectando Realtime...');
             if (channel) channel.unsubscribe();
         };
     }, [motorista?.id]);
@@ -178,12 +213,45 @@ function InternalMobileApp() {
                 .from('entregas')
                 .select('*')
                 .eq('motorista_id', mId)
-                .in('status', ['em_rota', 'entregue', 'falha'])
-                .order('ordem_logistica', { ascending: true });
+                .eq('status', 'em_rota')
+                .order('ordem_logistica', { ascending: true, nullsFirst: false });
 
             if (!error && data) {
-                setEntregas(data);
-                setSelectedId(prev => prev || (data.length > 0 ? (data.find(e => e.status === 'em_rota') || data[0]).id : null));
+                // 🔍 VERIFICAÇÃO: Ordem recebida do banco
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log('📱 CELULAR - Dados brutos recebidos do Supabase:');
+                console.log('📊 Total de entregas:', data.length);
+                console.log('📱 ORDEM RECEBIDA:', data.map(e => e.ordem_logistica));
+                console.log('📋 Detalhes completos:', data.map((e, idx) => ({
+                    posicao_array: idx,
+                    id: e.id,
+                    cliente: e.cliente,
+                    ordem_logistica: e.ordem_logistica
+                })));
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+                // ✅ ORDENAÇÃO GARANTIDA: Mesmo que o Supabase tenha ordenado, forçamos localmente
+                // para garantir que qualquer item com ordem null vá para o final
+                const listaOrdenada = [...data].sort((a, b) => {
+                    const ordemA = a.ordem_logistica != null ? parseInt(a.ordem_logistica, 10) : 9999;
+                    const ordemB = b.ordem_logistica != null ? parseInt(b.ordem_logistica, 10) : 9999;
+                    return ordemA - ordemB;
+                });
+
+                console.log('✅ CELULAR - Lista final ordenada:', listaOrdenada.map((e, idx) => `${idx + 1}. ${e.cliente} (ordem: ${e.ordem_logistica})`));
+
+                // 🔥 ATUALIZAÇÃO FORÇADA: Cria novo array para garantir que React detecte mudança
+                // Adiciona timestamp único para cada item forçar re-render se necessário
+                const listaComTimestamp = listaOrdenada.map(item => ({
+                    ...item,
+                    _reactKey: `${item.id}_${item.ordem_logistica}_${Date.now()}`
+                }));
+
+                setEntregas(listaComTimestamp);
+                setSelectedId(prev => prev || (listaOrdenada.length > 0 ? (listaOrdenada.find(e => e.status === 'em_rota') || listaOrdenada[0]).id : null));
+
+                // 🔔 Força atualização do timestamp global
+                setLastUpdateTimestamp(Date.now());
             }
         } catch (err) {
             console.error('[motorista] erro ao carregar rota', err);
@@ -191,6 +259,54 @@ function InternalMobileApp() {
             setCarregando(false);
         }
     }
+
+    // Sincronização Inversa: Celular -> Painel (Persistência em Massa Profissional)
+    const reordenarEntrega = async (id, direcao) => {
+        // 🔥 Encontra o índice na lista ORDENADA, não na lista bruta
+        const listaOrdenada = [...entregas].sort((a, b) => {
+            const oA = a.ordem_logistica != null ? parseInt(a.ordem_logistica, 10) : 9999;
+            const oB = b.ordem_logistica != null ? parseInt(b.ordem_logistica, 10) : 9999;
+            return oA - oB;
+        });
+
+        const index = listaOrdenada.findIndex(e => e.id === id);
+        if (index === -1) return;
+        const novoIndex = direcao === 'sobe' ? index - 1 : index + 1;
+        if (novoIndex < 0 || novoIndex >= listaOrdenada.length) return;
+
+        const novaLista = [...listaOrdenada];
+        [novaLista[index], novaLista[novoIndex]] = [novaLista[novoIndex], novaLista[index]];
+
+        // Garante que TODOS os itens tenham uma ordem sequencial inteira
+        const listaSincronizada = novaLista.map((item, idx) => ({
+            ...item,
+            ordem_logistica: parseInt(idx + 1, 10)
+        }));
+
+        // ✅ Atualização otimista no estado local
+        setEntregas(listaSincronizada);
+        setLastUpdateTimestamp(Date.now());
+
+        // Persistência em Massa: percorre a lista e garante int4 no banco
+        try {
+            const updates = listaSincronizada.map(item =>
+                supabase.from('entregas')
+                    .update({ ordem_logistica: item.ordem_logistica })
+                    .eq('id', item.id)
+            );
+            await Promise.all(updates);
+
+            console.log('✅ Ordem atualizada no banco com sucesso');
+
+            // 🔄 Força reload do banco para garantir sincronização
+            setTimeout(() => carregarRota(true), 500);
+
+        } catch (e) {
+            console.error('Erro na persistência em massa da ordem logistica', e);
+            // Reverte mudança local em caso de erro
+            carregarRota(true);
+        }
+    };
 
     // Função para abrir GPS
     const abrirGPS = (app, lat, lng) => {
@@ -309,12 +425,21 @@ function InternalMobileApp() {
         ? (entregas.find(e => e.id === selectedId && e.status === 'em_rota') || entregas.find(e => e.status === 'em_rota'))
         : (entregas.find(e => e.status === 'em_rota') || null);
 
-    // Ordena entregas pela propriedade 'ordem_logistica'
+    // Ordena entregas pela propriedade 'ordem_logistica' tratando nulls
+    // 🔥 ATUALIZAÇÃO FORÇADA: Inclui lastUpdateTimestamp para garantir re-ordenação
     const orderedRota = useMemo(() => {
-        return [...entregas].sort((a, b) => (a.ordem_logistica || 0) - (b.ordem_logistica || 0));
-    }, [entregas]);
-    // markers filtered to SC region only (ensure numeric comparison)
-    const markersParaMostrar = (orderedRota || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(Number(e.lat), Number(e.lng)));
+        console.log('🔄 [REACT] Recalculando orderedRota...', lastUpdateTimestamp);
+        const sorted = [...entregas].sort((a, b) => {
+            const oA = a.ordem_logistica != null ? parseInt(a.ordem_logistica, 10) : 9999;
+            const oB = b.ordem_logistica != null ? parseInt(b.ordem_logistica, 10) : 9999;
+            return oA - oB;
+        });
+        console.log('✅ [REACT] Ordem final:', sorted.map((e, idx) => `${idx + 1}. ${e.cliente} (ordem: ${e.ordem_logistica})`));
+        return sorted;
+    }, [entregas, lastUpdateTimestamp]);
+
+    // markers filtered to SC region only
+    const markersParaMostrar = (orderedRota || []).filter(e => e && e.lat != null && e.lng != null && isValidSC(e.lat, e.lng));
 
     const mapRefMobile = useRef(null);
 
@@ -554,20 +679,22 @@ function InternalMobileApp() {
                     <h4 style={{ margin: '8px 0 10px 8px', color: theme.textMain }}>Mapa da Rota</h4>
                     <div style={{ borderRadius: '8px', overflow: 'hidden' }}>
                         {/* Mobile-first: altura fixa 250px em mobile */}
-                        <MapaLogistica entregas={entregas} frota={frotaMemo} mobile={true} />
+                        {/* 🔥 USA orderedRota para garantir ordem correta */}
+                        <MapaLogistica entregas={orderedRota} frota={frotaMemo} mobile={true} />
                         <button onClick={() => setDarkMode(m => !m)} title="Alternar modo" style={{ padding: '6px 10px', borderRadius: '10px', border: 'none', background: darkMode ? '#222' : '#eee', color: darkMode ? '#fff' : '#222', cursor: 'pointer', fontWeight: 'bold' }}>{darkMode ? '🌙' : '☀️'}</button>
                     </div>
                 </div>
 
                 {/* LISTA DE ENTREGAS (SELECIONÁVEL) */}
                 <div style={{ marginTop: '10px' }}>
-                    <h4 style={{ margin: '0 0 15px 10px', color: theme.textLight, fontSize: '12px', letterSpacing: '1px' }}>ROTAS DISPONÍVEIS ({entregas.length})</h4>
+                    <h4 style={{ margin: '0 0 15px 10px', color: theme.textLight, fontSize: '12px', letterSpacing: '1px' }}>ROTAS DISPONÍVEIS ({orderedRota.length})</h4>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '220px', overflowY: 'auto', paddingRight: '8px' }}>
-                        {entregas.map((task, idx) => {
+                        {/* 🔥 USA orderedRota ao invés de entregas para garantir ordem */}
+                        {orderedRota.map((task, taskIndex) => {
                             const isSelected = tarefaAtual && tarefaAtual.id === task.id;
                             return (
                                 <button
-                                    key={task.id}
+                                    key={task.id} // Chave de Identificação Única (ID) para estabilizar o React
                                     onClick={() => setSelectedId(task.id)}
                                     style={{
                                         display: 'flex',
@@ -582,14 +709,20 @@ function InternalMobileApp() {
                                     }}
                                 >
                                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                        <div style={{ fontWeight: 'bold', color: isSelected ? theme.primary : '#9ca3af', fontSize: '18px' }}>{idx + 1}</div>
+                                        {/* Visual da Ordem Oficial */}
+                                        <div style={{ fontWeight: 'bold', color: isSelected ? theme.primary : '#9ca3af', fontSize: '18px', minWidth: '24px' }}>
+                                            {task.ordem_logistica || '-'}
+                                        </div>
                                         <div>
                                             <div style={{ fontWeight: '700' }}>{task.cliente}</div>
                                             <div style={{ fontSize: '12px', color: theme.textLight }}>{task.endereco.substring(0, 40)}</div>
-                                            <div style={{ fontSize: '11px', color: theme.textLight, marginTop: '2px' }}>⏱️ {estimarTempoEntrega(task.ordem_logistica || (idx + 1))}</div>
+                                            <div style={{ fontSize: '11px', color: theme.textLight, marginTop: '2px' }}>⏱️ {estimarTempoEntrega(task.ordem_logistica)}</div>
                                         </div>
                                     </div>
-                                    <div style={{ fontSize: '16px' }}>📦</div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <div onClick={(e) => { e.stopPropagation(); reordenarEntrega(task.id, 'sobe'); }} style={{ padding: '4px', background: '#f0f0f0', borderRadius: '4px', textAlign: 'center' }}>▲</div>
+                                        <div onClick={(e) => { e.stopPropagation(); reordenarEntrega(task.id, 'desce'); }} style={{ padding: '4px', background: '#f0f0f0', borderRadius: '4px', textAlign: 'center' }}>▼</div>
+                                    </div>
                                 </button>
                             );
                         })}

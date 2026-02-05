@@ -330,7 +330,7 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
             {/* CSS para scrollbar customizada */}
             <style>{`
                 .custom-scrollbar::-webkit-scrollbar {
-                    width: 8px;
+                    width: 5px;
                 }
                 .custom-scrollbar::-webkit-scrollbar-track {
                     background: rgba(255, 255, 255, 0.05);
