@@ -35,6 +35,7 @@ npm --prefix motorista run build
 Remote
 
 O código já foi enviado para: https://github.com/LeandroSouza82/progetoentregas
+**Projeto V10 Logística** - Deploy: https://v10logistica.vercel.app
 
 ---
 Arquivo gerado automaticamente pelo assistente.
