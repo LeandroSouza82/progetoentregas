@@ -183,7 +183,7 @@ if (typeof window === 'undefined') {
             }
 
             console.log('✅ Credenciais OK - Criando cliente Supabase...');
-            
+
             // 🎯 CRIAR CLIENTE
             supabase = createClient(supabaseUrl, supabaseAnonKey);
             HAS_SUPABASE_CREDENTIALS = true;
@@ -202,7 +202,7 @@ if (typeof window === 'undefined') {
                 console.log('✅ Método .from() disponível');
                 console.log('✅ Sistema ONLINE - Conectado ao banco de dados');
             }
-            
+
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             // Notify that a client object exists (handlers may want to keep it)

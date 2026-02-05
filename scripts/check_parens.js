@@ -12,13 +12,13 @@ for (let i = 0; i < lines.length; i++) {
     for (let j = 0; j < line.length; j++) {
         const char = line[j];
         if (inComment) {
-            if (char === '*' && line[j+1] === '/') { inComment = false; j++; }
+            if (char === '*' && line[j + 1] === '/') { inComment = false; j++; }
             continue;
         }
-        if (char === '/' && line[j+1] === '/') break;
-        if (char === '/' && line[j+1] === '*') { inComment = true; j++; continue; }
+        if (char === '/' && line[j + 1] === '/') break;
+        if (char === '/' && line[j + 1] === '*') { inComment = true; j++; continue; }
         if (inString) {
-            if (char === inString && line[j-1] !== '\\') inString = null;
+            if (char === inString && line[j - 1] !== '\\') inString = null;
             continue;
         }
         if (char === "'" || char === '"' || char === '`') { inString = char; continue; }
@@ -27,7 +27,7 @@ for (let i = 0; i < lines.length; i++) {
         if (char === ')') {
             balance--;
             if (balance < 0) {
-                console.log(`NEGATIVE PAREN BALANCE at Line ${i+1}, Col ${j+1}: ${line}`);
+                console.log(`NEGATIVE PAREN BALANCE at Line ${i + 1}, Col ${j + 1}: ${line}`);
                 balance = 0; // Reset to find more
             }
         }
