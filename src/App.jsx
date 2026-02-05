@@ -113,12 +113,17 @@ function createPinIcon(tipo, status, num = null) {
 
 // Ícone do motorista - LEANDRO (Bicicleta de Entrega)
 const bikeIcon = L.divIcon({
-    html: `<img src="/bicicleta-de-entrega.png" style="width: 45px; height: 45px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));" />`,
+    html: `<img src="/bicicleta-de-entrega.png" style="width: 45px; height: 45px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));" onerror="console.error('❌ Erro ao carregar imagem da moto: /bicicleta-de-entrega.png')" onload="console.log('✅ Imagem da moto carregada com sucesso')" />`,
     className: 'marker-motorista-limpo',
     iconSize: [45, 45],
     iconAnchor: [22, 22],
     popupAnchor: [0, -22]
 });
+
+// 🔍 DEBUG: Verificar se o ícone foi criado corretamente
+console.log('🏍️ Ícone da moto (bikeIcon) criado:', bikeIcon);
+console.log('📁 Caminho da imagem: /bicicleta-de-entrega.png');
+
 
 
 // Simple scheduler (DESABILITADO para evitar loops)
@@ -207,13 +212,13 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
 
     return (
         <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>
-            <td style={{ padding: '15px 10px' }}>
+            <td style={{ padding: '15px 10px', textAlign: 'center', wordWrap: 'break-word', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 <span style={{ color: '#ffffff', fontWeight: 600 }}>{fullName(m)}</span>
             </td>
 
-            <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px' }}>{email || 'Sem email'}</td>
+            <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px', textAlign: 'center', wordWrap: 'break-word', overflow: 'hidden', textOverflow: 'ellipsis' }}>{email || 'Sem email'}</td>
 
-            <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px' }}>
+            <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px', textAlign: 'center', wordWrap: 'break-word' }}>
                 {telefone ? (
                     <a
                         href={`https://api.whatsapp.com/send?phone=${encodeURIComponent(String(m.telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(waMessage)}`}
@@ -228,13 +233,15 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
             </td>
 
             {(onApprove || onReject) && (
-                <td style={{ padding: '10px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                    {onApprove && (
-                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) { } }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn green">APROVAR</button>
-                    )}
-                    {onReject && (
-                        <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) { } }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer' }} className="action-btn red">REPROVAR</button>
-                    )}
+                <td style={{ padding: '10px', textAlign: 'center' }}>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {onApprove && (
+                            <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) { } }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }} className="action-btn green">APROVAR</button>
+                        )}
+                        {onReject && (
+                            <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) { } }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }} className="action-btn red">REPROVAR</button>
+                        )}
+                    </div>
                 </td>
             )}
         </tr>
@@ -683,6 +690,67 @@ function App() {
             setEstimatedTimeText(formatDuration(estimatedTimeSec));
         } catch (e) { /* ignore */ }
     }, [estimatedTimeSec]);
+
+    // 🎨 INJETAR CSS CUSTOMIZADO PARA SELECT DE MOTORISTA (Melhor Legibilidade)
+    useEffect(() => {
+        const styleId = 'motorista-select-custom-styles';
+
+        // Verificar se já existe para evitar duplicação
+        if (document.getElementById(styleId)) return;
+
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.innerHTML = `
+            /* 🎯 Estilização avançada do select de motorista */
+            .motorista-select-enhanced option {
+                padding: 14px 16px !important;
+                line-height: 1.8 !important;
+                cursor: pointer !important;
+            }
+            
+            .motorista-select-enhanced option:hover,
+            .motorista-select-enhanced option:focus {
+                background: linear-gradient(135deg, #3b82f6, #1e40af) !important;
+                color: #ffffff !important;
+                font-weight: 700 !important;
+            }
+            
+            .motorista-select-enhanced option:checked {
+                background: #1e3a8a !important;
+                color: #fbbf24 !important;
+                font-weight: 800 !important;
+            }
+            
+            /* Melhorar a aparência do dropdown no Chrome/Edge */
+            .motorista-select-enhanced::-webkit-scrollbar {
+                width: 12px;
+            }
+            
+            .motorista-select-enhanced::-webkit-scrollbar-track {
+                background: #0f172a;
+                border-radius: 6px;
+            }
+            
+            .motorista-select-enhanced::-webkit-scrollbar-thumb {
+                background: linear-gradient(135deg, #3b82f6, #1e40af);
+                border-radius: 6px;
+                border: 2px solid #0f172a;
+            }
+            
+            .motorista-select-enhanced::-webkit-scrollbar-thumb:hover {
+                background: linear-gradient(135deg, #60a5fa, #3b82f6);
+            }
+        `;
+
+        document.head.appendChild(style);
+
+        // Cleanup ao desmontar componente
+        return () => {
+            const el = document.getElementById(styleId);
+            if (el) el.remove();
+        };
+    }, []);
+
     const [observacoesGestor, setObservacoesGestor] = useState('');
     const [dispatchLoading, setDispatchLoading] = useState(false);
     const [mensagemGeral, setMensagemGeral] = useState('');
@@ -1868,6 +1936,16 @@ function App() {
                 const parsed = { ...rec };
                 if (parsed.lat != null) parsed.lat = Number(parsed.lat);
                 if (parsed.lng != null) parsed.lng = Number(parsed.lng);
+
+                // 🔍 DEBUG: Log quando dados de motorista chegam
+                console.log('📍 Dados do motorista recebidos:', {
+                    id: parsed.id,
+                    nome: parsed.nome,
+                    lat: parsed.lat,
+                    lng: parsed.lng,
+                    esta_online: parsed.esta_online,
+                    aprovado: parsed.aprovado
+                });
 
                 // Atualiza por mapeamento para preservar referências de objetos
                 setFrota(prev => {
@@ -3224,9 +3302,17 @@ function App() {
     } catch (e) { /* ignore */ }
 
     const appContent = (
-        <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+        <div style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
             {/* Animação CSS para sugestão fuzzy search */}
             <style>{`
+                /* Prevenir scroll horizontal global */
+                html, body {
+                    overflow-x: hidden;
+                    max-width: 100%;
+                    margin: 0;
+                    padding: 0;
+                }
+
                 @keyframes slideDown {
                     from {
                         opacity: 0;
@@ -3293,11 +3379,11 @@ function App() {
             <header style={{
                 backgroundColor: theme.headerBg,
                 color: theme.headerText,
-                padding: '0 40px',
+                padding: '0',
                 height: '70px',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
+                justifyContent: 'center',
                 boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
                 position: 'fixed',
                 top: 0,
@@ -3305,44 +3391,54 @@ function App() {
                 right: 0,
                 zIndex: 1300
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {/* Container centralizado com max-width */}
+                <div style={{
+                    maxWidth: '1450px',
+                    width: '95%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '0 20px'
+                }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1E3A8A,#3B82F6)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
-                            <div style={{ fontSize: '13px', color: '#a9b8d3', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '8px' }} title="Motoristas online">Online: <strong style={{ color: '#60a5fa' }}>{motoristasOnlineCount}</strong></div>
+                            <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1a365d,#f6ad55)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <h2 className="dashboard-title" style={{ margin: 0, fontSize: '22px', fontFamily: "Inter, Roboto, sans-serif", fontWeight: '700', background: 'linear-gradient(to right, #1a365d, #f6ad55)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 LOGÍSTICA</h2>
+                                <div style={{ fontSize: '13px', color: '#a9b8d3', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '8px' }} title="Motoristas online">Online: <strong style={{ color: '#60a5fa' }}>{motoristasOnlineCount}</strong></div>
+                            </div>
                         </div>
+
+                        <nav style={{ display: 'flex', gap: '8px' }}>
+                            {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
+                                <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
+                                    padding: '10px 18px',
+                                    background: abaAtiva === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                    border: abaAtiva === tab ? `1px solid ${theme.primary}` : '1px solid transparent',
+                                    color: abaAtiva === tab ? theme.primary : '#94a3b8', // Texto colorido quando ativo
+                                    borderRadius: '20px',
+                                    cursor: 'pointer',
+                                    fontWeight: '600',
+                                    fontSize: '14px',
+                                    transition: '0.18s'
+                                }}>
+                                    {tab.toUpperCase()}
+                                </button>
+                            ))}
+                        </nav>
                     </div>
 
-                    <nav style={{ display: 'flex', gap: '8px' }}>
-                        {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
-                            <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
-                                padding: '10px 18px',
-                                background: abaAtiva === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
-                                border: abaAtiva === tab ? `1px solid ${theme.primary}` : '1px solid transparent',
-                                color: abaAtiva === tab ? theme.primary : '#94a3b8', // Texto colorido quando ativo
-                                borderRadius: '20px',
-                                cursor: 'pointer',
-                                fontWeight: '600',
-                                fontSize: '14px',
-                                transition: '0.18s'
-                            }}>
-                                {tab.toUpperCase()}
-                            </button>
-                        ))}
-                    </nav>
-                </div>
+                    <div style={{ flex: 1 }} />
 
-                <div style={{ flex: 1 }} />
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
-                        <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
-                        <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                            <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
+                            <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
+                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
+                        </div>
                     </div>
                 </div>
             </header>
@@ -3354,7 +3450,7 @@ function App() {
 
             <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '30px' }}>
                     <CardKPI titulo="TOTAL DE ENTREGAS" valor={totalEntregas} cor={theme.accent} />
                     <CardKPI titulo="MOTORISTAS ONLINE" valor={frota.filter(m => m.esta_online === true).length} cor={theme.success} />
                     <CardKPI titulo="ROTA ATIVA" valor={rotaAtiva.length > 0 ? 'EM ANDAMENTO' : 'AGUARDANDO'} cor={theme.primary} />
@@ -3384,29 +3480,61 @@ function App() {
                                         />
 
                                         {/* Motoristas online */}
-                                        {(frota || []).filter(m => m.aprovado === true && m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(motorista => {
-                                            const lat = Number(motorista.lat);
-                                            const lng = Number(motorista.lng);
-                                            return (
-                                                <Marker
-                                                    key={`motorista-${motorista.id}`}
-                                                    position={[lat, lng]}
-                                                    icon={bikeIcon}
-                                                >
-                                                    <Tooltip permanent direction="top" offset={[0, -20]}>
-                                                        <strong>{fullName(motorista)}</strong>
-                                                    </Tooltip>
-                                                    <Popup>
-                                                        <div style={{ minWidth: '160px', fontSize: '13px' }}>
-                                                            <strong>👤 Motorista:</strong> {fullName(motorista)}<br />
-                                                            <strong>🚛 Veículo:</strong> {motorista.veiculo || 'Não informado'}<br />
-                                                            <strong>📍 Local:</strong> {lat.toFixed(6)}, {lng.toFixed(6)}<br />
-                                                            <strong>🚦 Status:</strong> <span style={{ color: '#10b981', fontWeight: 'bold' }}>ONLINE</span>
-                                                        </div>
-                                                    </Popup>
-                                                </Marker>
-                                            );
-                                        })}
+                                        {(() => {
+                                            const motoristasOnline = (frota || []).filter(m => m.aprovado === true && m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng)));
+
+                                            // 🔍 DEBUG: Log total de motoristas online filtrados
+                                            console.log('🚛 Motoristas online no mapa:', motoristasOnline.length, motoristasOnline.map(m => ({
+                                                id: m.id,
+                                                nome: fullName(m),
+                                                lat: m.lat,
+                                                lng: m.lng
+                                            })));
+
+                                            return motoristasOnline.map(motorista => {
+                                                const lat = Number(motorista.lat);
+                                                const lng = Number(motorista.lng);
+
+                                                // 🔍 DEBUG: Validação rigorosa das coordenadas
+                                                if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+                                                    console.warn(`⚠️ Coordenadas inválidas para ${fullName(motorista)}:`, { lat, lng });
+                                                    return null;
+                                                }
+
+                                                if (lat === 0 && lng === 0) {
+                                                    console.warn(`⚠️ Coordenadas zeradas (0,0) para ${fullName(motorista)}`);
+                                                    return null;
+                                                }
+
+                                                // 🔍 DEBUG: Log coordenadas do motorista sendo renderizado
+                                                console.log(`🏍️ Renderizando motorista ${fullName(motorista)}:`, {
+                                                    lat,
+                                                    lng,
+                                                    aprovado: motorista.aprovado,
+                                                    esta_online: motorista.esta_online
+                                                });
+
+                                                return (
+                                                    <Marker
+                                                        key={`motorista-${motorista.id}`}
+                                                        position={[lat, lng]}
+                                                        icon={bikeIcon}
+                                                    >
+                                                        <Tooltip permanent direction="top" offset={[0, -20]}>
+                                                            <strong>{fullName(motorista)}</strong>
+                                                        </Tooltip>
+                                                        <Popup>
+                                                            <div style={{ minWidth: '160px', fontSize: '13px' }}>
+                                                                <strong>👤 Motorista:</strong> {fullName(motorista)}<br />
+                                                                <strong>🚛 Veículo:</strong> {motorista.veiculo || 'Não informado'}<br />
+                                                                <strong>📍 Local:</strong> {lat.toFixed(6)}, {lng.toFixed(6)}<br />
+                                                                <strong>🚦 Status:</strong> <span style={{ color: '#10b981', fontWeight: 'bold' }}>ONLINE</span>
+                                                            </div>
+                                                        </Popup>
+                                                    </Marker>
+                                                );
+                                            }).filter(Boolean); // Remove nulls das coordenadas inválidas
+                                        })()}
 
                                         {/* Entregas em espera (pendentes) */}
                                         {(() => {
@@ -3566,21 +3694,9 @@ function App() {
                                         🚲
                                     </button>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '15px' }}>
-                                    <button
-                                        onClick={() => setShowHistory(true)}
-                                        className="btn-sidebar-glow"
-                                        style={{ height: '42px', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
-                                    >
-                                        📜 Históricos
-                                    </button>
-                                    <button
-                                        onClick={otimizarTodasAsRotas}
-                                        className="btn-sidebar-glow"
-                                        style={{ height: '42px', background: 'rgba(139, 92, 246, 0.1)', color: '#a78bfa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase', border: '1px solid rgba(139, 92, 246, 0.2)' }}
-                                    >
-                                        ⚡ Reorganizar
-                                    </button>
+                                {/* Linha de Ação com 3 Botões Iguais */}
+                                <div style={{ display: 'flex', flexDirection: 'row', gap: '10px', marginBottom: '15px' }}>
+                                    {/* Botão 1: CHECK MAPA */}
                                     <button
                                         onClick={() => {
                                             setIsFilteringRoute(!isFilteringRoute);
@@ -3588,28 +3704,111 @@ function App() {
                                         }}
                                         className="btn-sidebar-glow"
                                         style={{
-                                            height: '42px',
-                                            background: isFilteringRoute ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.1)',
+                                            flex: 1,
+                                            height: '45px',
+                                            background: isFilteringRoute ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.15)',
                                             color: isFilteringRoute ? '#4ade80' : '#60a5fa',
-                                            borderRadius: '8px',
-                                            fontSize: '10px',
+                                            borderRadius: '10px',
+                                            fontSize: '11px',
                                             fontWeight: '800',
                                             cursor: 'pointer',
                                             textTransform: 'uppercase',
-                                            border: isFilteringRoute ? '1px solid #22c55e' : '1px solid rgba(59, 130, 246, 0.2)'
+                                            border: isFilteringRoute ? '1px solid #22c55e' : '1px solid rgba(59, 130, 246, 0.3)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '6px',
+                                            boxShadow: isFilteringRoute ? '0 0 20px rgba(34, 197, 94, 0.4), 0 0 40px rgba(34, 197, 94, 0.2)' : '0 0 15px rgba(59, 130, 246, 0.3)',
+                                            transition: 'all 0.3s ease'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.boxShadow = isFilteringRoute
+                                                ? '0 0 25px rgba(34, 197, 94, 0.6), 0 0 50px rgba(34, 197, 94, 0.3)'
+                                                : '0 0 20px rgba(59, 130, 246, 0.5), 0 0 40px rgba(59, 130, 246, 0.2)';
+                                            e.currentTarget.style.transform = 'translateY(-2px)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.boxShadow = isFilteringRoute
+                                                ? '0 0 20px rgba(34, 197, 94, 0.4), 0 0 40px rgba(34, 197, 94, 0.2)'
+                                                : '0 0 15px rgba(59, 130, 246, 0.3)';
+                                            e.currentTarget.style.transform = 'translateY(0)';
                                         }}
                                     >
-                                        ✔️ Check Rotas
+                                        <span style={{ fontSize: '14px' }}>✔️</span>
+                                        <span>CHECK MAPA</span>
                                     </button>
+
+                                    {/* Botão 2: HISTÓRICO */}
+                                    <button
+                                        onClick={() => setShowHistory(true)}
+                                        className="btn-sidebar-glow"
+                                        style={{
+                                            flex: 1,
+                                            height: '45px',
+                                            background: 'rgba(139, 92, 246, 0.15)',
+                                            color: '#a78bfa',
+                                            borderRadius: '10px',
+                                            fontSize: '11px',
+                                            fontWeight: '800',
+                                            cursor: 'pointer',
+                                            textTransform: 'uppercase',
+                                            border: '1px solid rgba(139, 92, 246, 0.3)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '6px',
+                                            boxShadow: '0 0 15px rgba(139, 92, 246, 0.3)',
+                                            transition: 'all 0.3s ease'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 20px rgba(139, 92, 246, 0.5), 0 0 40px rgba(139, 92, 246, 0.2)';
+                                            e.currentTarget.style.transform = 'translateY(-2px)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 15px rgba(139, 92, 246, 0.3)';
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                        }}
+                                    >
+                                        <span style={{ fontSize: '14px' }}>📜</span>
+                                        <span>HISTÓRICO</span>
+                                    </button>
+
+                                    {/* Botão 3: LIMPAR */}
                                     <button
                                         onClick={(e) => {
                                             e.preventDefault();
                                             if (typeof handleLimparConcluidos === 'function') { try { handleLimparConcluidos(e); } catch (err) { } }
                                         }}
                                         className="btn-sidebar-glow"
-                                        style={{ height: '42px', background: 'rgba(59, 130, 246, 0.1)', color: '#60a5fa', borderRadius: '8px', fontSize: '10px', fontWeight: '800', cursor: 'pointer', textTransform: 'uppercase' }}
+                                        style={{
+                                            flex: 1,
+                                            height: '45px',
+                                            background: 'rgba(239, 68, 68, 0.15)',
+                                            color: '#f87171',
+                                            borderRadius: '10px',
+                                            fontSize: '11px',
+                                            fontWeight: '800',
+                                            cursor: 'pointer',
+                                            textTransform: 'uppercase',
+                                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '6px',
+                                            boxShadow: '0 0 15px rgba(239, 68, 68, 0.3)',
+                                            transition: 'all 0.3s ease'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 20px rgba(239, 68, 68, 0.5), 0 0 40px rgba(239, 68, 68, 0.2)';
+                                            e.currentTarget.style.transform = 'translateY(-2px)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 15px rgba(239, 68, 68, 0.3)';
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                        }}
                                     >
-                                        🚫 Limpar
+                                        <span style={{ fontSize: '14px' }}>🗑️</span>
+                                        <span>LIMPAR</span>
                                     </button>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: '10px' }}>
@@ -3736,11 +3935,11 @@ function App() {
 
                 {/* NOVA CARGA */}
                 {abaAtiva === 'Nova Carga' && (
-                    <div style={{ display: 'flex', gap: '24px', background: 'transparent' }}>
+                    <div style={{ display: 'flex', gap: '24px', background: 'transparent', alignItems: 'flex-start' }}>
                         {/* Coluna Esquerda: Formulário */}
-                        <div style={{ flex: '0 0 48%', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow }}>
-                            <h2 style={{ marginTop: 0, color: theme.primary }}>Registrar Encomenda</h2>
-                            <form autoComplete="off" onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div style={{ flex: '1', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
+                            <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', color: theme.primary, fontWeight: 700 }}>Registrar Encomenda</h2>
+                            <form autoComplete="off" onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                 <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                                     <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
                                     <select name="tipo" value={tipoEncomenda} onChange={(e) => setTipoEncomenda(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
@@ -3957,7 +4156,7 @@ function App() {
 
                                 <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
 
-                                {/* BOTÃO REESCRITO DO ZERO - SEM CLASSES CSS */}
+                                {/* BOTÃO REESCRITO DO ZERO - SEM CLASSES CSS - COMPACTADO */}
                                 <button
                                     type="submit"
                                     disabled={isGeocoding}
@@ -3965,7 +4164,7 @@ function App() {
                                         width: '100%',
                                         height: '60px',
                                         display: 'block',
-                                        margin: '20px 0px',
+                                        margin: '12px 0 0 0',
                                         backgroundColor: isGeocoding ? '#94a3b8' : '#007bff',
                                         color: 'white',
                                         fontSize: '18px',
@@ -3978,7 +4177,8 @@ function App() {
                                         letterSpacing: '1px',
                                         textTransform: 'uppercase',
                                         boxShadow: '0 4px 12px rgba(0, 123, 255, 0.3)',
-                                        zIndex: 9999
+                                        zIndex: 9999,
+                                        flexShrink: 0
                                     }}
                                     onMouseEnter={(e) => {
                                         if (!isGeocoding) {
@@ -4011,12 +4211,14 @@ function App() {
                         </div>
 
                         {/* Coluna Direita: Histórico (scroll) */}
-                        <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', gap: '10px', flexWrap: 'wrap' }}>
-                                <h3 style={{ margin: 0, color: theme.textMain, fontSize: '18px' }}>Histórico de Clientes</h3>
+                        <div style={{ flex: '1', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column', overflow: 'visible' }}>
+                            {/* 🎯 HEADER: Título + Barra de Pesquisa + Botão Limpar */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', gap: '12px', position: 'relative', zIndex: 10, flexShrink: 0 }}>
+                                <h3 style={{ margin: 0, color: theme.textMain, fontSize: '18px', flexShrink: 0, fontWeight: 700 }}>Histórico de Clientes</h3>
 
-                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                    {/* Campo de pesquisa no histórico - COMPACTO */}
+                                {/* 🔍 Container Flexbox: Pesquisa + Botão Limpar */}
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, flexWrap: 'nowrap' }}>
+                                    {/* Campo de pesquisa no histórico */}
                                     <input
                                         type="text"
                                         placeholder="🔍 Pesquisar no histórico..."
@@ -4024,104 +4226,211 @@ function App() {
                                         onChange={(e) => setHistoricoFilter(e.target.value)}
                                         style={{
                                             ...inputStyle,
-                                            width: '300px',
+                                            width: '220px',
                                             marginBottom: 0,
                                             fontSize: '13px',
-                                            padding: '8px 12px',
-                                            height: '38px',
-                                            backgroundColor: 'rgba(255,255,255,0.03)'
+                                            padding: '9px 12px',
+                                            height: '40px',
+                                            backgroundColor: 'rgba(255,255,255,0.03)',
+                                            border: '1px solid rgba(255,255,255,0.1)',
+                                            borderRadius: '8px',
+                                            color: theme.textMain,
+                                            outline: 'none',
+                                            transition: 'all 0.2s ease',
+                                            flexShrink: 0
+                                        }}
+                                        onFocus={(e) => {
+                                            e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.5)';
+                                            e.currentTarget.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.1)';
+                                        }}
+                                        onBlur={(e) => {
+                                            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
+                                            e.currentTarget.style.boxShadow = 'none';
                                         }}
                                     />
 
-                                    {/* Botão Limpar Histórico */}
+                                    {/* 🗑️ Botão Limpar Histórico - 100% VISÍVEL */}
                                     <button
                                         onClick={limparHistorico}
-                                        title="Limpar todo o histórico"
+                                        title="Limpar todo o histórico de endereços"
                                         style={{
-                                            background: 'rgba(244, 67, 54, 0.1)',
-                                            border: '1px solid rgba(244, 67, 54, 0.3)',
+                                            background: 'linear-gradient(135deg, rgba(244, 67, 54, 0.15), rgba(239, 68, 68, 0.1))',
+                                            border: '2px solid rgba(244, 67, 54, 0.4)',
                                             borderRadius: '8px',
-                                            padding: '0 12px',
-                                            height: '38px',
+                                            padding: '0 16px',
+                                            height: '40px',
                                             cursor: 'pointer',
-                                            color: '#F44336',
-                                            fontSize: '13px',
-                                            fontWeight: 500,
+                                            color: '#ff5252',
+                                            fontSize: '14px',
+                                            fontWeight: 700,
                                             display: 'flex',
                                             alignItems: 'center',
-                                            gap: '6px',
-                                            transition: 'all 0.2s ease',
-                                            whiteSpace: 'nowrap'
+                                            gap: '8px',
+                                            transition: 'all 0.3s ease',
+                                            whiteSpace: 'nowrap',
+                                            position: 'relative',
+                                            boxShadow: '0 0 15px rgba(244, 67, 54, 0.2)',
+                                            flexShrink: 0
                                         }}
                                         onMouseEnter={(e) => {
-                                            e.target.style.background = 'rgba(244, 67, 54, 0.2)';
-                                            e.target.style.transform = 'scale(1.02)';
+                                            e.currentTarget.style.background = 'linear-gradient(135deg, rgba(244, 67, 54, 0.25), rgba(239, 68, 68, 0.2))';
+                                            e.currentTarget.style.transform = 'translateY(-1px)';
+                                            e.currentTarget.style.boxShadow = '0 0 25px rgba(244, 67, 54, 0.4), 0 4px 12px rgba(0,0,0,0.2)';
+                                            e.currentTarget.style.borderColor = 'rgba(244, 67, 54, 0.6)';
                                         }}
                                         onMouseLeave={(e) => {
-                                            e.target.style.background = 'rgba(244, 67, 54, 0.1)';
-                                            e.target.style.transform = 'scale(1)';
+                                            e.currentTarget.style.background = 'linear-gradient(135deg, rgba(244, 67, 54, 0.15), rgba(239, 68, 68, 0.1))';
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                            e.currentTarget.style.boxShadow = '0 0 15px rgba(244, 67, 54, 0.2)';
+                                            e.currentTarget.style.borderColor = 'rgba(244, 67, 54, 0.4)';
                                         }}
                                     >
-                                        🗑️ Limpar
+                                        <span style={{ fontSize: '16px' }}>🗑️</span>
+                                        <span>Limpar</span>
                                     </button>
                                 </div>
                             </div>
 
-                            <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
+                            <div style={{ marginBottom: '10px', color: theme.textLight, fontSize: '13px', fontWeight: 500, flexShrink: 0 }}>
+                                💡 Clique em um cliente para preencher o formulário
+                            </div>
 
-                            <div className="elegant-scrollbar" style={{
-                                overflowY: 'auto',
-                                maxHeight: '300px',
-                                paddingRight: '6px',
-                                scrollbarWidth: 'thin',
-                                scrollbarColor: `${theme.primary} rgba(255,255,255,0.05)`
+                            {/* 📋 CONTAINER DE HISTÓRICO COM FECHAMENTO VISUAL */}
+                            <div style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                border: '2px solid rgba(255,255,255,0.08)',
+                                borderRadius: '12px',
+                                overflow: 'hidden',
+                                background: 'linear-gradient(135deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))',
+                                boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)',
+                                height: 'fit-content'
                             }}>
-                                {(() => {
-                                    // ✅ USAR recentList (localStorage) - MOSTRA DADOS IMEDIATAMENTE
-                                    const dadosHistorico = recentList && recentList.length > 0 ? recentList : [];
+                                {/* LISTA DE CARDS COM SCROLL - ALTURA FIXA */}
+                                <div className="elegant-scrollbar" style={{
+                                    overflowY: 'auto',
+                                    maxHeight: '400px',
+                                    padding: '12px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '10px',
+                                    scrollbarWidth: 'thin',
+                                    scrollbarColor: `${theme.primary} rgba(255,255,255,0.05)`
+                                }}>
+                                    {(() => {
+                                        // ✅ USAR recentList (localStorage) - MOSTRA DADOS IMEDIATAMENTE
+                                        const dadosHistorico = recentList && recentList.length > 0 ? recentList : [];
 
-                                    if (dadosHistorico.length === 0) {
-                                        return (
-                                            <p style={{ color: theme.textLight, padding: '12px', fontStyle: 'italic' }}>
-                                                Nenhum histórico disponível. Adicione entregas para popular esta lista.
-                                            </p>
-                                        );
-                                    }
+                                        if (dadosHistorico.length === 0) {
+                                            return (
+                                                <div style={{
+                                                    color: theme.textLight,
+                                                    padding: '40px 12px',
+                                                    textAlign: 'center',
+                                                    fontStyle: 'italic',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    alignItems: 'center',
+                                                    gap: '12px'
+                                                }}>
+                                                    <span style={{ fontSize: '48px', opacity: 0.3 }}>📦</span>
+                                                    <span style={{ fontSize: '14px' }}>Nenhum histórico disponível.</span>
+                                                    <span style={{ fontSize: '12px', opacity: 0.7 }}>Adicione entregas para popular esta lista.</span>
+                                                </div>
+                                            );
+                                        }
 
-                                    // Filtrar baseado no texto digitado
-                                    const filterLower = historicoFilter.toLowerCase().trim();
-                                    const filtered = filterLower === ''
-                                        ? dadosHistorico.slice(0, 15)
-                                        : dadosHistorico.filter(it => {
-                                            const cliente = (it.cliente || '').toLowerCase();
-                                            const endereco = (it.endereco || '').toLowerCase();
-                                            return cliente.includes(filterLower) || endereco.includes(filterLower);
-                                        }).slice(0, 15);
+                                        // Filtrar baseado no texto digitado
+                                        const filterLower = historicoFilter.toLowerCase().trim();
+                                        const filtered = filterLower === ''
+                                            ? dadosHistorico.slice(0, 15)
+                                            : dadosHistorico.filter(it => {
+                                                const cliente = (it.cliente || '').toLowerCase();
+                                                const endereco = (it.endereco || '').toLowerCase();
+                                                return cliente.includes(filterLower) || endereco.includes(filterLower);
+                                            }).slice(0, 15);
 
-                                    if (filtered.length === 0) {
-                                        return (
-                                            <p style={{ color: theme.textLight, padding: '12px', fontStyle: 'italic' }}>
-                                                Nenhum resultado encontrado para "{historicoFilter}"
-                                            </p>
-                                        );
-                                    }
+                                        if (filtered.length === 0) {
+                                            return (
+                                                <div style={{
+                                                    color: theme.textLight,
+                                                    padding: '40px 12px',
+                                                    textAlign: 'center',
+                                                    fontStyle: 'italic',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    alignItems: 'center',
+                                                    gap: '12px'
+                                                }}>
+                                                    <span style={{ fontSize: '48px', opacity: 0.3 }}>🔍</span>
+                                                    <span style={{ fontSize: '14px' }}>Nenhum resultado encontrado</span>
+                                                    <span style={{ fontSize: '12px', opacity: 0.7 }}>"{historicoFilter}"</span>
+                                                </div>
+                                            );
+                                        }
 
-                                    return filtered.map((it, idx) => (
-                                        <div key={it && it.id != null ? it.id : idx} onClick={async () => {
-                                            try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
-                                            try {
-                                                if (it && (it.lat != null && it.lng != null)) {
-                                                    setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
-                                                } else {
-                                                    setEnderecoCoords(null);
-                                                }
-                                            } catch (e) { console.warn('historico onClick failed', e); setEnderecoCoords(null); }
-                                        }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
-                                            <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente || it.endereco || '—'}</div>
-                                            <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco || ''}</div>
-                                        </div>
-                                    ));
-                                })()}
+                                        return filtered.map((it, idx) => (
+                                            <div
+                                                key={it && it.id != null ? it.id : idx}
+                                                onClick={async () => {
+                                                    try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
+                                                    try {
+                                                        if (it && (it.lat != null && it.lng != null)) {
+                                                            setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
+                                                        } else {
+                                                            setEnderecoCoords(null);
+                                                        }
+                                                    } catch (e) { console.warn('historico onClick failed', e); setEnderecoCoords(null); }
+                                                }}
+                                                style={{
+                                                    padding: '14px 16px',
+                                                    borderRadius: '10px',
+                                                    cursor: 'pointer',
+                                                    background: 'rgba(255,255,255,0.03)',
+                                                    border: '1px solid rgba(255,255,255,0.06)',
+                                                    transition: 'all 0.2s ease',
+                                                    flexShrink: 0
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.background = 'rgba(59, 130, 246, 0.1)';
+                                                    e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.3)';
+                                                    e.currentTarget.style.transform = 'translateX(4px)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                                                    e.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
+                                                    e.currentTarget.style.transform = 'translateX(0)';
+                                                }}
+                                            >
+                                                <div style={{ fontWeight: 700, color: theme.textMain, fontSize: '14px', marginBottom: '4px' }}>
+                                                    {it.cliente || it.endereco || '—'}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: theme.textLight, lineHeight: '1.4' }}>
+                                                    📍 {it.endereco || ''}
+                                                </div>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+
+                                {/* 🎯 RODAPÉ DE FECHAMENTO VISUAL */}
+                                <div style={{
+                                    background: 'linear-gradient(180deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.12))',
+                                    borderTop: '2px solid rgba(59, 130, 246, 0.2)',
+                                    padding: '14px 16px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px',
+                                    flexShrink: 0
+                                }}>
+                                    <span style={{ fontSize: '12px', color: theme.textLight, fontWeight: 600, opacity: 0.8 }}>
+                                        {recentList && recentList.length > 0
+                                            ? `${recentList.length} ${recentList.length === 1 ? 'endereço' : 'endereços'} no histórico`
+                                            : 'Histórico vazio'}
+                                    </span>
+                                    <span style={{ fontSize: '16px', opacity: 0.5 }}>📊</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -4130,10 +4439,10 @@ function App() {
                 {/* CENTRAL DE DESPACHO */}
                 {abaAtiva === 'Central de Despacho' && (
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
-                            <div>
-                                <h2 style={{ margin: 0 }}>Fila de Preparação</h2>
-                                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
+                            <div style={{ flex: '1 1 auto', minWidth: '300px' }}>
+                                <h2 style={{ margin: '0 0 12px 0' }}>Fila de Preparação</h2>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '14px', fontWeight: 600, color: theme.textLight }}>MOTORISTA:</span>
                                     <select
                                         value={dispatchMotoristaId || ''}
@@ -4141,19 +4450,56 @@ function App() {
                                             setDispatchMotoristaId(e.target.value);
                                             setRotaOrganizada(false); // ✅ RESETÁVEL AO MUDAR MOTORISTA
                                         }}
+                                        className="motorista-select-enhanced"
                                         style={{
-                                            padding: '8px 12px',
-                                            borderRadius: '8px',
-                                            background: 'rgba(255,255,255,0.05)',
-                                            border: '1px solid rgba(255,255,255,0.1)',
-                                            color: '#fff',
-                                            fontSize: '14px',
-                                            cursor: 'pointer'
+                                            padding: '12px 16px',
+                                            borderRadius: '10px',
+                                            background: 'linear-gradient(135deg, rgba(30, 58, 138, 0.9), rgba(17, 24, 39, 0.95))',
+                                            border: '2px solid rgba(59, 130, 246, 0.5)',
+                                            color: '#FFFFFF',
+                                            fontSize: '18px',
+                                            fontWeight: 700,
+                                            cursor: 'pointer',
+                                            boxShadow: '0 0 20px rgba(59, 130, 246, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3)',
+                                            minWidth: '280px',
+                                            transition: 'all 0.3s ease',
+                                            outline: 'none'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 30px rgba(59, 130, 246, 0.6), 0 6px 20px rgba(0, 0, 0, 0.4)';
+                                            e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.8)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3)';
+                                            e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.5)';
+                                        }}
+                                        onFocus={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 35px rgba(59, 130, 246, 0.8), 0 8px 25px rgba(0, 0, 0, 0.5)';
+                                            e.currentTarget.style.borderColor = '#3b82f6';
+                                        }}
+                                        onBlur={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3)';
+                                            e.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.5)';
                                         }}
                                     >
-                                        <option value="">Selecione um motorista...</option>
+                                        <option value="" style={{ background: '#1e293b', color: '#94a3b8', fontSize: '16px', padding: '12px' }}>
+                                            Selecione um motorista...
+                                        </option>
                                         {(frota || []).filter(m => m.esta_online).map(m => (
-                                            <option key={m.id} value={String(m.id)}>{fullName(m)} (Brasil)</option>
+                                            <option
+                                                key={m.id}
+                                                value={String(m.id)}
+                                                style={{
+                                                    background: '#0f172a',
+                                                    color: '#fbbf24',
+                                                    fontSize: '17px',
+                                                    padding: '14px 16px',
+                                                    fontWeight: 600,
+                                                    lineHeight: '1.8'
+                                                }}
+                                            >
+                                                {fullName(m)} (Brasil)
+                                            </option>
                                         ))}
                                     </select>
                                     <button
@@ -4181,7 +4527,17 @@ function App() {
                                             padding: '8px 12px',
                                             borderRadius: '8px',
                                             fontSize: '12px',
-                                            cursor: 'pointer'
+                                            cursor: 'pointer',
+                                            fontWeight: 700,
+                                            transition: 'all 0.3s ease'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.boxShadow = '0 0 15px rgba(59, 130, 246, 0.5)';
+                                            e.currentTarget.style.transform = 'translateY(-1px)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.boxShadow = 'none';
+                                            e.currentTarget.style.transform = 'translateY(0)';
                                         }}
                                     >
                                         🪄 SUGERIR
@@ -4191,76 +4547,322 @@ function App() {
                                     )}
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <div style={{ fontSize: '13px' }}>
-                                        🏁 <span style={{ opacity: 0.7 }}>DISTÂNCIA TOTAL:</span> <span style={{ color: theme.success, fontSize: '15px' }}>{totalDistanceFila} KM</span>
-                                    </div>
-                                    <div style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.1)' }}></div>
-                                    <div style={{ fontSize: '13px' }}>
-                                        ⏱️ <span style={{ opacity: 0.7 }}>PREVISÃO:</span> <span style={{ color: theme.primary, fontSize: '15px' }}>{estimatedDistanceKm != null ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'CALCULANDO...' : '---')}</span>
-                                    </div>
 
-                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px', marginLeft: '8px' }}>📜</button>
-                                    {showLogsPopover && (
-                                        <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
-                                            <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
-                                            {logsHistory.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
-                                                logsHistory.map((l, i) => (
-                                                    <div key={i} style={{ padding: '6px 0', borderBottom: i < logsHistory.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                                                        <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
-                                                        <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
-                                                    </div>
-                                                ))
-                                            )}
-                                        </div>
-                                    )}
+                            {/* 📊 CARDS DE INFORMAÇÃO + BOTÕES DE AÇÃO */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                {/* 🏁 CARD: DISTÂNCIA TOTAL */}
+                                <div style={{
+                                    background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05))',
+                                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                                    borderRadius: '12px',
+                                    padding: '12px 16px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    minWidth: '120px',
+                                    boxShadow: '0 0 20px rgba(16, 185, 129, 0.15)',
+                                    transition: 'all 0.3s ease'
+                                }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 0 25px rgba(16, 185, 129, 0.3)';
+                                        e.currentTarget.style.transform = 'translateY(-2px)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 0 20px rgba(16, 185, 129, 0.15)';
+                                        e.currentTarget.style.transform = 'translateY(0)';
+                                    }}
+                                >
+                                    <div style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                                        🏁 Distância
+                                    </div>
+                                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#10b981', lineHeight: '1' }}>
+                                        {totalDistanceFila > 0 ? totalDistanceFila : '---'}
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: '#10b981', opacity: 0.7, marginTop: '2px' }}>
+                                        KM
+                                    </div>
                                 </div>
-                                <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button onClick={otimizarFilaDespacho} style={{ ...btnStyle(rotaOrganizada ? '#fbbf24' : '#f59e0b'), width: 'auto', border: rotaOrganizada ? 'none' : '2px solid #ffffff44' }}>
-                                        🔄 REORGANIZAR ROTA
-                                        {pendingRecalcCount > 0 && (
-                                            <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
+
+                                {/* ⏱️ CARD: TEMPO ESTIMADO */}
+                                <div style={{
+                                    background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.05))',
+                                    border: '1px solid rgba(59, 130, 246, 0.3)',
+                                    borderRadius: '12px',
+                                    padding: '12px 16px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    minWidth: '120px',
+                                    boxShadow: '0 0 20px rgba(59, 130, 246, 0.15)',
+                                    transition: 'all 0.3s ease'
+                                }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 0 25px rgba(59, 130, 246, 0.3)';
+                                        e.currentTarget.style.transform = 'translateY(-2px)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.15)';
+                                        e.currentTarget.style.transform = 'translateY(0)';
+                                    }}
+                                >
+                                    <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                                        ⏱️ Tempo
+                                    </div>
+                                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#3b82f6', lineHeight: '1' }}>
+                                        {totalDistanceFila > 0 ? formatDuration(Math.round((totalDistanceFila / 30) * 3600)) : '---'}
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: '#3b82f6', opacity: 0.7, marginTop: '2px' }}>
+                                        ESTIMADO
+                                    </div>
+                                </div>
+
+                                {/* 📜 BOTÃO DE HISTÓRICO */}
+                                <button
+                                    title="Histórico de otimizações"
+                                    onClick={() => setShowLogsPopover(s => !s)}
+                                    style={{
+                                        background: 'rgba(255,255,255,0.05)',
+                                        border: '1px solid rgba(255,255,255,0.1)',
+                                        color: theme.textLight,
+                                        cursor: 'pointer',
+                                        fontSize: '18px',
+                                        padding: '10px 14px',
+                                        borderRadius: '10px',
+                                        transition: 'all 0.3s ease'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(255,255,255,0.1)';
+                                        e.currentTarget.style.transform = 'scale(1.05)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                                        e.currentTarget.style.transform = 'scale(1)';
+                                    }}
+                                >
+                                    📜
+                                </button>
+                                {showLogsPopover && (
+                                    <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
+                                        <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
+                                        {logsHistory.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
+                                            logsHistory.map((l, i) => (
+                                                <div key={i} style={{ padding: '6px 0', borderBottom: i < logsHistory.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                                    <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
+                                                    <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
+                                                </div>
+                                            ))
                                         )}
-                                    </button>
-                                    <button
-                                        disabled={!rotaOrganizada || !dispatchMotoristaId}
-                                        onClick={() => {
-                                            // Se já temos o motorista selecionado, despacha direto
-                                            const m = frota.find(f => String(f.id) === String(dispatchMotoristaId));
-                                            if (m) {
-                                                assignDriver(m, entregasEmEspera);
-                                            } else {
-                                                setDriverSelectMode('dispatch');
-                                                setShowDriverSelect(true);
-                                            }
-                                        }}
-                                        style={{
-                                            ...btnStyle(theme.success),
-                                            width: 'auto',
-                                            opacity: (rotaOrganizada && dispatchMotoristaId) ? 1 : 0.5,
-                                            filter: (rotaOrganizada && dispatchMotoristaId) ? 'none' : 'grayscale(1)',
-                                            cursor: (rotaOrganizada && dispatchMotoristaId) ? 'pointer' : 'not-allowed'
-                                        }}
-                                    >
-                                        {(rotaOrganizada && dispatchMotoristaId) ? '🚀 ENVIAR ROTA' : '🔒 BLOQUEADO'}
-                                    </button>
-                                </div>
+                                    </div>
+                                )}
+
+                                {/* 🔄 BOTÃO: REORGANIZAR ROTA (COM GLOW) */}
+                                <button
+                                    onClick={otimizarFilaDespacho}
+                                    style={{
+                                        ...btnStyle(rotaOrganizada ? '#fbbf24' : '#f59e0b'),
+                                        width: 'auto',
+                                        padding: '12px 20px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: 800,
+                                        border: 'none',
+                                        boxShadow: rotaOrganizada
+                                            ? '0 0 20px rgba(251, 191, 36, 0.4), 0 4px 15px rgba(251, 191, 36, 0.2)'
+                                            : '0 0 20px rgba(245, 158, 11, 0.4), 0 4px 15px rgba(245, 158, 11, 0.2)',
+                                        transition: 'all 0.3s ease'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.boxShadow = rotaOrganizada
+                                            ? '0 0 30px rgba(251, 191, 36, 0.6), 0 6px 20px rgba(251, 191, 36, 0.3)'
+                                            : '0 0 30px rgba(245, 158, 11, 0.6), 0 6px 20px rgba(245, 158, 11, 0.3)';
+                                        e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.boxShadow = rotaOrganizada
+                                            ? '0 0 20px rgba(251, 191, 36, 0.4), 0 4px 15px rgba(251, 191, 36, 0.2)'
+                                            : '0 0 20px rgba(245, 158, 11, 0.4), 0 4px 15px rgba(245, 158, 11, 0.2)';
+                                        e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                                    }}
+                                >
+                                    <span style={{ fontSize: '16px' }}>🔄</span>
+                                    <span>REORGANIZAR ROTA</span>
+                                    {pendingRecalcCount > 0 && (
+                                        <span style={{ background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '11px', fontWeight: 700 }}>{pendingRecalcCount}</span>
+                                    )}
+                                </button>
+
+                                {/* 🚀 BOTÃO: ENVIAR ROTA */}
+                                <button
+                                    disabled={!rotaOrganizada || !dispatchMotoristaId}
+                                    onClick={() => {
+                                        // Se já temos o motorista selecionado, despacha direto
+                                        const m = frota.find(f => String(f.id) === String(dispatchMotoristaId));
+                                        if (m) {
+                                            assignDriver(m, entregasEmEspera);
+                                        } else {
+                                            setDriverSelectMode('dispatch');
+                                            setShowDriverSelect(true);
+                                        }
+                                    }}
+                                    style={{
+                                        ...btnStyle(theme.success),
+                                        width: 'auto',
+                                        padding: '12px 20px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: 800,
+                                        opacity: (rotaOrganizada && dispatchMotoristaId) ? 1 : 0.5,
+                                        filter: (rotaOrganizada && dispatchMotoristaId) ? 'none' : 'grayscale(1)',
+                                        cursor: (rotaOrganizada && dispatchMotoristaId) ? 'pointer' : 'not-allowed',
+                                        border: 'none',
+                                        boxShadow: (rotaOrganizada && dispatchMotoristaId)
+                                            ? '0 0 20px rgba(16, 185, 129, 0.4), 0 4px 15px rgba(16, 185, 129, 0.2)'
+                                            : 'none',
+                                        transition: 'all 0.3s ease'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (rotaOrganizada && dispatchMotoristaId) {
+                                            e.currentTarget.style.boxShadow = '0 0 30px rgba(16, 185, 129, 0.6), 0 6px 20px rgba(16, 185, 129, 0.3)';
+                                            e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)';
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        if (rotaOrganizada && dispatchMotoristaId) {
+                                            e.currentTarget.style.boxShadow = '0 0 20px rgba(16, 185, 129, 0.4), 0 4px 15px rgba(16, 185, 129, 0.2)';
+                                            e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                                        }
+                                    }}
+                                >
+                                    <span style={{ fontSize: '16px' }}>{(rotaOrganizada && dispatchMotoristaId) ? '🚀' : '🔒'}</span>
+                                    <span>{(rotaOrganizada && dispatchMotoristaId) ? 'ENVIAR ROTA' : 'BLOQUEADO'}</span>
+                                </button>
                             </div>
                         </div>
-                        {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
+                        {(!entregasEmEspera || entregasEmEspera.length === 0) ? (
+                            <p style={{
+                                textAlign: 'center',
+                                color: theme.textLight,
+                                fontSize: '16px',
+                                fontWeight: 500,
+                                padding: '40px 20px',
+                                background: 'rgba(255,255,255,0.02)',
+                                borderRadius: '12px',
+                                border: '1px dashed rgba(255,255,255,0.1)'
+                            }}>
+                                ✨ Tudo limpo! Sem pendências.
+                            </p>
+                        ) : (
                             <div className="elegant-scrollbar" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', maxHeight: '500px', overflowY: 'auto', padding: '10px' }}>
-                                {entregasEmEspera?.map(p => (
-                                    <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
-                                            <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: '#f1f5f9', color: '#374151' }}>{p.tipo || 'Entrega'}</span>
+                                {entregasEmEspera?.map(p => {
+                                    // 🎨 Determinar cores baseadas no tipo de serviço
+                                    const tipo = (p.tipo || 'Entrega').toLowerCase();
+                                    let badgeColor, borderColor, badgeTextColor;
+
+                                    if (tipo === 'recolha') {
+                                        badgeColor = '#f39c12'; // Laranja
+                                        borderColor = '#f39c12';
+                                        badgeTextColor = '#000000';
+                                    } else if (tipo === 'entrega') {
+                                        badgeColor = '#3498db'; // Azul
+                                        borderColor = '#3498db';
+                                        badgeTextColor = '#ffffff';
+                                    } else {
+                                        badgeColor = '#a78bfa'; // Lilás/Roxo
+                                        borderColor = '#a78bfa';
+                                        badgeTextColor = '#ffffff';
+                                    }
+
+                                    return (
+                                        <div
+                                            key={p.id}
+                                            style={{
+                                                border: `1px solid #e2e8f0`,
+                                                padding: '20px',
+                                                borderRadius: '12px',
+                                                borderLeft: `5px solid ${borderColor}`,
+                                                position: 'relative',
+                                                background: theme.card,
+                                                boxShadow: `0 2px 8px rgba(0,0,0,0.1), -2px 0 12px ${borderColor}30`,
+                                                transition: 'all 0.3s ease'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.boxShadow = `0 4px 16px rgba(0,0,0,0.15), -2px 0 16px ${borderColor}50`;
+                                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.boxShadow = `0 2px 8px rgba(0,0,0,0.1), -2px 0 12px ${borderColor}30`;
+                                                e.currentTarget.style.transform = 'translateY(0)';
+                                            }}
+                                        >
+                                            {/* 🏷️ BADGE NO CANTO SUPERIOR DIREITO */}
+                                            <span
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '12px',
+                                                    right: '12px',
+                                                    fontSize: '11px',
+                                                    padding: '6px 12px',
+                                                    borderRadius: '8px',
+                                                    background: badgeColor,
+                                                    color: badgeTextColor,
+                                                    fontWeight: 800,
+                                                    textTransform: 'uppercase',
+                                                    letterSpacing: '0.5px',
+                                                    boxShadow: `0 2px 8px ${badgeColor}50`,
+                                                    border: `1px solid ${badgeColor}`,
+                                                    lineHeight: '1'
+                                                }}
+                                            >
+                                                {p.tipo || 'Entrega'}
+                                            </span>
+
+                                            {/* 📋 CONTEÚDO DO CARD */}
+                                            <div style={{ marginTop: '8px' }}>
+                                                <h4 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 700, color: theme.textMain, paddingRight: '80px' }}>
+                                                    {p.cliente}
+                                                </h4>
+                                                <p style={{ fontSize: '13px', color: theme.textLight, margin: '6px 0', lineHeight: '1.5' }}>
+                                                    📍 {p.endereco}
+                                                </p>
+                                                <p style={{ fontSize: '12px', color: theme.textLight, margin: '6px 0', opacity: 0.8, fontStyle: 'italic' }}>
+                                                    <strong>Obs:</strong> {p.observacoes || 'Sem observações'}
+                                                </p>
+                                            </div>
+
+                                            {/* 🗑️ BOTÃO REMOVER (DISCRETO) */}
+                                            <button
+                                                onClick={() => excluirPedido(p.id)}
+                                                style={{
+                                                    marginTop: '12px',
+                                                    background: 'rgba(239, 68, 68, 0.1)',
+                                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                                    color: '#ef4444',
+                                                    cursor: 'pointer',
+                                                    fontSize: '11px',
+                                                    padding: '6px 12px',
+                                                    borderRadius: '6px',
+                                                    fontWeight: 600,
+                                                    transition: 'all 0.2s ease',
+                                                    width: '100%'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                                                    e.currentTarget.style.borderColor = '#ef4444';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
+                                                    e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                                                }}
+                                            >
+                                                🗑️ Remover
+                                            </button>
                                         </div>
-                                        <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco}</p>
-                                        <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
-                                        <button onClick={() => excluirPedido(p.id)} style={{ marginTop: '10px', background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -4269,7 +4871,32 @@ function App() {
                 {/* EQUIPE (FROTA) */}
                 {abaAtiva === 'Equipe' && (
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                        <h2 style={{ marginTop: 0 }}>Motoristas Cadastrados</h2>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                            <h2 style={{ margin: 0 }}>Motoristas Cadastrados</h2>
+
+                            {/* 🎨 LEGENDA DE CORES - Explicação visual rápida */}
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                <span style={{ fontSize: '11px', color: theme.textLight, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status:</span>
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <div style={{ width: '12px', height: '12px', background: '#3498db', borderRadius: '3px', boxShadow: '0 0 8px rgba(52, 152, 219, 0.4)' }}></div>
+                                        <span style={{ fontSize: '11px', color: '#3498db', fontWeight: 500 }}>Entregando</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <div style={{ width: '12px', height: '12px', background: '#f39c12', borderRadius: '3px', boxShadow: '0 0 8px rgba(243, 156, 18, 0.4)' }}></div>
+                                        <span style={{ fontSize: '11px', color: '#f39c12', fontWeight: 500 }}>Recolhendo</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <div style={{ width: '12px', height: '12px', background: '#a78bfa', borderRadius: '3px', boxShadow: '0 0 8px rgba(167, 139, 250, 0.4)' }}></div>
+                                        <span style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 500 }}>Outros</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <div style={{ width: '12px', height: '12px', background: '#9ca3af', borderRadius: '3px' }}></div>
+                                        <span style={{ fontSize: '11px', color: '#9ca3af', fontWeight: 500 }}>Disponível</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
                         {/* Central de Comunicados (seletivo) */}
                         <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -4293,7 +4920,7 @@ function App() {
                                     onClick={async () => {
                                         const texto = String(mensagemGeral || '').trim();
                                         if (!texto) return alert('Digite a mensagem antes de enviar.');
-                                        if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível enviar.');
+
                                         let motorista_id = null;
                                         if (destinatario !== 'all') {
                                             const mid = Number(destinatario);
@@ -4302,18 +4929,50 @@ function App() {
                                         }
                                         try {
                                             setEnviandoGeral(true);
+
+                                            // 🔧 CORREÇÃO: Usar instância global do supabase que já foi inicializado
                                             const sb = supabaseRef.current || supabase;
-                                            if (!sb || typeof sb.from !== 'function') throw new Error('Supabase não inicializado');
+
+                                            // 🔍 VERIFICAÇÃO DETALHADA: Checar se o cliente Supabase está disponível
+                                            if (!sb) {
+                                                console.error('❌ ERRO CRÍTICO: Cliente Supabase é NULL');
+                                                console.error('📋 supabaseRef.current:', supabaseRef.current);
+                                                console.error('📋 supabase global:', supabase);
+                                                throw new Error('Cliente Supabase não está disponível. Verifique a configuração em supabaseClient.js');
+                                            }
+
+                                            if (typeof sb.from !== 'function') {
+                                                console.error('❌ ERRO CRÍTICO: supabase.from não é uma função');
+                                                console.error('📋 Tipo de sb:', typeof sb);
+                                                console.error('📋 Conteúdo de sb:', sb);
+                                                throw new Error('Cliente Supabase está corrompido ou mal configurado');
+                                            }
+
+                                            console.log('✅ Cliente Supabase OK - Enviando mensagem...');
                                             const payload = { titulo: 'Comunicado', mensagem: texto, lida: false, motorista_id };
+                                            console.log('📤 Payload:', payload);
+
                                             const { data, error } = await sb.from('avisos_gestor').insert([payload]);
-                                            if (error) throw error;
+
+                                            if (error) {
+                                                console.error('❌ Erro retornado pelo Supabase:', error);
+                                                throw error;
+                                            }
+
+                                            console.log('✅ Mensagem enviada com sucesso!', data);
                                             setMensagemGeral('');
                                             setDestinatario('all');
-                                            try { alert('Mensagem enviada com sucesso.'); } catch (e) { }
+                                            try { alert('✅ Mensagem enviada com sucesso.'); } catch (e) { }
                                             try { carregarDados(); } catch (e) { }
                                         } catch (e) {
-                                            console.error('Erro enviando comunicado:', e);
-                                            try { alert('Falha ao enviar mensagem: ' + (e && e.message ? e.message : String(e))); } catch (e2) { }
+                                            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                                            console.error('❌ ERRO AO ENVIAR COMUNICADO');
+                                            console.error('📋 Mensagem de erro:', e && e.message ? e.message : String(e));
+                                            console.error('📋 Stack trace:', e && e.stack ? e.stack : 'Não disponível');
+                                            console.error('📋 Erro completo:', e);
+                                            console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+                                            try { alert('❌ Falha ao enviar mensagem: ' + (e && e.message ? e.message : String(e))); } catch (e2) { }
                                         } finally { setEnviandoGeral(false); setBtnPressed(false); }
                                     }}
                                     style={{ padding: '10px 16px', background: '#0ea5e9', border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', opacity: btnPressed ? 0.7 : 1, transition: 'opacity 120ms ease-in-out', boxShadow: '0 6px 14px rgba(14,165,233,0.18)' }}
@@ -4336,45 +4995,111 @@ function App() {
                                     const isOnline = m.esta_online === true;
                                     const dotColor = isOnline ? '#10b981' : '#ef4444';
                                     const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
-                                    const nameStyle = isOnline ? { color: '#10b981', fontWeight: 700, textShadow: '0 1px 6px rgba(16,185,129,0.25)' } : { color: '#9ca3af', fontWeight: 400, opacity: 0.9 };
-                                    const statusText = isOnline ? 'Disponível' : 'Offline';
-                                    const statusColor = isOnline ? '#10b981' : 'rgba(239,68,68,0.6)';
 
-                                    // Progresso de carga: contar entregas vinculadas ao motorista a partir de entregasAtivos
-                                    const entregasMot = DEBUG_FORCE_SHOW_ALL ? (entregasAtivos || []) : (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
-                                    const total = entregasMot.length;
-                                    const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
-                                    // Tipo principal (para rótulo dinâmico) — preferir o primeiro tipo conhecido
-                                    const tipoPrincipal = (entregasMot.find(e => e.tipo && String(e.tipo).trim().length > 0) || {}).tipo || null;
-                                    const tipoColor = tipoPrincipal ? getColorForType(tipoPrincipal) : null;
-                                    const verbByTipo = (t) => {
-                                        const tt = String(t || '').trim().toLowerCase();
-                                        if (tt === 'entrega') return 'Entregando';
-                                        if (tt === 'recolha') return 'Recolhendo';
-                                        if (tt === 'outros' || tt === 'outro') return 'Ativo';
-                                        return 'Em serviço';
-                                    };
+                                    // 🎯 LÓGICA DE CORES POR ATIVIDADE ATUAL
+                                    // Buscar entregas vinculadas ao motorista
+                                    const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
+
+                                    // 🔍 IDENTIFICAR ENTREGA ATIVA (status === 'em_rota')
+                                    const entregaAtiva = entregasMot.find(e => String(e.status || '').toLowerCase() === 'em_rota');
+
+                                    // 🎨 DETERMINAR COR BASEADA NO TIPO DA ENTREGA ATIVA
+                                    let activityColor = '#9ca3af'; // CINZA (padrão - sem entrega em_rota)
+                                    let activityLabel = isOnline ? 'Disponível' : 'Offline';
+                                    let activityGlow = 'none';
+
+                                    if (entregaAtiva && entregaAtiva.tipo) {
+                                        const tipoAtivo = String(entregaAtiva.tipo).toLowerCase().trim();
+
+                                        if (tipoAtivo === 'recolha') {
+                                            activityColor = '#f39c12'; // LARANJA
+                                            activityLabel = 'Recolhendo';
+                                            activityGlow = '0 0 15px rgba(243, 156, 18, 0.4)';
+                                        } else if (tipoAtivo === 'entrega') {
+                                            activityColor = '#3498db'; // AZUL
+                                            activityLabel = 'Entregando';
+                                            activityGlow = '0 0 15px rgba(52, 152, 219, 0.4)';
+                                        } else {
+                                            activityColor = '#a78bfa'; // LILÁS/ROXO
+                                            activityLabel = 'Ativo';
+                                            activityGlow = '0 0 15px rgba(167, 139, 250, 0.4)';
+                                        }
+                                    }
+
+                                    // 📊 CONTADOR INDIVIDUAL: apenas entregas em_rota (progresso real)
+                                    const entregasEmRota = entregasMot.filter(e => String(e.status || '').toLowerCase() === 'em_rota');
+                                    const totalEmRota = entregasEmRota.length;
+                                    const concluidas = entregasMot.filter(e => String(e.status || '').toLowerCase() === 'entregue').length;
+
+                                    // Progresso atual: índice da entrega ativa (qual está fazendo agora)
+                                    const indexAtual = entregaAtiva ? entregasEmRota.findIndex(e => e.id === entregaAtiva.id) + 1 : 0;
 
                                     return (
-                                        <tr key={m.id} onClick={() => setSelectedMotorista(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
+                                        <tr
+                                            key={m.id}
+                                            onClick={() => setSelectedMotorista(m)}
+                                            style={{
+                                                borderBottom: '1px solid #f1f5f9',
+                                                cursor: 'pointer',
+                                                borderLeft: `5px solid ${activityColor}`, // 🎨 BORDA LATERAL COLORIDA
+                                                transition: 'all 0.3s ease',
+                                                backgroundColor: entregaAtiva ? 'rgba(255,255,255,0.02)' : 'transparent'
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)';
+                                                e.currentTarget.style.transform = 'translateX(2px)';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.backgroundColor = entregaAtiva ? 'rgba(255,255,255,0.02)' : 'transparent';
+                                                e.currentTarget.style.transform = 'translateX(0)';
+                                            }}
+                                        >
                                             <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
                                                 <span style={{ color: '#ffffff', fontWeight: 600 }}>{fullName(m)}</span>
                                             </td>
                                             <td>
-                                                {/* Texto dinâmico: se tiver carga, mostrar verbo + contador; senão Disponível/Offline */}
-                                                <span style={{ padding: '6px 10px', borderRadius: '12px', background: 'transparent', color: (total > 0 ? (tipoColor || statusColor) : statusColor), fontSize: '12px', fontWeight: 700, textShadow: isOnline ? '0 1px 6px rgba(16,185,129,0.35)' : 'none', opacity: isOnline ? 1 : 0.6 }}>
-                                                    {total > 0 ? `${verbByTipo(tipoPrincipal)} ${feitas}/${total}` : statusText}
-                                                </span>
+                                                {/* 🎯 INDICADOR DE ATIVIDADE ATUAL COM COR DINÂMICA */}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span style={{
+                                                        padding: '6px 12px',
+                                                        borderRadius: '12px',
+                                                        background: `${activityColor}20`,
+                                                        color: activityColor,
+                                                        fontSize: '12px',
+                                                        fontWeight: 700,
+                                                        border: `1px solid ${activityColor}40`,
+                                                        boxShadow: activityGlow,
+                                                        transition: 'all 0.3s ease'
+                                                    }}>
+                                                        {activityLabel}
+                                                    </span>
+                                                    {/* Mostrar cliente atual se houver entrega ativa */}
+                                                    {entregaAtiva && (
+                                                        <span style={{ fontSize: '11px', color: theme.textLight, fontStyle: 'italic' }}>
+                                                            → {entregaAtiva.cliente || 'Cliente'}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
                                             <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
                                             <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
                                             <td style={{ padding: '10px' }}>
-                                                {/* Mostrar contador sempre (0/0 quando vazio) */}
-                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0f172a', color: '#fff', padding: '6px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: 700 }}>
-                                                    <span style={{ color: '#10b981' }}>{feitas}</span>
+                                                {/* 📊 CONTADOR INDIVIDUAL: mostra progresso real (ex: 1/3) */}
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '6px',
+                                                    background: '#0f172a',
+                                                    color: '#fff',
+                                                    padding: '6px 10px',
+                                                    borderRadius: '999px',
+                                                    fontSize: '13px',
+                                                    fontWeight: 700
+                                                }}>
+                                                    <span style={{ color: activityColor }}>{indexAtual || concluidas}</span>
                                                     <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
-                                                    <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
+                                                    <span style={{ color: '#60a5fa', opacity: 0.9 }}>{totalEmRota + concluidas}</span>
                                                 </span>
                                             </td>
                                             <td style={{ padding: '10px', textAlign: 'center' }}>
@@ -4391,17 +5116,17 @@ function App() {
                 {/* GESTÃO DE MOTORISTAS */}
                 {abaAtiva === 'Gestão de Motoristas' && (
                     <div style={{ background: 'transparent', padding: '30px', borderRadius: '16px', boxShadow: theme.shadow, width: '100%' }}>
-                        <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
-                        <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
+                        <h2 style={{ marginTop: 0, textAlign: 'center', color: theme.textMain }}>Gestão de Motoristas</h2>
+                        <p style={{ color: theme.textLight, marginTop: '8px', textAlign: 'center', marginBottom: '30px' }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
-                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
+                        <div style={{ width: '100%', maxWidth: '100%', margin: '0 auto', overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent', tableLayout: 'fixed' }}>
                                 <thead>
-                                    <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
-                                        <th style={{ padding: '10px' }}>NOME</th>
-                                        <th style={{ padding: '10px' }}>EMAIL</th>
-                                        <th style={{ padding: '10px' }}>TELEFONE</th>
-                                        <th style={{ padding: '10px', textAlign: 'right' }}>AÇÕES</th>
+                                    <tr style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
+                                        <th style={{ padding: '10px', width: '25%' }}>NOME</th>
+                                        <th style={{ padding: '10px', width: '25%' }}>EMAIL</th>
+                                        <th style={{ padding: '10px', width: '25%' }}>TELEFONE</th>
+                                        <th style={{ padding: '10px', width: '25%', textAlign: 'center' }}>AÇÕES</th>
                                     </tr>
                                 </thead>
                                 <tbody>
