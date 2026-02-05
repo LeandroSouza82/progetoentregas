@@ -145,10 +145,65 @@ if (typeof window === 'undefined') {
     // Use dynamic import without top-level await to stay compatible with build targets.
     import('@supabase/supabase-js').then(({ createClient }) => {
         try {
-            const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) ? import.meta.env.VITE_SUPABASE_URL : process.env.VITE_SUPABASE_URL;
-            const supabaseAnonKey = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_ANON_KEY) ? import.meta.env.VITE_SUPABASE_ANON_KEY : process.env.VITE_SUPABASE_ANON_KEY;
+            // 🎯 VITE: Usar APENAS import.meta.env (process.env NÃO funciona na Vercel/Vite)
+            const supabaseUrl = import.meta?.env?.VITE_SUPABASE_URL;
+            const supabaseAnonKey = import.meta?.env?.VITE_SUPABASE_ANON_KEY;
+
+            // 🔍 DIAGNÓSTICO: Verificar quais variáveis estão disponíveis
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('🔧 SUPABASE CLIENT - Verificando credenciais...');
+            console.log('📋 Runtime:', typeof import.meta !== 'undefined' ? 'Vite/Browser' : 'Node');
+            console.log('📋 import.meta.env disponível:', import.meta?.env ? 'SIM' : 'NÃO');
+            console.log('📋 VITE_SUPABASE_URL:', supabaseUrl ? `✅ ${supabaseUrl.substring(0, 30)}...` : '❌ AUSENTE');
+            console.log('📋 VITE_SUPABASE_ANON_KEY:', supabaseAnonKey ? `✅ ${supabaseAnonKey.substring(0, 20)}...` : '❌ AUSENTE');
+
+            // ⚠️ VALIDAÇÃO RIGOROSA
+            if (!supabaseUrl) {
+                console.error('❌ ERRO CRÍTICO: VITE_SUPABASE_URL não está definido!');
+                console.error('📋 Na Vercel: Vá em Settings → Environment Variables → Adicione VITE_SUPABASE_URL');
+                console.error('📋 Localmente: Verifique se .env.local existe e contém: VITE_SUPABASE_URL=sua_url_aqui');
+                console.error('📋 IMPORTANTE: A variável DEVE começar com VITE_ para ser exposta ao cliente!');
+            }
+
+            if (!supabaseAnonKey) {
+                console.error('❌ ERRO CRÍTICO: VITE_SUPABASE_ANON_KEY não está definido!');
+                console.error('📋 Na Vercel: Vá em Settings → Environment Variables → Adicione VITE_SUPABASE_ANON_KEY');
+                console.error('📋 Localmente: Verifique se .env.local existe e contém: VITE_SUPABASE_ANON_KEY=sua_chave_aqui');
+                console.error('📋 IMPORTANTE: A variável DEVE começar com VITE_ para ser exposta ao cliente!');
+            }
+
+            // 🚨 NÃO CRIAR CLIENTE SE FALTAR CREDENCIAIS
+            if (!supabaseUrl || !supabaseAnonKey) {
+                console.error('🚨 IMPOSSÍVEL CRIAR CLIENTE SUPABASE - Credenciais ausentes!');
+                console.error('🚨 O sistema funcionará em modo OFFLINE (sem dados do banco)');
+                HAS_SUPABASE_CREDENTIALS = false;
+                supabase = null;
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                return;
+            }
+
+            console.log('✅ Credenciais OK - Criando cliente Supabase...');
+            
+            // 🎯 CRIAR CLIENTE
             supabase = createClient(supabaseUrl, supabaseAnonKey);
-            HAS_SUPABASE_CREDENTIALS = Boolean(supabaseUrl && supabaseAnonKey);
+            HAS_SUPABASE_CREDENTIALS = true;
+
+            // ✅ VERIFICAR SE CLIENTE FOI CRIADO CORRETAMENTE
+            if (!supabase) {
+                console.error('❌ FALHA: createClient retornou null/undefined');
+                HAS_SUPABASE_CREDENTIALS = false;
+            } else if (typeof supabase.from !== 'function') {
+                console.error('❌ FALHA: Cliente Supabase criado mas sem método .from()');
+                console.error('📋 Tipo do cliente:', typeof supabase);
+                console.error('📋 Métodos disponíveis:', Object.keys(supabase || {}));
+                HAS_SUPABASE_CREDENTIALS = false;
+            } else {
+                console.log('✅ Cliente Supabase criado com sucesso!');
+                console.log('✅ Método .from() disponível');
+                console.log('✅ Sistema ONLINE - Conectado ao banco de dados');
+            }
+            
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             // Notify that a client object exists (handlers may want to keep it)
             try { _notifySupabaseReady(); } catch (e) { }
