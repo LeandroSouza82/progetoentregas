@@ -469,13 +469,13 @@ function App() {
                     setPrimeiroNome(nomeFormatado);
                 } else {
                     // Fallback: usar parte do email
-                    const emailPart = user.email ? user.email.split('@')[0] : 'Administrador';
+                    const emailPart = user.email ? user.email.split('@')[0] : 'Gestor';
                     setPrimeiroNome(emailPart.charAt(0).toUpperCase() + emailPart.slice(1));
                 }
             } catch (err) {
                 console.error('Erro ao buscar perfil:', err);
                 // Fallback de segurança
-                setPrimeiroNome('Administrador');
+                setPrimeiroNome('Gestor');
             }
         };
 
@@ -3731,7 +3731,7 @@ function App() {
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                             <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                             <button onClick={handleLogout} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,107,53,0.3)', background: 'rgba(255,107,53,0.1)', color: '#ff6b35', cursor: 'pointer', fontWeight: '600' }} title="Sair do sistema">Sair</button>
-                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {primeiroNome || 'Administrador'}</div>
+                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {primeiroNome || 'Gestor'}</div>
                         </div>
                     </div>
                 </div>
