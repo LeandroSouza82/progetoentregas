@@ -7,6 +7,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
     const [password, setPassword] = useState('');
     const [rememberMe, setRememberMe] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [connecting, setConnecting] = useState(false); // Estado para "Conectando..."
     const [error, setError] = useState('');
     const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [resetEmailSent, setResetEmailSent] = useState(false);
@@ -124,6 +125,9 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             if (session && session.user) {
                 console.log('✅ [Login] Sessão detectada via', _event, ', saindo do login...');
                 sessionFound = true;
+
+                // Ativar mensagem de "Conectando..."
+                setConnecting(true);
 
                 if (checkInterval) clearInterval(checkInterval);
 
@@ -310,6 +314,20 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             setError('');
             setLoading(true);
 
+            // ✅ RESET DE NAVEGAÇÃO: Limpar parâmetros de erro antigos da URL
+            const currentUrl = new URL(window.location.href);
+            const hadErrorParams = currentUrl.searchParams.has('error') ||
+                currentUrl.searchParams.has('error_code') ||
+                currentUrl.searchParams.has('error_description');
+
+            if (hadErrorParams) {
+                currentUrl.searchParams.delete('error');
+                currentUrl.searchParams.delete('error_code');
+                currentUrl.searchParams.delete('error_description');
+                window.history.replaceState({}, '', currentUrl.toString());
+                console.log('🧹 [Login] Parâmetros de erro removidos antes do OAuth');
+            }
+
             const { error: googleError } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
@@ -378,6 +396,34 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                         Ajudamos empresas a gerenciarem suas rotas e pedidos de forma eficiente e rápida.
                     </p>
                 </div>
+
+                {/* Mensagem de Conectando */}
+                {connecting && (
+                    <div style={{
+                        padding: '16px',
+                        background: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: '8px',
+                        color: '#60a5fa',
+                        fontSize: '14px',
+                        marginBottom: '16px',
+                        textAlign: 'center',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px'
+                    }}>
+                        <div style={{
+                            width: '16px',
+                            height: '16px',
+                            border: '2px solid rgba(59, 130, 246, 0.3)',
+                            borderTopColor: '#60a5fa',
+                            borderRadius: '50%',
+                            animation: 'spin 1s linear infinite'
+                        }}></div>
+                        <span>🚀 Conectando ao Dashboard...</span>
+                    </div>
+                )}
 
                 {/* Mensagem de Erro */}
                 {error && (

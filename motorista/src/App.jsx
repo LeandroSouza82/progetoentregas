@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient'; // Usar o Supabase real do projeto
 import MapaLogistica from '../../src/MapaLogistica';
+import { enviarNotificacaoSW, solicitarPermissaoNotificacao } from './notificationHelper';
 // keep imports minimal for map rendering via MapaLogistica
 
 const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
@@ -175,6 +176,76 @@ function InternalMobileApp() {
         return () => {
             console.log('🔌 [CELULAR] Desconectando Realtime...');
             if (channel) channel.unsubscribe();
+        };
+    }, [motorista?.id]);
+
+    // 📣 LISTENER DE NOTIFICAÇÕES PUSH via Supabase Realtime
+    useEffect(() => {
+        const mId = motorista && motorista.id ? String(motorista.id) : null;
+        if (!supabase || typeof supabase.channel !== 'function') return;
+
+        console.log('📣 [CELULAR] Ativando listener de notificações push...');
+
+        // Solicitar permissão para notificações (se ainda não tiver)
+        solicitarPermissaoNotificacao();
+
+        const pushChannel = supabase.channel('avisos-push')
+            .on('broadcast', { event: 'nova-notificacao' }, async (payload) => {
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log('📣 [PUSH] Nova notificação recebida!');
+                console.log('📦 Payload:', payload);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+                const { titulo, mensagem, motorista_id } = payload.payload || {};
+
+                // Verificar se a notificação é para este motorista ou para todos
+                const isForMe = !motorista_id || String(motorista_id) === String(mId);
+
+                if (isForMe) {
+                    try {
+                        // 🔔 TENTA USAR SERVICE WORKER PRIMEIRO (funciona em background)
+                        await enviarNotificacaoSW({
+                            titulo: titulo || 'V10 Delivery',
+                            mensagem: mensagem || 'Nova mensagem',
+                            url: 'https://v10delivery.vercel.app'
+                        });
+
+                        console.log('✅ Notificação enviada via Service Worker!');
+                    } catch (swErr) {
+                        console.warn('⚠️ Falha no SW, usando Notification API:', swErr);
+
+                        // FALLBACK: Notification API direto (só funciona com app aberto)
+                        if ('Notification' in window && Notification.permission === 'granted') {
+                            try {
+                                const notification = new Notification(titulo || 'V10 Delivery', {
+                                    body: mensagem || 'Nova mensagem',
+                                    icon: '/assets/logo-v10.png.png',
+                                    badge: '/assets/logo-v10.png.png',
+                                    vibrate: [200, 100, 200],
+                                    tag: 'v10-comunicado',
+                                    requireInteraction: true
+                                });
+
+                                notification.onclick = () => {
+                                    window.focus();
+                                    notification.close();
+                                };
+
+                                console.log('✅ Notificação exibida via Notification API!');
+                            } catch (notifErr) {
+                                console.error('❌ Erro ao exibir notificação:', notifErr);
+                            }
+                        } else {
+                            console.warn('⚠️ Permissão de notificação não concedida');
+                        }
+                    }
+                }
+            })
+            .subscribe();
+
+        return () => {
+            console.log('🔌 [CELULAR] Desconectando listener de push...');
+            if (pushChannel) pushChannel.unsubscribe();
         };
     }, [motorista?.id]);
 

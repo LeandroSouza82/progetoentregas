@@ -419,3 +419,16 @@ body {
         font-size: 1.375rem;
     }
 }
+
+/* ===================================
+   ANIMAÇÃO - Spinner de Carregamento
+   =================================== */
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}

@@ -253,6 +253,75 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
     );
 }, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme);
 
+/**
+ * ✅ FUNÇÃO UTILITÁRIA: Extrai e formata o primeiro nome do usuário
+ * Trata múltiplas fontes: Google OAuth (user_metadata), tabela profiles, ou email
+ * 
+ * @param {Object} user - Objeto do usuário do Supabase
+ * @param {Object} profileData - Dados da tabela profiles (opcional)
+ * @returns {string} Primeiro nome formatado (ex: "Leandro")
+ */
+function extractFirstName(user, profileData = null) {
+    let rawName = '';
+
+    // PRIORIDADE 1: Dados da tabela profiles
+    if (profileData && profileData.full_name) {
+        rawName = profileData.full_name;
+    }
+    // PRIORIDADE 2: Google OAuth metadata (full_name)
+    else if (user?.user_metadata?.full_name) {
+        rawName = user.user_metadata.full_name;
+    }
+    // PRIORIDADE 3: Google OAuth metadata (name)
+    else if (user?.user_metadata?.name) {
+        rawName = user.user_metadata.name;
+    }
+    // PRIORIDADE 4: Email (fallback)
+    else if (user?.email) {
+        rawName = user.email.split('@')[0];
+
+        // ✅ TRATAMENTO ESPECIAL: Email específico do gestor principal
+        if (user.email.toLowerCase() === 'lsouza557@gmail.com') {
+            return 'Leandro';
+        }
+    }
+    // FALLBACK FINAL
+    else {
+        return 'Gestor';
+    }
+
+    // Limpar e processar o nome
+    const cleaned = rawName
+        .trim()
+        .replace(/[0-9]/g, '')           // Remove números
+        .replace(/[._-]/g, ' ')          // Substitui pontos, underscores e hífens por espaços
+        .replace(/\s+/g, ' ')            // Remove espaços duplicados
+        .trim();
+
+    // Pegar apenas a primeira palavra
+    const firstName = cleaned.split(' ')[0] || 'Gestor';
+
+    // Capitalizar: primeira letra maiúscula, resto minúsculo
+    return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+}
+
+/**
+ * ✅ FUNÇÃO UTILITÁRIA: Retorna saudação baseada no horário atual
+ * 
+ * @returns {string} 'Bom dia', 'Boa tarde' ou 'Boa noite'
+ */
+function getSaudacao() {
+    const hora = new Date().getHours();
+
+    if (hora >= 5 && hora < 12) {
+        return 'Bom dia';
+    } else if (hora >= 12 && hora < 18) {
+        return 'Boa tarde';
+    } else {
+        return 'Boa noite';
+    }
+}
+
 function App() {
     // Estados de autenticação e sessão (ORDEM IMPORTANTE: declarar antes de usar)
     const [user, setUser] = useState(null); // Usuário autenticado
@@ -510,7 +579,7 @@ function App() {
         }
     };
 
-    // 👤 Efeito: Buscar Nome do Perfil na tabela profiles
+    // 👤 Efeito: Buscar e Formatar Nome do Usuário (Gestor)
     React.useEffect(() => {
         const fetchProfileName = async () => {
             if (!user) {
@@ -520,27 +589,23 @@ function App() {
 
             try {
                 // Tentar buscar na tabela profiles
-                const { data, error } = await supabase
+                const { data } = await supabase
                     .from('profiles')
                     .select('full_name')
                     .eq('id', user.id)
                     .single();
 
-                if (data && data.full_name) {
-                    // Lógica para extrair apenas o primeiro nome
-                    const nome = data.full_name.trim().split(' ')[0];
-                    // Capitalizar a primeira letra para ficar bonito
-                    const nomeFormatado = nome.charAt(0).toUpperCase() + nome.slice(1).toLowerCase();
-                    setPrimeiroNome(nomeFormatado);
-                } else {
-                    // Fallback: usar parte do email
-                    const emailPart = user.email ? user.email.split('@')[0] : 'Leandro';
-                    setPrimeiroNome(emailPart.charAt(0).toUpperCase() + emailPart.slice(1));
-                }
+                // ✅ Usar função utilitária para extrair e formatar o primeiro nome
+                const firstName = extractFirstName(user, data);
+                setPrimeiroNome(firstName);
+
+                console.log(`👤 [V10 Delivery] Nome do gestor formatado: ${firstName}`);
             } catch (err) {
-                console.error('Erro ao buscar perfil:', err);
-                // Fallback de segurança
-                setPrimeiroNome('Leandro');
+                console.error('⚠️ [V10 Delivery] Erro ao buscar perfil:', err);
+
+                // ✅ Mesmo com erro, extrair nome do user objeto (Google OAuth ou email)
+                const firstName = extractFirstName(user, null);
+                setPrimeiroNome(firstName);
             }
         };
 
@@ -863,8 +928,7 @@ function App() {
     const DEBUG_FORCE_SHOW_ALL = true; // força mostrar tudo temporariamente (debug)
     const [avisos, setAvisos] = useState([]);
     const [gestorPhone, setGestorPhone] = useState(null);
-    const [nomeGestor, setNomeGestor] = useState(null);
-    const [primeiroNome, setPrimeiroNome] = useState(null); // Novo estado para nome do perfil
+    const [primeiroNome, setPrimeiroNome] = useState(null); // Estado para nome do gestor formatado
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [isGeocoding, setIsGeocoding] = useState(false); // Estado de loading para geocodificação
@@ -3677,7 +3741,7 @@ function App() {
     }
 
     // ✅ DASHBOARD RENDERIZADO: Usuário autenticado ou dados carregados
-    console.log('🎯 [App] Renderizando Dashboard - Auth:', isAuthenticated, 'Dados:', hasDadosCarregados);
+    // console.log('🎯 [App] Renderizando Dashboard - Auth:', isAuthenticated, 'Dados:', hasDadosCarregados);
 
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
@@ -3816,7 +3880,7 @@ function App() {
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                             <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                             <button onClick={handleLogout} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,107,53,0.3)', background: 'rgba(255,107,53,0.1)', color: '#ff6b35', cursor: 'pointer', fontWeight: '600' }} title="Sair do sistema">Sair</button>
-                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {primeiroNome || 'Leandro'}</div>
+                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>{getSaudacao()}, {primeiroNome || 'Gestor'}</div>
                         </div>
                     </div>
                 </div>
@@ -5376,11 +5440,10 @@ function App() {
                                                 if (sb && typeof sb.from === 'function') {
                                                     try {
                                                         const insertResult = await sb.from('avisos_gestor').insert([{
-                                                            titulo: 'PUSH: Comunicado',
+                                                            titulo: 'Comunicado',  // ✅ Sem prefixo PUSH
                                                             mensagem: texto,
                                                             lida: false,
-                                                            motorista_id: destinatario === 'all' ? null : Number(destinatario),
-                                                            tipo_envio: 'push'
+                                                            motorista_id: destinatario === 'all' ? null : Number(destinatario)
                                                         }]);
 
                                                         if (insertResult.error) {
@@ -5391,6 +5454,44 @@ function App() {
                                                     } catch (dbErr) {
                                                         console.warn('⚠️ Erro ao registrar no banco:', dbErr);
                                                     }
+                                                }
+
+                                                // 📢 DISPARAR NOTIFICAÇÃO REAL VIA SUPABASE REALTIME
+                                                // Envia um evento via canal realtime para que o app do motorista receba
+                                                try {
+                                                    const sb = supabaseRef.current || supabase;
+                                                    const channel = sb.channel('avisos-push');
+
+                                                    // ✅ SUBSCREVER AO CANAL ANTES DE ENVIAR (evita fallback mode)
+                                                    await new Promise((resolve) => {
+                                                        channel.subscribe((status) => {
+                                                            if (status === 'SUBSCRIBED') {
+                                                                console.log('🔌 Canal avisos-push subscrito com sucesso');
+                                                                resolve();
+                                                            }
+                                                        });
+                                                    });
+
+                                                    // Publicar evento de nova notificação
+                                                    await channel.send({
+                                                        type: 'broadcast',
+                                                        event: 'nova-notificacao',
+                                                        payload: {
+                                                            titulo: 'Comunicado',
+                                                            mensagem: texto,
+                                                            motorista_id: destinatario === 'all' ? null : Number(destinatario),
+                                                            timestamp: new Date().toISOString()
+                                                        }
+                                                    });
+
+                                                    console.log('✅ Evento de notificação enviado via Supabase Realtime');
+
+                                                    // Limpar o canal após envio
+                                                    setTimeout(() => {
+                                                        channel.unsubscribe();
+                                                    }, 1000);
+                                                } catch (realtimeErr) {
+                                                    console.warn('⚠️ Erro ao enviar via Realtime:', realtimeErr);
                                                 }
 
                                                 // 📱 SIMULAÇÃO DE ENVIO PARA MOTORISTAS
