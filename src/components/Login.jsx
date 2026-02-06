@@ -21,6 +21,10 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
 
+    // Estados para Modais de Política e Termos
+    const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+    const [showTermsOfService, setShowTermsOfService] = useState(false);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
@@ -227,13 +231,46 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                     <p className="login-slogan">Sua rota para excelência</p>
                 </div>
 
-                {/* INJEÇÃO DE EMERGÊNCIA - TESTE VISUAL */}
-                <div style={{ textAlign: 'center', zIndex: 1000000, position: 'relative', margin: '20px 0' }}>
-                    <h1 style={{ color: 'red', fontSize: '50px', fontWeight: 'bold', margin: 0 }}>TESTE APARECEU</h1>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '10px' }}>
-                        <a href="#" style={{ color: 'red', fontSize: '20px', fontWeight: 'bold' }}>Política de Privacidade</a>
-                        <a href="#" style={{ color: 'red', fontSize: '20px', fontWeight: 'bold' }}>Termos de Serviço</a>
-                    </div>
+                {/* Links de Conformidade - Compliance Google */}
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '15px',
+                    margin: '10px 0 20px 0',
+                    textAlign: 'center'
+                }}>
+                    <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setShowPrivacyPolicy(true); }}
+                        style={{
+                            color: '#ffffff',
+                            fontSize: '11px',
+                            textDecoration: 'none',
+                            opacity: 0.6,
+                            transition: 'opacity 0.2s',
+                            cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => e.target.style.opacity = '1'}
+                        onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+                    >
+                        Política de Privacidade
+                    </a>
+                    <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setShowTermsOfService(true); }}
+                        style={{
+                            color: '#ffffff',
+                            fontSize: '11px',
+                            textDecoration: 'none',
+                            opacity: 0.6,
+                            transition: 'opacity 0.2s',
+                            cursor: 'pointer'
+                        }}
+                        onMouseEnter={(e) => e.target.style.opacity = '1'}
+                        onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+                    >
+                        Termos de Serviço
+                    </a>
                 </div>
 
                 {/* Mensagem de Erro */}
@@ -489,6 +526,169 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                     </p>
                 </div>
             </div>
+            {/* Modais de Política de Privacidade e Termos de Serviço */}
+            {showPrivacyPolicy && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000,
+                    padding: '20px'
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: '16px',
+                        padding: '30px',
+                        maxWidth: '600px',
+                        maxHeight: '80vh',
+                        overflow: 'auto',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+                    }}>
+                        <h2 style={{ margin: '0 0 20px 0', color: '#1e293b', fontSize: '24px', fontWeight: '800' }}>Política de Privacidade</h2>
+                        <div style={{ lineHeight: '1.8', color: '#475569', fontSize: '14px' }}>
+                            <p><strong>Última atualização:</strong> 6 de fevereiro de 2026</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>1. Coleta de Dados</h3>
+                            <p>O V10 Delivery coleta informações necessárias para o funcionamento do serviço de entregas, incluindo:</p>
+                            <ul>
+                                <li>Nome completo e informações de contato</li>
+                                <li>Endereços de entrega e recolha</li>
+                                <li>Localização em tempo real dos motoristas (GPS)</li>
+                                <li>Histórico de entregas realizadas</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>2. Uso dos Dados</h3>
+                            <p>Os dados coletados são utilizados exclusivamente para:</p>
+                            <ul>
+                                <li>Gerenciar e otimizar rotas de entrega</li>
+                                <li>Comunicação entre gestores e motoristas</li>
+                                <li>Melhorar a qualidade do serviço prestado</li>
+                                <li>Gerar relatórios e estatísticas operacionais</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>3. Segurança</h3>
+                            <p>Todos os dados são armazenados de forma segura no Supabase (PostgreSQL), com criptografia end-to-end e proteção contra acessos não autorizados. Utilizamos as melhores práticas de segurança da indústria.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>4. Compartilhamento</h3>
+                            <p>Seus dados <strong>não são compartilhados</strong> com terceiros. Mantemos total privacidade das informações coletadas.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>5. Seus Direitos</h3>
+                            <p>Você tem direito a acessar, corrigir ou solicitar a exclusão de seus dados a qualquer momento. Entre em contato conosco para exercer esses direitos.</p>
+                        </div>
+                        <button
+                            onClick={() => setShowPrivacyPolicy(false)}
+                            style={{
+                                marginTop: '30px',
+                                padding: '12px 30px',
+                                background: 'linear-gradient(135deg, #3b82f6, #1e40af)',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontSize: '14px',
+                                fontWeight: '700',
+                                cursor: 'pointer',
+                                width: '100%'
+                            }}
+                        >
+                            Fechar
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {showTermsOfService && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000,
+                    padding: '20px'
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: '16px',
+                        padding: '30px',
+                        maxWidth: '600px',
+                        maxHeight: '80vh',
+                        overflow: 'auto',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+                    }}>
+                        <h2 style={{ margin: '0 0 20px 0', color: '#1e293b', fontSize: '24px', fontWeight: '800' }}>Termos de Serviço</h2>
+                        <div style={{ lineHeight: '1.8', color: '#475569', fontSize: '14px' }}>
+                            <p><strong>Última atualização:</strong> 6 de fevereiro de 2026</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>1. Aceitação dos Termos</h3>
+                            <p>Ao utilizar o V10 Delivery, você concorda com estes Termos de Serviço. Se não concordar, não utilize a plataforma.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>2. Uso do Serviço</h3>
+                            <p>O V10 Delivery é uma plataforma de gerenciamento de entregas. Você se compromete a:</p>
+                            <ul>
+                                <li>Fornecer informações verdadeiras e precisas</li>
+                                <li>Manter a confidencialidade de sua conta</li>
+                                <li>Não utilizar o serviço para fins ilegais</li>
+                                <li>Respeitar as diretrizes operacionais estabelecidas</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>3. Responsabilidades</h3>
+                            <p><strong>Do Usuário:</strong></p>
+                            <ul>
+                                <li>Garantir informações corretas de entrega</li>
+                                <li>Manter horários e compromissos agendados</li>
+                                <li>Tratar motoristas e equipe com respeito</li>
+                            </ul>
+                            <p><strong>Do V10 Delivery:</strong></p>
+                            <ul>
+                                <li>Fornecer plataforma estável e segura</li>
+                                <li>Manter privacidade dos dados</li>
+                                <li>Garantir comunicação eficiente entre partes</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>4. Limitação de Responsabilidade</h3>
+                            <p>O V10 Delivery não se responsabiliza por:</p>
+                            <ul>
+                                <li>Atrasos causados por fatores externos (trânsito, clima)</li>
+                                <li>Danos a mercadorias mal embaladas</li>
+                                <li>Informações incorretas fornecidas pelo usuário</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>5. Cancelamento</h3>
+                            <p>Reservamo-nos o direito de suspender ou cancelar contas que violem estes termos sem aviso prévio.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>6. Alterações</h3>
+                            <p>Podemos modificar estes termos a qualquer momento. Alterações significativas serão comunicadas aos usuários.</p>
+                        </div>
+                        <button
+                            onClick={() => setShowTermsOfService(false)}
+                            style={{
+                                marginTop: '30px',
+                                padding: '12px 30px',
+                                background: 'linear-gradient(135deg, #3b82f6, #1e40af)',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontSize: '14px',
+                                fontWeight: '700',
+                                cursor: 'pointer',
+                                width: '100%'
+                            }}
+                        >
+                            Fechar
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
