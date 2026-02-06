@@ -225,30 +225,27 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                     onError={(e) => { e.target.style.display = 'none'; console.warn('[V10 Delivery] Logo não encontrada'); }}
                 />
 
-                {/* Título e Slogan */}
-                <div className="login-header">
-                    <h1 className="login-title">V10 Delivery</h1>
-                    <p className="login-slogan">Sua rota para excelência</p>
-                </div>
-
-                {/* Links de Conformidade - Compliance Google */}
+                {/* Links de Conformidade Google */}
                 <div style={{
                     display: 'flex',
                     justifyContent: 'center',
-                    gap: '15px',
-                    margin: '10px 0 20px 0',
-                    textAlign: 'center'
+                    gap: '12px',
+                    margin: '0.8rem 0 1.2rem 0',
+                    textAlign: 'center',
+                    zIndex: 9999
                 }}>
                     <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); setShowPrivacyPolicy(true); }}
+                        href="https://v10delivery.vercel.app/privacy"
+                        target="_blank"
+                        rel="noopener noreferrer"
                         style={{
                             color: '#ffffff',
-                            fontSize: '11px',
+                            fontSize: '10px',
                             textDecoration: 'none',
                             opacity: 0.6,
                             transition: 'opacity 0.2s',
-                            cursor: 'pointer'
+                            cursor: 'pointer',
+                            textShadow: '0 1px 2px rgba(0,0,0,0.5)'
                         }}
                         onMouseEnter={(e) => e.target.style.opacity = '1'}
                         onMouseLeave={(e) => e.target.style.opacity = '0.6'}
@@ -256,15 +253,17 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                         Política de Privacidade
                     </a>
                     <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); setShowTermsOfService(true); }}
+                        href="https://v10delivery.vercel.app/terms"
+                        target="_blank"
+                        rel="noopener noreferrer"
                         style={{
                             color: '#ffffff',
-                            fontSize: '11px',
+                            fontSize: '10px',
                             textDecoration: 'none',
                             opacity: 0.6,
                             transition: 'opacity 0.2s',
-                            cursor: 'pointer'
+                            cursor: 'pointer',
+                            textShadow: '0 1px 2px rgba(0,0,0,0.5)'
                         }}
                         onMouseEnter={(e) => e.target.style.opacity = '1'}
                         onMouseLeave={(e) => e.target.style.opacity = '0.6'}
