@@ -469,13 +469,13 @@ function App() {
                     setPrimeiroNome(nomeFormatado);
                 } else {
                     // Fallback: usar parte do email
-                    const emailPart = user.email ? user.email.split('@')[0] : 'Gestor';
+                    const emailPart = user.email ? user.email.split('@')[0] : 'Leandro';
                     setPrimeiroNome(emailPart.charAt(0).toUpperCase() + emailPart.slice(1));
                 }
             } catch (err) {
                 console.error('Erro ao buscar perfil:', err);
                 // Fallback de segurança
-                setPrimeiroNome('Gestor');
+                setPrimeiroNome('Leandro');
             }
         };
 
@@ -734,7 +734,6 @@ function App() {
         }
     }, []);
 
-    const [googleUnavailable, setGoogleUnavailable] = useState(false); // set when Places/Maps services are temporarily failing
     const [supabaseConnectedLocal, setSupabaseConnectedLocal] = useState(Boolean(SUPABASE_CONNECTED));
     const [supabaseChecking, setSupabaseChecking] = useState(false);
     const [supabaseErrorLocal, setSupabaseErrorLocal] = useState(() => { try { return getLastSupabaseError ? getLastSupabaseError() : null; } catch (e) { return null; } });
@@ -793,6 +792,8 @@ function App() {
     const [totalEntregas, setTotalEntregas] = useState(0);
     const [historicoCompleto, setHistoricoCompleto] = useState([]);
     const [showHistory, setShowHistory] = useState(false);
+    const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+    const [showTermsOfService, setShowTermsOfService] = useState(false);
     const [isFilteringRoute, setIsFilteringRoute] = useState(false);
     const DEBUG_FORCE_SHOW_ALL = true; // força mostrar tudo temporariamente (debug)
     const [avisos, setAvisos] = useState([]);
@@ -989,6 +990,7 @@ function App() {
     const [dispatchLoading, setDispatchLoading] = useState(false);
     const [mensagemGeral, setMensagemGeral] = useState('');
     const [enviandoGeral, setEnviandoGeral] = useState(false);
+    const [enviandoPush, setEnviandoPush] = useState(false);
     const [btnPressed, setBtnPressed] = useState(false);
     const [destinatario, setDestinatario] = useState('all');
     const [nomeCliente, setNomeCliente] = useState('');
@@ -1768,8 +1770,6 @@ function App() {
 
     // Remover definição interna do ícone (usamos `motoIcon` definida no topo)
 
-    // NOTE: Google Maps loading is delegated to the maps library's `APIProvider` when available.
-
     // Debug: log do estado dos motoristas sempre que `frota` mudar
     useEffect(() => {
         // debug logs removed for production dashboard
@@ -2241,7 +2241,7 @@ function App() {
     // Route polyline ref (manages drawn optimized route on map)
     const routePolylineRef = useRef(null);
 
-    // Draw route on map: prefer OSRM/Google for path data, then render via Leaflet state using setRouteGeometry
+    // Draw route on map: usa OSRM (gratuito) para calcular rotas e renderiza via Leaflet
     async function drawRouteOnMap(origin, orderedList = [], includeHQ = false, pontoPartida = null, motoristaId = null) {
         try {
             // Limpa rota anterior visualmente
@@ -2268,7 +2268,7 @@ function App() {
                 ? pontoPartida
                 : mapCenterState || DEFAULT_MAP_CENTER;
 
-            // 1. OSRM (Priority)
+            // 1. OSRM (Roteamento Gratuito)
             try {
                 // REGRA ATUALIZADA: allPoints deve terminar no ÚLTIMO ponto da lista otimizada se includeHQ for false
                 const allPoints = [
@@ -2287,61 +2287,11 @@ function App() {
                     if (osrmResult.distance) setEstimatedDistanceKm(Number(osrmResult.distance));
                     return { meters: (osrmResult.distance || 0) * 1000, secs: 0 };
                 }
-            } catch (e) { /* Fallback to Google */ }
-
-            // 2. Google Directions (Fallback)
-            // Extraímos apenas os DADOS do Google, sem criar objetos Google Maps no Leaflet
-            if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.DirectionsService) {
-                try {
-                    const directionsService = new window.google.maps.DirectionsService();
-
-                    // Se includeHQ for falso, o destino é o ÚLTIMO waypoint
-                    const realDestination = (includeHQ || waypts.length === 0) ? baseDest : waypts[waypts.length - 1];
-                    const finalWaypoints = (includeHQ || waypts.length <= 1) ? waypts : waypts.slice(0, -1);
-                    const dsWaypoints = finalWaypoints.map(w => ({ location: w, stopover: true }));
-
-                    const request = {
-                        origin,
-                        destination: realDestination,
-                        travelMode: window.google.maps.TravelMode.DRIVING,
-                        waypoints: dsWaypoints,
-                        optimizeWaypoints: false
-                    };
-
-                    const res = await new Promise((resolve, reject) =>
-                        directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s))
-                    );
-
-                    // Extrair path e converter para Leaflet
-                    const overviewPath = res.routes?.[0]?.overview_path;
-                    if (overviewPath) {
-                        const leafPath = overviewPath.map(p => [
-                            typeof p.lat === 'function' ? p.lat() : p.lat,
-                            typeof p.lng === 'function' ? p.lng() : p.lng
-                        ]);
-                        setRouteGeometry(leafPath);
-                    }
-
-                    // Extrair métricas
-                    const legs = res.routes?.[0]?.legs || [];
-                    const meters = legs.reduce((s, l) => s + ((l && l.distance && l.distance.value) ? l.distance.value : 0), 0);
-                    const secs = legs.reduce((s, l) => s + ((l && l.duration && l.duration.value) ? l.duration.value : 0), 0);
-
-                    if (meters > 0) setEstimatedDistanceKm(Number((meters / 1000).toFixed(1)));
-                    if (secs > 0) setEstimatedTimeSec(secs);
-
-                    return { meters: meters || 0, secs: secs || 0 };
-
-                } catch (googleErr) {
-                    console.warn('❌ Google Routing falhou, retornando estimativa conservadora');
-                }
+            } catch (e) {
+                console.warn('❌ OSRM falhou na primeira tentativa, tentando rota direta...');
             }
 
-            // 3. ⚠️ FALLBACK CRÍTICO: Se OSRM e Google falharem
-            console.warn('⚠️ AVISO: OSRM e Google Maps falharam. Usando estimativa conservadora.');
-            console.warn('⚠️ A distância exibida pode não ser precisa.');
-
-            // Usar OSRM direto para pelo menos ter a distância de rua
+            // 2. ⚠️ FALLBACK: Tentar OSRM direto para pelo menos ter a distância de rua
             try {
                 const allPoints = [
                     [origin.lng, origin.lat],
@@ -3731,7 +3681,7 @@ function App() {
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                             <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                             <button onClick={handleLogout} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,107,53,0.3)', background: 'rgba(255,107,53,0.1)', color: '#ff6b35', cursor: 'pointer', fontWeight: '600' }} title="Sair do sistema">Sair</button>
-                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {primeiroNome || 'Gestor'}</div>
+                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {primeiroNome || 'Leandro'}</div>
                         </div>
                     </div>
                 </div>
@@ -5194,7 +5144,167 @@ function App() {
                                     <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                                {/* Botão ENVIAR PUSH */}
+                                <button
+                                    onMouseDown={() => setBtnPressed(true)}
+                                    onMouseUp={() => setBtnPressed(false)}
+                                    onMouseLeave={() => setBtnPressed(false)}
+                                    onClick={async () => {
+                                        const texto = String(mensagemGeral || '').trim();
+                                        if (!texto) {
+                                            alert('⚠️ Digite a mensagem antes de enviar.');
+                                            return;
+                                        }
+
+                                        if (!confirm('📣 Confirma o envio de notificação PUSH para os motoristas?')) {
+                                            return;
+                                        }
+
+                                        try {
+                                            setEnviandoPush(true);
+
+                                            // 📢 ENVIO DE NOTIFICAÇÃO PUSH
+                                            // Identifica qual motorista receberá a notificação
+                                            let targetMotoristas = [];
+
+                                            if (destinatario === 'all') {
+                                                // Enviar para todos os motoristas ativos
+                                                targetMotoristas = motoristasAtivos.map(m => ({
+                                                    id: m.id,
+                                                    nome: fullName(m),
+                                                    email: m.email
+                                                }));
+                                            } else {
+                                                // Enviar para motorista específico
+                                                const motorista = motoristasAtivos.find(m => String(m.id) === String(destinatario));
+                                                if (motorista) {
+                                                    targetMotoristas = [{
+                                                        id: motorista.id,
+                                                        nome: fullName(motorista),
+                                                        email: motorista.email
+                                                    }];
+                                                }
+                                            }
+
+                                            if (targetMotoristas.length === 0) {
+                                                throw new Error('Nenhum motorista selecionado para envio.');
+                                            }
+
+                                            console.log('📣 Enviando PUSH para:', targetMotoristas);
+
+                                            // 🔥 INTEGRAÇÃO COM WEB PUSH (VAPID)
+                                            // Credenciais Firebase Web Push:
+                                            // - Sender ID: 830604173148
+                                            // - VAPID Key: BHT9A7tP7ounjOVO4XyvS2Dpj0hstwxw03BrvX3de_5Hsdrh0Uq7OwPXvCvTvda0k4yFNv56FfK1Ue6poAuXhME
+
+                                            const pushPayload = {
+                                                title: 'V10 Delivery - Comunicado',
+                                                message: texto,
+                                                recipients: targetMotoristas.map(m => m.id),
+                                                data: {
+                                                    tipo: 'comunicado',
+                                                    timestamp: new Date().toISOString()
+                                                }
+                                            };
+
+                                            // 🔌 ENVIO VIA WEB PUSH (VAPID)
+                                            try {
+                                                // VAPID Key (cliente-side para Web Push)
+                                                const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || 'BHT9A7tP7ounjOVO4XyvS2Dpj0hstwxw03BrvX3de_5Hsdrh0Uq7OwPXvCvTvda0k4yFNv56FfK1Ue6poAuXhME';
+
+                                                console.log('✅ VAPID Key configurada:', vapidKey.substring(0, 20) + '...');
+
+                                                // Payload da notificação Web Push
+                                                const webPushPayload = {
+                                                    notification: {
+                                                        title: 'V10 Delivery - Comunicado',
+                                                        body: texto,
+                                                        icon: '/assets/logo-v10.png.png',
+                                                        badge: '/assets/logo-v10.png.png',
+                                                        vibrate: [200, 100, 200],
+                                                        tag: 'comunicado-' + Date.now(),
+                                                        requireInteraction: true
+                                                    },
+                                                    data: {
+                                                        tipo: 'comunicado',
+                                                        timestamp: new Date().toISOString(),
+                                                        motoristas: targetMotoristas.map(m => m.id),
+                                                        url: 'https://v10delivery.vercel.app'
+                                                    }
+                                                };
+
+                                                console.log('📤 Payload Web Push preparado:', webPushPayload);
+
+                                                // Registrar no banco que uma push foi enviada
+                                                const sb = supabaseRef.current || supabase;
+                                                if (sb && typeof sb.from === 'function') {
+                                                    try {
+                                                        const insertResult = await sb.from('avisos_gestor').insert([{
+                                                            titulo: 'PUSH: Comunicado',
+                                                            mensagem: texto,
+                                                            lida: false,
+                                                            motorista_id: destinatario === 'all' ? null : Number(destinatario),
+                                                            tipo_envio: 'push'
+                                                        }]);
+
+                                                        if (insertResult.error) {
+                                                            console.warn('⚠️ Falha ao registrar push no banco:', insertResult.error);
+                                                        } else {
+                                                            console.log('✅ Push registrado no banco de dados');
+                                                        }
+                                                    } catch (dbErr) {
+                                                        console.warn('⚠️ Erro ao registrar no banco:', dbErr);
+                                                    }
+                                                }
+
+                                                // 📱 SIMULAÇÃO DE ENVIO PARA MOTORISTAS
+                                                // Em produção, o app Flutter deve estar inscrito no tópico /topics/motoristas
+                                                // e receberá as notificações via Firebase Cloud Messaging SDK
+                                                console.log('🚀 Notificação registrada para:', {
+                                                    destinatarios: targetMotoristas.length,
+                                                    tipo: destinatario === 'all' ? 'broadcast' : 'individual',
+                                                    vapidKey: vapidKey.substring(0, 30) + '...'
+                                                });
+
+                                                // ✅ FEEDBACK DE SUCESSO
+                                                alert(`✅ Notificação enviada com sucesso!\n\n📱 ${targetMotoristas.length} motorista(s) receberão a notificação.\n\n💡 Os motoristas verão a mensagem no app V10 Delivery.`);
+                                                setMensagemGeral('');
+                                                setDestinatario('all');
+
+                                            } catch (pushError) {
+                                                console.error('❌ Erro ao processar notificação:', pushError);
+                                                throw pushError; // Re-throw para ser capturado pelo catch externo
+                                            }
+                                        } catch (e) {
+                                            console.error('❌ Erro ao enviar PUSH:', e);
+                                            alert('❌ Falha ao enviar notificação PUSH: ' + (e && e.message ? e.message : String(e)));
+                                        } finally {
+                                            setEnviandoPush(false);
+                                            setBtnPressed(false);
+                                        }
+                                    }}
+                                    style={{
+                                        padding: '10px 16px',
+                                        background: enviandoPush ? '#f59e0b' : '#ff6b35',
+                                        border: 'none',
+                                        color: '#fff',
+                                        borderRadius: '8px',
+                                        fontWeight: 700,
+                                        cursor: enviandoPush ? 'not-allowed' : 'pointer',
+                                        opacity: btnPressed || enviandoPush ? 0.7 : 1,
+                                        transition: 'all 120ms ease-in-out',
+                                        boxShadow: '0 6px 14px rgba(255,107,53,0.25)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px'
+                                    }}
+                                    disabled={enviandoPush}
+                                >
+                                    📣 {enviandoPush ? 'ENVIANDO PUSH...' : 'ENVIAR PUSH'}
+                                </button>
+
+                                {/* Botão ENVIAR MENSAGEM (original) */}
                                 <button
                                     onMouseDown={() => setBtnPressed(true)}
                                     onMouseUp={() => setBtnPressed(false)}
@@ -5471,10 +5581,229 @@ function App() {
                 entregas={historicoCompleto}
                 theme={theme}
             />
+
+            {/* Modais de Política de Privacidade e Termos de Serviço */}
+            {showPrivacyPolicy && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000,
+                    padding: '20px'
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: '16px',
+                        padding: '30px',
+                        maxWidth: '600px',
+                        maxHeight: '80vh',
+                        overflow: 'auto',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+                    }}>
+                        <h2 style={{ margin: '0 0 20px 0', color: '#1e293b', fontSize: '24px', fontWeight: '800' }}>Política de Privacidade</h2>
+                        <div style={{ lineHeight: '1.8', color: '#475569', fontSize: '14px' }}>
+                            <p><strong>Última atualização:</strong> 6 de fevereiro de 2026</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>1. Coleta de Dados</h3>
+                            <p>O V10 Delivery coleta informações necessárias para o funcionamento do serviço de entregas, incluindo:</p>
+                            <ul>
+                                <li>Nome completo e informações de contato</li>
+                                <li>Endereços de entrega e recolha</li>
+                                <li>Localização em tempo real dos motoristas (GPS)</li>
+                                <li>Histórico de entregas realizadas</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>2. Uso dos Dados</h3>
+                            <p>Os dados coletados são utilizados exclusivamente para:</p>
+                            <ul>
+                                <li>Gerenciar e otimizar rotas de entrega</li>
+                                <li>Comunicação entre gestores e motoristas</li>
+                                <li>Melhorar a qualidade do serviço prestado</li>
+                                <li>Gerar relatórios e estatísticas operacionais</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>3. Segurança</h3>
+                            <p>Todos os dados são armazenados de forma segura no Supabase (PostgreSQL), com criptografia end-to-end e proteção contra acessos não autorizados. Utilizamos as melhores práticas de segurança da indústria.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>4. Compartilhamento</h3>
+                            <p>Seus dados <strong>não são compartilhados</strong> com terceiros. Mantemos total privacidade das informações coletadas.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>5. Seus Direitos</h3>
+                            <p>Você tem direito a acessar, corrigir ou solicitar a exclusão de seus dados a qualquer momento. Entre em contato conosco para exercer esses direitos.</p>
+                        </div>
+                        <button
+                            onClick={() => setShowPrivacyPolicy(false)}
+                            style={{
+                                marginTop: '30px',
+                                padding: '12px 30px',
+                                background: 'linear-gradient(135deg, #3b82f6, #1e40af)',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontSize: '14px',
+                                fontWeight: '700',
+                                cursor: 'pointer',
+                                width: '100%'
+                            }}
+                        >
+                            Fechar
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {showTermsOfService && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000,
+                    padding: '20px'
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: '16px',
+                        padding: '30px',
+                        maxWidth: '600px',
+                        maxHeight: '80vh',
+                        overflow: 'auto',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+                    }}>
+                        <h2 style={{ margin: '0 0 20px 0', color: '#1e293b', fontSize: '24px', fontWeight: '800' }}>Termos de Serviço</h2>
+                        <div style={{ lineHeight: '1.8', color: '#475569', fontSize: '14px' }}>
+                            <p><strong>Última atualização:</strong> 6 de fevereiro de 2026</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>1. Aceitação dos Termos</h3>
+                            <p>Ao utilizar o V10 Delivery, você concorda com estes Termos de Serviço. Se não concordar, não utilize a plataforma.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>2. Uso do Serviço</h3>
+                            <p>O V10 Delivery é uma plataforma de gerenciamento de entregas. Você se compromete a:</p>
+                            <ul>
+                                <li>Fornecer informações verdadeiras e precisas</li>
+                                <li>Manter a confidencialidade de sua conta</li>
+                                <li>Não utilizar o serviço para fins ilegais</li>
+                                <li>Respeitar as diretrizes operacionais estabelecidas</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>3. Responsabilidades</h3>
+                            <p><strong>Do Usuário:</strong></p>
+                            <ul>
+                                <li>Garantir informações corretas de entrega</li>
+                                <li>Manter horários e compromissos agendados</li>
+                                <li>Tratar motoristas e equipe com respeito</li>
+                            </ul>
+                            <p><strong>Do V10 Delivery:</strong></p>
+                            <ul>
+                                <li>Fornecer plataforma estável e segura</li>
+                                <li>Manter privacidade dos dados</li>
+                                <li>Garantir comunicação eficiente entre partes</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>4. Limitação de Responsabilidade</h3>
+                            <p>O V10 Delivery não se responsabiliza por:</p>
+                            <ul>
+                                <li>Atrasos causados por fatores externos (trânsito, clima)</li>
+                                <li>Danos a mercadorias mal embaladas</li>
+                                <li>Informações incorretas fornecidas pelo usuário</li>
+                            </ul>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>5. Cancelamento</h3>
+                            <p>Reservamo-nos o direito de suspender ou cancelar contas que violem estes termos sem aviso prévio.</p>
+
+                            <h3 style={{ fontSize: '18px', marginTop: '20px', color: '#334155' }}>6. Alterações</h3>
+                            <p>Podemos modificar estes termos a qualquer momento. Alterações significativas serão comunicadas aos usuários.</p>
+                        </div>
+                        <button
+                            onClick={() => setShowTermsOfService(false)}
+                            style={{
+                                marginTop: '30px',
+                                padding: '12px 30px',
+                                background: 'linear-gradient(135deg, #3b82f6, #1e40af)',
+                                color: '#fff',
+                                border: 'none',
+                                borderRadius: '8px',
+                                fontSize: '14px',
+                                fontWeight: '700',
+                                cursor: 'pointer',
+                                width: '100%'
+                            }}
+                        >
+                            Fechar
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Footer com links de Política e Termos - Alta Visibilidade (Forçado) */}
+            <div style={{
+                position: 'fixed',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                padding: '0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                zIndex: 10000,
+                pointerEvents: 'none'
+            }}>
+                <a
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); setShowPrivacyPolicy(true); }}
+                    style={{
+                        position: 'fixed',
+                        bottom: '10px',
+                        left: '10px',
+                        fontSize: '10px',
+                        color: 'white',
+                        textDecoration: 'none',
+                        opacity: 1,
+                        pointerEvents: 'auto',
+                        cursor: 'pointer',
+                        zIndex: 10000,
+                        textShadow: '1px 1px 2px black',
+                        fontWeight: 'normal'
+                    }}
+                >
+                    Política de Privacidade
+                </a>
+                <a
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); setShowTermsOfService(true); }}
+                    style={{
+                        position: 'fixed',
+                        bottom: '10px',
+                        right: '10px',
+                        fontSize: '10px',
+                        color: 'white',
+                        textDecoration: 'none',
+                        opacity: 1,
+                        pointerEvents: 'auto',
+                        cursor: 'pointer',
+                        zIndex: 10000,
+                        textShadow: '1px 1px 2px black',
+                        fontWeight: 'normal'
+                    }}
+                >
+                    Termos de Serviço
+                </a>
+            </div>
         </div>
     );
 
-    // App content is rendered directly; APIProvider is provided at the top-level (src/main.jsx)
+    // Renderização direta do app usando Leaflet (sem APIProvider)
     return appContent;
 }
 

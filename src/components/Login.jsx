@@ -10,6 +10,16 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
     const [error, setError] = useState('');
     const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [resetEmailSent, setResetEmailSent] = useState(false);
+    const [otpCode, setOtpCode] = useState('');
+    const [showOtpInput, setShowOtpInput] = useState(false);
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmNewPassword, setConfirmNewPassword] = useState('');
+    const [showNewPasswordInput, setShowNewPasswordInput] = useState(false);
+
+    // Estados para controlar visibilidade das senhas
+    const [showPassword, setShowPassword] = useState(false);
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -71,22 +81,101 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                 throw new Error('Por favor, informe seu e-mail para recuperar a senha.');
             }
 
-            // Enviar e-mail de recuperação
-            const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-                email.trim(),
-                {
-                    redirectTo: 'https://v10delivery.vercel.app'
+            // Enviar código OTP por e-mail
+            const { error: otpError } = await supabase.auth.signInWithOtp({
+                email: email.trim(),
+                options: {
+                    shouldCreateUser: false
                 }
-            );
+            });
 
-            if (resetError) {
-                throw resetError;
+            if (otpError) {
+                throw otpError;
             }
 
             setResetEmailSent(true);
+            setShowOtpInput(true);
         } catch (err) {
-            console.error('❌ Erro ao enviar e-mail de recuperação:', err);
-            setError(err.message || 'Erro ao enviar e-mail de recuperação.');
+            console.error('❌ Erro ao enviar código de recuperação:', err);
+            setError(err.message || 'Erro ao enviar código de recuperação.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleVerifyOtp = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        try {
+            if (!otpCode || otpCode.trim().length !== 6) {
+                throw new Error('Por favor, digite o código de 6 dígitos.');
+            }
+
+            // Verificar código OTP
+            const { error: verifyError } = await supabase.auth.verifyOtp({
+                email: email.trim(),
+                token: otpCode.trim(),
+                type: 'email'
+            });
+
+            if (verifyError) {
+                throw verifyError;
+            }
+
+            // Código verificado - mostrar campos de nova senha
+            setShowOtpInput(false);
+            setShowNewPasswordInput(true);
+        } catch (err) {
+            console.error('❌ Erro ao verificar código:', err);
+            let errorMessage = 'Código inválido. Tente novamente.';
+            if (err.message?.includes('Token has expired')) {
+                errorMessage = 'Código expirado. Solicite um novo código.';
+            } else if (err.message) {
+                errorMessage = err.message;
+            }
+            setError(errorMessage);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleUpdatePassword = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        try {
+            if (newPassword.length < 6) {
+                throw new Error('A senha deve ter no mínimo 6 caracteres.');
+            }
+
+            if (newPassword !== confirmNewPassword) {
+                throw new Error('As senhas não coincidem.');
+            }
+
+            // Atualizar senha
+            const { error: updateError } = await supabase.auth.updateUser({
+                password: newPassword
+            });
+
+            if (updateError) {
+                throw updateError;
+            }
+
+            alert('✅ Senha alterada com sucesso! Faça login com sua nova senha.');
+            // Resetar formulário
+            setShowForgotPassword(false);
+            setResetEmailSent(false);
+            setShowOtpInput(false);
+            setShowNewPasswordInput(false);
+            setOtpCode('');
+            setNewPassword('');
+            setConfirmNewPassword('');
+        } catch (err) {
+            console.error('❌ Erro ao atualizar senha:', err);
+            setError(err.message || 'Erro ao atualizar senha.');
         } finally {
             setLoading(false);
         }
@@ -100,7 +189,10 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             const { error: googleError } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
-                    redirectTo: 'https://v10delivery.vercel.app'
+                    redirectTo: 'https://v10delivery.vercel.app?v=1',
+                    queryParams: {
+                        prompt: 'select_account'
+                    }
                 }
             });
 
@@ -144,7 +236,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
 
                 {/* Formulário de Recuperação de Senha */}
                 {showForgotPassword ? (
-                    <form onSubmit={handleForgotPassword} className="login-form">
+                    <form onSubmit={showNewPasswordInput ? handleUpdatePassword : (showOtpInput ? handleVerifyOtp : handleForgotPassword)} className="login-form">
                         <div className="form-group">
                             <label htmlFor="email-reset">E-mail</label>
                             <input
@@ -155,18 +247,93 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                 placeholder="seu@email.com"
                                 required
                                 className="form-input"
-                                disabled={resetEmailSent}
+                                disabled={resetEmailSent || showOtpInput || showNewPasswordInput}
                             />
                         </div>
 
-                        {resetEmailSent && (
+                        {resetEmailSent && !showNewPasswordInput && (
                             <div style={{ padding: '12px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px', color: '#10b981', fontSize: '14px', marginBottom: '16px' }}>
-                                ✅ E-mail de recuperação enviado! Verifique sua caixa de entrada.
+                                📧 Código enviado para seu e-mail! Verifique sua caixa de entrada.
                             </div>
                         )}
 
-                        <button type="submit" className="login-button" disabled={loading || resetEmailSent}>
-                            {loading ? 'Enviando...' : resetEmailSent ? '✅ E-mail Enviado' : 'Enviar Link de Recuperação'}
+                        {/* Campo de código OTP */}
+                        {showOtpInput && (
+                            <div className="form-group">
+                                <label htmlFor="otp-code">Código de Verificação</label>
+                                <input
+                                    type="text"
+                                    id="otp-code"
+                                    value={otpCode}
+                                    onChange={(e) => setOtpCode(e.target.value)}
+                                    placeholder="Digite o código de 6 dígitos"
+                                    required
+                                    className="form-input"
+                                    disabled={loading}
+                                    maxLength={6}
+                                    style={{ textAlign: 'center', fontSize: '20px', letterSpacing: '8px' }}
+                                />
+                            </div>
+                        )}
+
+                        {/* Campos de nova senha */}
+                        {showNewPasswordInput && (
+                            <>
+                                <div className="form-group">
+                                    <label htmlFor="new-password">Nova Senha</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <input
+                                            type={showNewPassword ? 'text' : 'password'}
+                                            id="new-password"
+                                            value={newPassword}
+                                            onChange={(e) => setNewPassword(e.target.value)}
+                                            placeholder="Mínimo 6 caracteres"
+                                            required
+                                            className="form-input"
+                                            disabled={loading}
+                                            minLength={6}
+                                            style={{ paddingRight: '45px' }}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowNewPassword(!showNewPassword)}
+                                            style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px', padding: '4px' }}
+                                            title={showNewPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                                        >
+                                            {showNewPassword ? '🙈' : '👁️'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="form-group">
+                                    <label htmlFor="confirm-new-password">Confirmar Nova Senha</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <input
+                                            type={showConfirmNewPassword ? 'text' : 'password'}
+                                            id="confirm-new-password"
+                                            value={confirmNewPassword}
+                                            onChange={(e) => setConfirmNewPassword(e.target.value)}
+                                            placeholder="Digite a senha novamente"
+                                            required
+                                            className="form-input"
+                                            disabled={loading}
+                                            minLength={6}
+                                            style={{ paddingRight: '45px' }}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                                            style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px', padding: '4px' }}
+                                            title={showConfirmNewPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                                        >
+                                            {showConfirmNewPassword ? '🙈' : '👁️'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        <button type="submit" className="login-button" disabled={loading}>
+                            {loading ? 'Processando...' : (showNewPasswordInput ? 'Alterar Senha' : (showOtpInput ? 'Verificar Código' : 'Enviar Código'))}
                         </button>
 
                         <button
@@ -174,6 +341,11 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                             onClick={() => {
                                 setShowForgotPassword(false);
                                 setResetEmailSent(false);
+                                setShowOtpInput(false);
+                                setShowNewPasswordInput(false);
+                                setOtpCode('');
+                                setNewPassword('');
+                                setConfirmNewPassword('');
                                 setError('');
                             }}
                             style={{ marginTop: '12px', background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#94a3b8', padding: '12px', borderRadius: '8px', cursor: 'pointer', width: '100%' }}
@@ -198,15 +370,26 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
 
                         <div className="form-group">
                             <label htmlFor="password">Senha</label>
-                            <input
-                                type="password"
-                                id="password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                placeholder="••••••••"
-                                required
-                                className="form-input"
-                            />
+                            <div style={{ position: 'relative' }}>
+                                <input
+                                    type={showPassword ? 'text' : 'password'}
+                                    id="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    placeholder="••••••••"
+                                    required
+                                    className="form-input"
+                                    style={{ paddingRight: '45px' }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px', padding: '4px' }}
+                                    title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                                >
+                                    {showPassword ? '🙈' : '👁️'}
+                                </button>
+                            </div>
                         </div>
 
                         <div className="form-options">

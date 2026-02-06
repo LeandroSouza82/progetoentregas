@@ -13,6 +13,10 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
+    // Estados para controlar visibilidade das senhas
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
@@ -208,32 +212,54 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
 
                     <div className="form-group">
                         <label htmlFor="password">Senha</label>
-                        <input
-                            type="password"
-                            id="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="Mínimo 6 caracteres"
-                            required
-                            className="form-input"
-                            disabled={loading || showOtpInput}
-                            minLength={6}
-                        />
+                        <div style={{ position: 'relative' }}>
+                            <input
+                                type={showPassword ? 'text' : 'password'}
+                                id="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder="Mínimo 6 caracteres"
+                                required
+                                className="form-input"
+                                disabled={loading || showOtpInput}
+                                minLength={6}
+                                style={{ paddingRight: '45px' }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px', padding: '4px' }}
+                                title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                            >
+                                {showPassword ? '🙈' : '👁️'}
+                            </button>
+                        </div>
                     </div>
 
                     <div className="form-group">
                         <label htmlFor="confirmPassword">Confirmar Senha</label>
-                        <input
-                            type="password"
-                            id="confirmPassword"
-                            value={confirmPassword}
-                            onChange={(e) => setConfirmPassword(e.target.value)}
-                            placeholder="Digite a senha novamente"
-                            required
-                            className="form-input"
-                            disabled={loading || showOtpInput}
-                            minLength={6}
-                        />
+                        <div style={{ position: 'relative' }}>
+                            <input
+                                type={showConfirmPassword ? 'text' : 'password'}
+                                id="confirmPassword"
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                placeholder="Digite a senha novamente"
+                                required
+                                className="form-input"
+                                disabled={loading || showOtpInput}
+                                minLength={6}
+                                style={{ paddingRight: '45px' }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '20px', padding: '4px' }}
+                                title={showConfirmPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                            >
+                                {showConfirmPassword ? '🙈' : '👁️'}
+                            </button>
+                        </div>
                     </div>
 
                     {/* Campo de OTP (aparece após envio do formulário) */}
