@@ -226,72 +226,35 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                 />
 
                 {/* Informações Públicas sobre o App */}
-                <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
                     <h1 style={{ 
                         color: '#ffffff', 
-                        fontSize: '26px', 
+                        fontSize: '28px', 
                         fontWeight: '800', 
-                        margin: '0 0 12px 0',
-                        textShadow: '0 2px 4px rgba(0,0,0,0.5)'
+                        margin: '0 0 10px 0',
+                        textShadow: '0 2px 4px rgba(0,0,0,0.6)',
+                        letterSpacing: '-0.5px'
                     }}>
-                        V10 Delivery - Sua plataforma de gestão de entregas
+                        V10 Delivery
                     </h1>
                     <p style={{ 
                         color: '#e2e8f0', 
-                        fontSize: '15px', 
+                        fontSize: '14px', 
                         lineHeight: '1.6',
-                        margin: '0 0 20px 0',
+                        margin: '0',
                         textShadow: '0 1px 2px rgba(0,0,0,0.4)'
                     }}>
-                        O V10 Delivery ajuda empresas a gerenciarem suas rotas e pedidos de forma eficiente e rápida.
+                        Sua plataforma de gestão de entregas
                     </p>
-                </div>
-
-                {/* Links de Conformidade Google */}
-                <div style={{
-                    display: 'flex',
-                    justifyContent: 'center',
-                    gap: '12px',
-                    margin: '0.8rem 0 1.2rem 0',
-                    textAlign: 'center',
-                    zIndex: 9999
-                }}>
-                    <a
-                        href="https://v10delivery.vercel.app/privacy"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            color: '#ffffff',
-                            fontSize: '10px',
-                            textDecoration: 'none',
-                            opacity: 0.6,
-                            transition: 'opacity 0.2s',
-                            cursor: 'pointer',
-                            textShadow: '0 1px 2px rgba(0,0,0,0.5)'
-                        }}
-                        onMouseEnter={(e) => e.target.style.opacity = '1'}
-                        onMouseLeave={(e) => e.target.style.opacity = '0.6'}
-                    >
-                        Política de Privacidade
-                    </a>
-                    <a
-                        href="https://v10delivery.vercel.app/terms"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            color: '#ffffff',
-                            fontSize: '10px',
-                            textDecoration: 'none',
-                            opacity: 0.6,
-                            transition: 'opacity 0.2s',
-                            cursor: 'pointer',
-                            textShadow: '0 1px 2px rgba(0,0,0,0.5)'
-                        }}
-                        onMouseEnter={(e) => e.target.style.opacity = '1'}
-                        onMouseLeave={(e) => e.target.style.opacity = '0.6'}
-                    >
-                        Termos de Serviço
-                    </a>
+                    <p style={{ 
+                        color: '#cbd5e1', 
+                        fontSize: '13px', 
+                        lineHeight: '1.5',
+                        margin: '8px 0 0 0',
+                        textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                    }}>
+                        Ajudamos empresas a gerenciarem suas rotas e pedidos de forma eficiente e rápida.
+                    </p>
                 </div>
 
                 {/* Mensagem de Erro */}
@@ -545,6 +508,51 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                             Cadastre-se
                         </a>
                     </p>
+                </div>
+
+                {/* Links de Conformidade Google - Rodapé */}
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '15px',
+                    marginTop: '20px',
+                    paddingTop: '15px',
+                    borderTop: '1px solid rgba(255,255,255,0.1)',
+                    textAlign: 'center'
+                }}>
+                    <a
+                        href="/privacy"
+                        style={{
+                            color: '#ffffff',
+                            fontSize: '10px',
+                            textDecoration: 'none',
+                            opacity: 0.6,
+                            transition: 'opacity 0.2s',
+                            cursor: 'pointer',
+                            textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                        }}
+                        onMouseEnter={(e) => e.target.style.opacity = '1'}
+                        onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+                    >
+                        Política de Privacidade
+                    </a>
+                    <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px' }}>•</span>
+                    <a
+                        href="/terms"
+                        style={{
+                            color: '#ffffff',
+                            fontSize: '10px',
+                            textDecoration: 'none',
+                            opacity: 0.6,
+                            transition: 'opacity 0.2s',
+                            cursor: 'pointer',
+                            textShadow: '0 1px 2px rgba(0,0,0,0.3)'
+                        }}
+                        onMouseEnter={(e) => e.target.style.opacity = '1'}
+                        onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+                    >
+                        Termos de Serviço
+                    </a>
                 </div>
             </div>
             {/* Modais de Política de Privacidade e Termos de Serviço */}

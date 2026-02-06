@@ -79,13 +79,13 @@ body {
 }
 
 /* ===================================
-   LOGO - Topo do Card (Ultra Compacto)
+   LOGO - Topo do Card (Ultra Compacto e Centralizado)
    =================================== */
 .login-logo {
     width: 100%;
-    max-width: 180px;
+    max-width: 160px;
     display: block;
-    margin: 0 auto 0.3rem;
+    margin: 0 auto 0.8rem;
     height: auto;
     object-fit: contain;
 }
