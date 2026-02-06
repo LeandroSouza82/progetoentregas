@@ -225,6 +225,28 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                     onError={(e) => { e.target.style.display = 'none'; console.warn('[V10 Delivery] Logo não encontrada'); }}
                 />
 
+                {/* Informações Públicas sobre o App */}
+                <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+                    <h1 style={{ 
+                        color: '#ffffff', 
+                        fontSize: '26px', 
+                        fontWeight: '800', 
+                        margin: '0 0 12px 0',
+                        textShadow: '0 2px 4px rgba(0,0,0,0.5)'
+                    }}>
+                        V10 Delivery - Sua plataforma de gestão de entregas
+                    </h1>
+                    <p style={{ 
+                        color: '#e2e8f0', 
+                        fontSize: '15px', 
+                        lineHeight: '1.6',
+                        margin: '0 0 20px 0',
+                        textShadow: '0 1px 2px rgba(0,0,0,0.4)'
+                    }}>
+                        O V10 Delivery ajuda empresas a gerenciarem suas rotas e pedidos de forma eficiente e rápida.
+                    </p>
+                </div>
+
                 {/* Links de Conformidade Google */}
                 <div style={{
                     display: 'flex',
