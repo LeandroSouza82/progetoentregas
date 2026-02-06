@@ -227,6 +227,15 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                     <p className="login-slogan">Sua rota para excelência</p>
                 </div>
 
+                {/* INJEÇÃO DE EMERGÊNCIA - TESTE VISUAL */}
+                <div style={{ textAlign: 'center', zIndex: 1000000, position: 'relative', margin: '20px 0' }}>
+                    <h1 style={{ color: 'red', fontSize: '50px', fontWeight: 'bold', margin: 0 }}>TESTE APARECEU</h1>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '10px' }}>
+                        <a href="#" style={{ color: 'red', fontSize: '20px', fontWeight: 'bold' }}>Política de Privacidade</a>
+                        <a href="#" style={{ color: 'red', fontSize: '20px', fontWeight: 'bold' }}>Termos de Serviço</a>
+                    </div>
+                </div>
+
                 {/* Mensagem de Erro */}
                 {error && (
                     <div className="login-error">
