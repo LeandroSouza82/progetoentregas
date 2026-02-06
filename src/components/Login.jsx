@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './Login.css';
 import { supabase } from '../supabaseClient';
 
@@ -25,6 +25,121 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
     const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
     const [showTermsOfService, setShowTermsOfService] = useState(false);
 
+    // ✅ LIMPEZA INICIAL DOS CAMPOS E ERROS DE OAUTH AO CARREGAR
+    useEffect(() => {
+        // Garantir que os campos começam vazios
+        setEmail('');
+        setPassword('');
+        setRememberMe(false);
+
+        console.log('🧹 [Login] Campos de login limpos ao carregar');
+    }, []); // Executa apenas uma vez ao montar
+
+    // ✅ LIMPEZA DE ERROS DE OAUTH AO CARREGAR
+    useEffect(() => {
+        const cleanupOAuthErrors = async () => {
+            try {
+                // Limpar parâmetros de erro da URL (como error_code, error_description)
+                const currentUrl = new URL(window.location.href);
+                const hasErrorParams = currentUrl.searchParams.has('error') ||
+                    currentUrl.searchParams.has('error_code') ||
+                    currentUrl.searchParams.has('error_description');
+
+                if (hasErrorParams) {
+                    console.log('🧹 [Login] Limpando parâmetros de erro OAuth da URL...');
+
+                    // Remove parâmetros de erro
+                    currentUrl.searchParams.delete('error');
+                    currentUrl.searchParams.delete('error_code');
+                    currentUrl.searchParams.delete('error_description');
+
+                    // Atualiza URL sem reload
+                    window.history.replaceState({}, '', currentUrl.toString());
+                }
+
+                // Limpar estado de erro local
+                setError('');
+
+                console.log('✅ [Login] Limpeza de erros OAuth concluída');
+            } catch (err) {
+                console.error('❌ [Login] Erro ao limpar erros OAuth:', err);
+            }
+        };
+
+        cleanupOAuthErrors();
+    }, []); // Executa apenas uma vez ao montar
+
+    // ✅ VERIFICAÇÃO DE SESSÃO ATIVA AO MONTAR - AGRESSIVA
+    useEffect(() => {
+        let mounted = true;
+        let checkInterval = null;
+        let sessionFound = false; // Flag para evitar múltiplas chamadas
+
+        const checkSession = async () => {
+            if (!mounted || !supabase || !supabase.auth || sessionFound) return false;
+
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+
+                if (session && session.user) {
+                    console.log('✅ [Login] Sessão ativa detectada, saindo do login...');
+                    sessionFound = true;
+
+                    if (checkInterval) clearInterval(checkInterval);
+
+                    if (mounted && typeof onLoginSuccess === 'function') {
+                        onLoginSuccess(session.user);
+                    }
+                    return true;
+                }
+            } catch (err) {
+                console.error('❌ [Login] Erro ao verificar sessão:', err);
+            }
+            return false;
+        };
+
+        // Verificação imediata
+        checkSession();
+
+        // Verificação repetida a cada 500ms até encontrar sessão (máximo 20 tentativas)
+        let attempts = 0;
+        const maxAttempts = 20;
+
+        checkInterval = setInterval(async () => {
+            if (sessionFound || attempts >= maxAttempts) {
+                if (checkInterval) clearInterval(checkInterval);
+                return;
+            }
+
+            attempts++;
+            await checkSession();
+        }, 500);
+
+        // ✅ LISTENER: Detectar quando Google OAuth retorna
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            if (!mounted || sessionFound) return;
+
+            console.log('🔄 [Login] Auth event:', _event, 'Session:', !!session);
+
+            if (session && session.user) {
+                console.log('✅ [Login] Sessão detectada via', _event, ', saindo do login...');
+                sessionFound = true;
+
+                if (checkInterval) clearInterval(checkInterval);
+
+                if (typeof onLoginSuccess === 'function') {
+                    onLoginSuccess(session.user);
+                }
+            }
+        });
+
+        return () => {
+            mounted = false;
+            if (checkInterval) clearInterval(checkInterval);
+            subscription?.unsubscribe();
+        };
+    }, [onLoginSuccess]);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
@@ -34,6 +149,11 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             // Verificar se o cliente Supabase está disponível
             if (!supabase || !supabase.auth) {
                 throw new Error('Sistema de autenticação temporáriamente indisponível. Verifique as configurações do .env.local e reinicie o terminal.');
+            }
+
+            // ✅ Configurar tipo de storage baseado no checkbox "Lembrar de mim"
+            if (typeof supabase.setStorageType === 'function') {
+                supabase.setStorageType(rememberMe);
             }
 
             // Autenticar com Supabase
@@ -193,8 +313,10 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             const { error: googleError } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
-                    redirectTo: 'https://v10delivery.vercel.app?v=1',
+                    redirectTo: 'https://v10delivery.vercel.app',
+                    skipBrowserRedirect: false,
                     queryParams: {
+                        access_type: 'offline',
                         prompt: 'select_account'
                     }
                 }
@@ -227,28 +349,28 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
 
                 {/* Informações Públicas sobre o App */}
                 <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                    <h1 style={{ 
-                        color: '#ffffff', 
-                        fontSize: '28px', 
-                        fontWeight: '800', 
+                    <h1 style={{
+                        color: '#ffffff',
+                        fontSize: '28px',
+                        fontWeight: '800',
                         margin: '0 0 10px 0',
                         textShadow: '0 2px 4px rgba(0,0,0,0.6)',
                         letterSpacing: '-0.5px'
                     }}>
                         V10 Delivery
                     </h1>
-                    <p style={{ 
-                        color: '#e2e8f0', 
-                        fontSize: '14px', 
+                    <p style={{
+                        color: '#e2e8f0',
+                        fontSize: '14px',
                         lineHeight: '1.6',
                         margin: '0',
                         textShadow: '0 1px 2px rgba(0,0,0,0.4)'
                     }}>
                         Sua plataforma de gestão de entregas
                     </p>
-                    <p style={{ 
-                        color: '#cbd5e1', 
-                        fontSize: '13px', 
+                    <p style={{
+                        color: '#cbd5e1',
+                        fontSize: '13px',
                         lineHeight: '1.5',
                         margin: '8px 0 0 0',
                         textShadow: '0 1px 2px rgba(0,0,0,0.3)'
@@ -277,6 +399,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                 placeholder="seu@email.com"
                                 required
                                 className="form-input"
+                                autoComplete="off"
                                 disabled={resetEmailSent || showOtpInput || showNewPasswordInput}
                             />
                         </div>
@@ -299,6 +422,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                     placeholder="Digite o código de 6 dígitos"
                                     required
                                     className="form-input"
+                                    autoComplete="off"
                                     disabled={loading}
                                     maxLength={6}
                                     style={{ textAlign: 'center', fontSize: '20px', letterSpacing: '8px' }}
@@ -320,6 +444,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                             placeholder="Mínimo 6 caracteres"
                                             required
                                             className="form-input"
+                                            autoComplete="new-password"
                                             disabled={loading}
                                             minLength={6}
                                             style={{ paddingRight: '45px' }}
@@ -345,6 +470,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                             placeholder="Digite a senha novamente"
                                             required
                                             className="form-input"
+                                            autoComplete="new-password"
                                             disabled={loading}
                                             minLength={6}
                                             style={{ paddingRight: '45px' }}
@@ -384,7 +510,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                         </button>
                     </form>
                 ) : (
-                    <form onSubmit={handleSubmit} className="login-form">
+                    <form onSubmit={handleSubmit} className="login-form" autoComplete="off">
                         <div className="form-group">
                             <label htmlFor="email">E-mail</label>
                             <input
@@ -395,6 +521,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                 placeholder="seu@email.com"
                                 required
                                 className="form-input"
+                                autoComplete="off"
                             />
                         </div>
 
@@ -409,6 +536,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                     placeholder="••••••••"
                                     required
                                     className="form-input"
+                                    autoComplete="new-password"
                                     style={{ paddingRight: '45px' }}
                                 />
                                 <button

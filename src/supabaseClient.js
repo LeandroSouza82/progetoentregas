@@ -24,6 +24,25 @@ const supabaseUrl = getEnv('VITE_SUPABASE_URL') || HARDCODED_URL;
 const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY') || HARDCODED_KEY;
 
 // ==========================================
+// ✅ VARIÁVEIS DE AMBIENTE - VERCEL
+// ==========================================
+// IMPORTANTE: Certifique-se de que estas variáveis estão configuradas na Vercel:
+// 
+// 1. VITE_SUPABASE_URL = https://uqxoadxqcwidxqsfayem.supabase.co
+// 2. VITE_SUPABASE_ANON_KEY = (sua chave anon key)
+//
+// ⚠️ NÃO adicione Client ID ou Client Secret nas variáveis de ambiente da Vercel.
+//    Essas chaves devem estar APENAS no painel do Supabase (Authentication > Providers > Google).
+//
+// Se adicionadas na Vercel, REMOVA imediatamente:
+//    - GOOGLE_CLIENT_ID
+//    - GOOGLE_CLIENT_SECRET
+//    - Qualquer variável começando com GOOGLE_ ou OAUTH_
+//
+// O fluxo OAuth usa as credenciais configuradas no Supabase, não nas variáveis de ambiente.
+// ==========================================
+
+// ==========================================
 // INICIALIZAÇÃO DO CLIENTE
 // ==========================================
 
@@ -94,7 +113,16 @@ if (isNode) {
         console.error('❌ [V10 Delivery] FALHA CRÍTICA: URL ou Key do Supabase ausentes.');
         clientInstance = null;
     } else {
-        clientInstance = createClient(supabaseUrl, supabaseAnonKey);
+        // Criar cliente com storage personalizável
+        clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
+            auth: {
+                autoRefreshToken: true,
+                persistSession: true,
+                detectSessionInUrl: true,
+                flowType: 'pkce',
+                storage: window.localStorage  // Default: localStorage
+            }
+        });
         hasCreds = true;
 
         // Log de verificação (Solicitado Pelo Usuário)
@@ -103,7 +131,26 @@ if (isNode) {
         } else {
             console.warn('⚠️ [V10 Delivery] CLIENTE CRIADO MAS SUPABASE.AUTH É UNDEFINED');
         }
+        // ✅ Função para alterar o tipo de storage dinamicamente
+        clientInstance.setStorageType = function (useLocalStorage) {
+            const newStorage = useLocalStorage ? window.localStorage : window.sessionStorage;
 
+            // Recriar o cliente com o novo storage
+            const newClient = createClient(supabaseUrl, supabaseAnonKey, {
+                auth: {
+                    autoRefreshToken: true,
+                    persistSession: true,
+                    detectSessionInUrl: true,
+                    flowType: 'pkce',
+                    storage: newStorage
+                }
+            });
+
+            // Copiar propriedades do novo cliente para o atual
+            clientInstance.auth = newClient.auth;
+
+            console.log(`🔄 [Supabase] Storage alterado para: ${useLocalStorage ? 'localStorage (persistente)' : 'sessionStorage (sessão única)'}`);
+        };
         subscribeFn = function (table, handler, opts = {}) {
             const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 1000;
             let last = null;

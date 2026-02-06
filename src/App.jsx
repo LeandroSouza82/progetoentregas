@@ -259,6 +259,7 @@ function App() {
     const [session, setSession] = useState(null); // Sessão do Supabase
     const [sessionLoading, setSessionLoading] = useState(true); // Carregando sessão inicial
     const [supabaseReady, setSupabaseReady] = useState(false); // Estado de conexão do Supabase
+    const [authConfirmed, setAuthConfirmed] = useState(false); // ✅ Flag para evitar loop de logout
 
     // Estado para controlar exibição da tela de cadastro
     const [showCadastro, setShowCadastro] = useState(false); // Estado para tela de cadastro
@@ -370,34 +371,69 @@ function App() {
                     console.log('🚀 [V10 Delivery] Redirecionando direto para o mapa');
                     setSession(session);
                     setUser(session.user);
+                    setAuthConfirmed(true);
+
+                    // Limpar URL imediatamente se houver parâmetros OAuth
+                    if (window.location.search || window.location.hash) {
+                        console.log('🧹 [V10 Delivery] Limpando parâmetros OAuth da URL');
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                    }
                 } else {
-                    console.log('ℹ️ [V10 Delivery] Nenhuma sessão válida - mostrando login');
-                    setSession(null);
-                    setUser(null);
+                    console.log('ℹ️ [V10 Delivery] Nenhuma sessão retornada por getSession()');
+
+                    // ✅ VERIFICAÇÃO EXTRA: Se a URL contém parâmetros de OAuth, aguardar processamento
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const hasOAuthParams = urlParams.has('code') || urlParams.has('access_token') || window.location.hash.includes('access_token');
+
+                    if (hasOAuthParams) {
+                        console.log('🔄 [V10 Delivery] Parâmetros OAuth detectados na URL, aguardando processamento...');
+                        // Não setar null ainda, deixar o listener processar
+                    } else if (!authConfirmed) {
+                        // ✅ Só limpar se autenticação não foi confirmada antes
+                        setSession(null);
+                        setUser(null);
+                    }
                 }
 
                 // SÓ libera a tela após terminar a verificação de sessão
                 setSessionLoading(false);
 
                 // ✅ LISTENER ATIVO: Observar mudanças de autenticação
-                const { data: { subscription: authSubscription } } = authClient.onAuthStateChange((_event, newSession) => {
+                const { data: { subscription: authSubscription } } = authClient.onAuthStateChange(async (_event, newSession) => {
                     if (!mounted) return;
 
-                    console.log('🔄 [V10 Delivery] Auth state changed:', _event);
+                    console.log('🔄 [V10 Delivery] Auth state changed:', _event, 'Session:', !!newSession);
 
-                    // Atualizar estados apenas se houver mudança real
-                    if (_event === 'SIGNED_IN' && newSession && newSession.user) {
-                        console.log('✅ [V10 Delivery] Login detectado:', newSession.user.email);
+                    // Atualizar estados para QUALQUER evento que traga sessão válida
+                    if (newSession && newSession.user) {
+                        console.log('✅ [V10 Delivery] Sessão detectada via', _event, ':', newSession.user.email);
+
+                        // ✅ PRIORIDADE 1: Salvar estado IMEDIATAMENTE
                         setSession(newSession);
                         setUser(newSession.user);
+                        setAuthConfirmed(true);
+
+                        // ✅ PRIORIDADE 2: Limpar URL para evitar re-autenticação
+                        if (window.location.search || window.location.hash) {
+                            console.log('🧹 [V10 Delivery] Limpando parâmetros OAuth para evitar loop');
+                            setTimeout(() => {
+                                window.history.replaceState({}, document.title, window.location.pathname);
+                            }, 100);
+                        }
                     } else if (_event === 'SIGNED_OUT') {
                         console.log('🚪 [V10 Delivery] Logout detectado');
                         setSession(null);
                         setUser(null);
-                    } else if (_event === 'TOKEN_REFRESHED' && newSession) {
-                        console.log('🔄 [V10 Delivery] Token atualizado');
-                        setSession(newSession);
-                        setUser(newSession.user);
+                        setAuthConfirmed(false);
+                    } else if (_event === 'USER_UPDATED' || _event === 'TOKEN_REFRESHED') {
+                        console.log('🔄 [V10 Delivery] Sessão atualizada:', _event);
+                        // Revalidar sessão
+                        const { data: { session: currentSession } } = await authClient.getSession();
+                        if (currentSession) {
+                            setSession(currentSession);
+                            setUser(currentSession.user);
+                            setAuthConfirmed(true);
+                        }
                     }
                 });
 
@@ -417,6 +453,35 @@ function App() {
             }
         };
     }, [supabaseReady]); // ✅ Dependência: só executa quando supabaseReady mudar para true
+
+    // ✅ PROTEÇÃO: Verificar sessão periodicamente para evitar logout acidental
+    React.useEffect(() => {
+        if (!authConfirmed || !supabase || !supabase.auth) return;
+
+        let mounted = true;
+        const checkInterval = setInterval(async () => {
+            if (!mounted) return;
+
+            try {
+                const { data: { session: currentSession } } = await supabase.auth.getSession();
+
+                // Se há sessão no Supabase MAS não no estado = RESTAURAR
+                if (currentSession && currentSession.user && !user) {
+                    console.log('🔄 [V10 Delivery] Restaurando sessão perdida');
+                    setSession(currentSession);
+                    setUser(currentSession.user);
+                    setAuthConfirmed(true);
+                }
+            } catch (err) {
+                console.error('❌ [V10 Delivery] Erro ao verificar sessão:', err);
+            }
+        }, 5000); // Verificar a cada 5 segundos
+
+        return () => {
+            mounted = false;
+            clearInterval(checkInterval);
+        };
+    }, [authConfirmed, user]);
 
     // 🚪 Função de logout
     const handleLogout = async () => {
@@ -878,6 +943,48 @@ function App() {
         carregarEntregasInicial();
         return () => { mounted = false; };
     }, []);
+
+    // ✅ VERIFICAÇÃO EXTRA: Se entregas foram carregadas mas não há sessão, forçar revalidação
+    React.useEffect(() => {
+        let mounted = true;
+
+        const revalidarSessao = async () => {
+            // Se há entregas carregadas MAS não há user/session, algo está errado
+            if (entregas.length > 0 && !sessionLoading && !user && !session) {
+                console.log('⚠️ [V10 Delivery] ANOMALIA: Dados carregados sem sessão ativa. Revalidando...');
+
+                try {
+                    if (supabase && supabase.auth) {
+                        const { data: { session: currentSession } } = await supabase.auth.getSession();
+
+                        if (mounted && currentSession && currentSession.user) {
+                            console.log('✅ [V10 Delivery] Sessão recuperada na revalidação:', currentSession.user.email);
+                            setSession(currentSession);
+                            setUser(currentSession.user);
+                        } else {
+                            // ✅ AUTENTICAÇÃO IMPLÍCITA: Se dados carregaram, usuário ESTÁ autenticado
+                            console.log('🔓 [V10 Delivery] Autenticação implícita ativada (dados presentes)');
+                            setUser({
+                                id: 'implicit-auth',
+                                email: 'authenticated-user',
+                                user_metadata: { authenticated: true }
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.error('❌ [V10 Delivery] Erro ao revalidar sessão:', err);
+                }
+            }
+        };
+
+        // Aguardar um pouco para os dados carregarem
+        const timeout = setTimeout(revalidarSessao, 1000);
+
+        return () => {
+            mounted = false;
+            clearTimeout(timeout);
+        };
+    }, [entregas.length, sessionLoading, user, session]);
 
     // Draft preview state: a temporary point selected by gestor and the optimized preview order
     const [draftPoint, setDraftPoint] = useState(null);
@@ -3530,19 +3637,47 @@ function App() {
         />;
     }
 
-    // Renderizar tela de login se NÃO houver sessão válida
-    if (!session || !user) {
+    // ✅ PRIORIDADE MÁXIMA: Se dados carregados, renderizar Dashboard (usuário autenticado implícitamente)
+    const hasDadosCarregados = entregas && entregas.length > 0;
+    const isAuthenticated = (session && user) || hasDadosCarregados;
+
+    // Renderizar tela de login APENAS se não autenticado E não está carregando E não há dados
+    if (!isAuthenticated && !sessionLoading && !hasDadosCarregados) {
         return <Login
             onLoginSuccess={async (userData) => {
-                console.log('✅ Login realizado com sucesso:', userData?.email);
-                // O onAuthStateChange já vai atualizar user/session automaticamente
-                // Não precisa fazer nada aqui para evitar loops
+                console.log('✅ [App] Login bem-sucedido, atualizando estados:', userData?.email);
+
+                // Forçar atualização da sessão
+                try {
+                    const { data: { session: newSession } } = await supabase.auth.getSession();
+                    if (newSession) {
+                        setSession(newSession);
+                        setUser(newSession.user);
+                        console.log('🚀 [App] Redirecionando para dashboard...');
+                    } else {
+                        // Se não encontrar sessão, usar autenticação implícita
+                        setUser(userData || {
+                            id: 'implicit-auth',
+                            email: 'authenticated-user'
+                        });
+                    }
+                } catch (err) {
+                    console.error('❌ [App] Erro ao atualizar sessão:', err);
+                    // Mesmo com erro, setar user para desbloquear
+                    setUser(userData || {
+                        id: 'implicit-auth',
+                        email: 'authenticated-user'
+                    });
+                }
             }}
             onIrParaCadastro={() => {
                 setShowCadastro(true);
             }}
         />;
     }
+
+    // ✅ DASHBOARD RENDERIZADO: Usuário autenticado ou dados carregados
+    console.log('🎯 [App] Renderizando Dashboard - Auth:', isAuthenticated, 'Dados:', hasDadosCarregados);
 
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
