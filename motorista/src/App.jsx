@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient'; // Usar o Supabase real do projeto
 import MapaLogistica from '../../src/MapaLogistica';
-import { enviarNotificacaoSW, solicitarPermissaoNotificacao } from './notificationHelper';
+import { enviarNotificacaoSW, solicitarPermissaoNotificacao, capturarESalvarPushToken } from './notificationHelper';
 // keep imports minimal for map rendering via MapaLogistica
 
 const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
@@ -264,6 +264,22 @@ function InternalMobileApp() {
             const { error } = await supabase.from('motoristas').update({ esta_online: true }).eq('id', motoristaId);
             if (error) console.error('[motorista] markOnline: erro ao atualizar motoristas', error);
             else console.debug('[motorista] markOnline: motorista marcado como Online');
+
+            // 🔑 CAPTURA AUTOMÁTICA DE PUSH TOKEN
+            // Captura e salva o push_token toda vez que o motorista abre o app
+            // Isso garante que o token esteja sempre atualizado (troca de celular, cache limpo, etc.)
+            try {
+                console.log('🔑 [CELULAR] Iniciando captura automática de push_token...');
+                const token = await capturarESalvarPushToken(supabase, motoristaId);
+                if (token) {
+                    console.log('✅ [CELULAR] Push token atualizado com sucesso!');
+                } else {
+                    console.warn('⚠️ [CELULAR] Não foi possível capturar push token (pode ser permissão negada)');
+                }
+            } catch (tokenErr) {
+                console.error('❌ [CELULAR] Erro ao capturar push token:', tokenErr);
+                // Não bloqueia o login se falhar a captura do token
+            }
         } catch (err) {
             console.error('[motorista] markOnline: exceção', err);
         }

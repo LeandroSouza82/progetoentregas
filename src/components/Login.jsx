@@ -28,12 +28,36 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
 
     // ✅ LIMPEZA INICIAL DOS CAMPOS E ERROS DE OAUTH AO CARREGAR
     useEffect(() => {
-        // Garantir que os campos começam vazios
-        setEmail('');
+        // Tentar pré-preencher e-mail vindo do fluxo de cadastro
+        try {
+            const pref = localStorage.getItem('signup_email_prefill');
+            if (pref && String(pref).trim().length > 0) {
+                setEmail(String(pref).trim());
+            } else {
+                setEmail('');
+            }
+        } catch (e) {
+            setEmail('');
+        }
+
+        // Limpar senha por segurança
         setPassword('');
         setRememberMe(false);
+        console.log('🧹 [Login] Campos de login inicializados (prefill aplicado se disponível)');
 
-        console.log('🧹 [Login] Campos de login limpos ao carregar');
+        // Limpeza de chaves legadas de autenticação no localStorage para evitar conflitos de tokens
+        try {
+            const keys = Object.keys(localStorage || {});
+            keys.forEach(k => {
+                if (k === 'signup_email_prefill') return; // manter prefill útil
+                if (/supabase|sb[:\-]/i.test(k)) {
+                    console.log('🧹 [Login] Removendo chave legada do localStorage:', k);
+                    try { localStorage.removeItem(k); } catch (e) { /* silent */ }
+                }
+            });
+        } catch (e) {
+            console.warn('⚠️ [Login] Falha ao limpar chaves legadas:', e);
+        }
     }, []); // Executa apenas uma vez ao montar
 
     // ✅ LIMPEZA DE ERROS DE OAUTH AO CARREGAR
@@ -70,79 +94,10 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
         cleanupOAuthErrors();
     }, []); // Executa apenas uma vez ao montar
 
-    // ✅ VERIFICAÇÃO DE SESSÃO ATIVA AO MONTAR - AGRESSIVA
-    useEffect(() => {
-        let mounted = true;
-        let checkInterval = null;
-        let sessionFound = false; // Flag para evitar múltiplas chamadas
+    // Removido: verificação automática de sessão e listener que provocavam autenticação implícita.
+    // Decidimos que o usuário deve sempre disparar o login explicitamente. OAuth redirections que
+    // retornarem aqui podem ser tratadas manualmente via botão/fluxo explícito.
 
-        const checkSession = async () => {
-            if (!mounted || !supabase || !supabase.auth || sessionFound) return false;
-
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-
-                if (session && session.user) {
-                    console.log('✅ [Login] Sessão ativa detectada, saindo do login...');
-                    sessionFound = true;
-
-                    if (checkInterval) clearInterval(checkInterval);
-
-                    if (mounted && typeof onLoginSuccess === 'function') {
-                        onLoginSuccess(session.user);
-                    }
-                    return true;
-                }
-            } catch (err) {
-                console.error('❌ [Login] Erro ao verificar sessão:', err);
-            }
-            return false;
-        };
-
-        // Verificação imediata
-        checkSession();
-
-        // Verificação repetida a cada 500ms até encontrar sessão (máximo 20 tentativas)
-        let attempts = 0;
-        const maxAttempts = 20;
-
-        checkInterval = setInterval(async () => {
-            if (sessionFound || attempts >= maxAttempts) {
-                if (checkInterval) clearInterval(checkInterval);
-                return;
-            }
-
-            attempts++;
-            await checkSession();
-        }, 500);
-
-        // ✅ LISTENER: Detectar quando Google OAuth retorna
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-            if (!mounted || sessionFound) return;
-
-            console.log('🔄 [Login] Auth event:', _event, 'Session:', !!session);
-
-            if (session && session.user) {
-                console.log('✅ [Login] Sessão detectada via', _event, ', saindo do login...');
-                sessionFound = true;
-
-                // Ativar mensagem de "Conectando..."
-                setConnecting(true);
-
-                if (checkInterval) clearInterval(checkInterval);
-
-                if (typeof onLoginSuccess === 'function') {
-                    onLoginSuccess(session.user);
-                }
-            }
-        });
-
-        return () => {
-            mounted = false;
-            if (checkInterval) clearInterval(checkInterval);
-            subscription?.unsubscribe();
-        };
-    }, [onLoginSuccess]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -155,16 +110,26 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                 throw new Error('Sistema de autenticação temporáriamente indisponível. Verifique as configurações do .env.local e reinicie o terminal.');
             }
 
-            // ✅ Configurar tipo de storage baseado no checkbox "Lembrar de mim"
-            if (typeof supabase.setStorageType === 'function') {
-                supabase.setStorageType(rememberMe);
+            // Normalize credentials to avoid invisible whitespace or case issues
+            const emailToSend = String(email || '').trim().toLowerCase();
+            const passwordToSend = String(password || '').trim();
+
+            // Autenticar com Supabase (storage fix: client uses localStorage)
+            const { data, error: authError } = await supabase.auth.signInWithPassword({
+                email: emailToSend,
+                password: passwordToSend,
+            });
+
+            if (authError) {
+                throw authError;
             }
 
-            // Autenticar com Supabase
-            const { data, error: authError } = await supabase.auth.signInWithPassword({
-                email: email.trim(),
-                password: password,
-            });
+            // Login bem-sucedido — tratamento explícito
+            console.log('✅ [V10 Delivery] Login realizado com sucesso:', data.user?.email);
+            if (typeof onLoginSuccess === 'function') {
+                // Passar o usuário adiante para que o App.jsx atualize sessão/estado
+                onLoginSuccess(data.user);
+            }
 
             if (authError) {
                 throw authError;
@@ -184,9 +149,14 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             let errorMessage = 'Erro ao fazer login. Tente novamente.';
 
             if (err.message?.includes('Invalid login credentials')) {
-                errorMessage = 'E-mail ou senha incorretos. Verifique seus dados e tente novamente.';
+                // Limpar campos e pedir que o usuário tente novamente sem espaços
+                setEmail('');
+                setPassword('');
+                errorMessage = 'E-mail ou senha incorretos. Verifique seus dados (remova espaços) e tente novamente.';
             } else if (err.message?.includes('Email not confirmed')) {
-                errorMessage = 'E-mail não confirmado. Verifique sua caixa de entrada.';
+                // Confirmação foi desativada no Supabase; tratar como falha genérica de credenciais
+                setPassword('');
+                errorMessage = 'E-mail ou senha incorretos. Verifique seus dados e tente novamente.';
             } else if (err.message?.includes('não disponível')) {
                 errorMessage = err.message;
             } else if (err.message) {
@@ -209,18 +179,14 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                 throw new Error('Por favor, informe seu e-mail para recuperar a senha.');
             }
 
-            // Enviar código OTP por e-mail
-            const { error: otpError } = await supabase.auth.signInWithOtp({
-                email: email.trim(),
-                options: {
-                    shouldCreateUser: false
-                }
-            });
+            // Enviar e-mail de redefinição (usando template 'Reset password')
+            const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim());
 
-            if (otpError) {
-                throw otpError;
+            if (resetError) {
+                throw resetError;
             }
 
+            // Mostrar feedback e avançar para a etapa de inserção do código
             setResetEmailSent(true);
             setShowOtpInput(true);
         } catch (err) {
@@ -245,14 +211,14 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             const { error: verifyError } = await supabase.auth.verifyOtp({
                 email: email.trim(),
                 token: otpCode.trim(),
-                type: 'email'
+                type: 'recovery'
             });
 
             if (verifyError) {
                 throw verifyError;
             }
 
-            // Código verificado - mostrar campos de nova senha
+            // Código verificado - avançar para a etapa de redefinição de senha
             setShowOtpInput(false);
             setShowNewPasswordInput(true);
         } catch (err) {
@@ -284,16 +250,15 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             }
 
             // Atualizar senha
-            const { error: updateError } = await supabase.auth.updateUser({
-                password: newPassword
-            });
+            const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
 
             if (updateError) {
                 throw updateError;
             }
 
-            alert('✅ Senha alterada com sucesso! Faça login com sua nova senha.');
-            // Resetar formulário
+            alert('✅ Senha alterada! Por favor, faça login com sua nova senha.');
+
+            // Resetar formulário local e garantir que o usuário seja deslogado
             setShowForgotPassword(false);
             setResetEmailSent(false);
             setShowOtpInput(false);
@@ -301,6 +266,15 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
             setOtpCode('');
             setNewPassword('');
             setConfirmNewPassword('');
+
+            try {
+                // Forçar sign out para garantir que o usuário precise logar novamente
+                if (supabase && supabase.auth && typeof supabase.auth.signOut === 'function') {
+                    await supabase.auth.signOut();
+                }
+            } catch (e) {
+                console.warn('⚠️ Falha ao deslogar automaticamente após reset:', e);
+            }
         } catch (err) {
             console.error('❌ Erro ao atualizar senha:', err);
             setError(err.message || 'Erro ao atualizar senha.');
@@ -435,20 +409,22 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                 {/* Formulário de Recuperação de Senha */}
                 {showForgotPassword ? (
                     <form onSubmit={showNewPasswordInput ? handleUpdatePassword : (showOtpInput ? handleVerifyOtp : handleForgotPassword)} className="login-form">
-                        <div className="form-group">
-                            <label htmlFor="email-reset">E-mail</label>
-                            <input
-                                type="email"
-                                id="email-reset"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                placeholder="seu@email.com"
-                                required
-                                className="form-input"
-                                autoComplete="off"
-                                disabled={resetEmailSent || showOtpInput || showNewPasswordInput}
-                            />
-                        </div>
+                        {/* Mostrar campo de e-mail apenas antes do envio do código */}
+                        {!(resetEmailSent || showOtpInput || showNewPasswordInput) && (
+                            <div className="form-group">
+                                <label htmlFor="email-reset">E-mail</label>
+                                <input
+                                    type="email"
+                                    id="email-reset"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    placeholder="seu@email.com"
+                                    required
+                                    className="form-input"
+                                    autoComplete="off"
+                                />
+                            </div>
+                        )}
 
                         {resetEmailSent && !showNewPasswordInput && (
                             <div style={{ padding: '12px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px', color: '#10b981', fontSize: '14px', marginBottom: '16px' }}>
@@ -613,6 +589,7 @@ const Login = ({ onLoginSuccess, onIrParaCadastro }) => {
                                     e.preventDefault();
                                     setShowForgotPassword(true);
                                     setError('');
+                                    setResetStep('email');
                                 }}
                             >
                                 Esqueci minha senha

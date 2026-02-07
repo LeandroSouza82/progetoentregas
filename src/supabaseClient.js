@@ -113,44 +113,33 @@ if (isNode) {
         console.error('❌ [V10 Delivery] FALHA CRÍTICA: URL ou Key do Supabase ausentes.');
         clientInstance = null;
     } else {
-        // Criar cliente com storage personalizável
-        clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
-            auth: {
-                autoRefreshToken: true,
-                persistSession: true,
-                detectSessionInUrl: true,
-                flowType: 'pkce',
-                storage: window.localStorage  // Default: localStorage
+        // Single instance guard to avoid Multiple GoTrueClient instances across HMR
+        try {
+            if (typeof globalThis !== 'undefined' && globalThis.__V10_SUPABASE_CLIENT__) {
+                clientInstance = globalThis.__V10_SUPABASE_CLIENT__;
+                hasCreds = true;
+                console.log('🔁 [Supabase] Reusing existing global Supabase client instance');
+            } else {
+                // Criar cliente fixo com localStorage
+                clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
+                    auth: {
+                        autoRefreshToken: true,
+                        persistSession: true,
+                        detectSessionInUrl: true,
+                        flowType: 'pkce',
+                        storage: window.localStorage  // Force localStorage
+                    }
+                });
+                hasCreds = true;
+                try { if (typeof globalThis !== 'undefined') globalThis.__V10_SUPABASE_CLIENT__ = clientInstance; } catch (e) { /* ignore */ }
+                console.log('✅ [V10 Delivery] supabase.auth detectado com sucesso.');
             }
-        });
-        hasCreds = true;
-
-        // Log de verificação (Solicitado Pelo Usuário)
-        if (clientInstance && clientInstance.auth) {
-            console.log('✅ [V10 Delivery] supabase.auth detectado com sucesso.');
-        } else {
-            console.warn('⚠️ [V10 Delivery] CLIENTE CRIADO MAS SUPABASE.AUTH É UNDEFINED');
+        } catch (e) {
+            console.warn('⚠️ [V10 Delivery] Falha ao criar/reusar o cliente Supabase:', e);
+            clientInstance = null;
+            hasCreds = false;
         }
-        // ✅ Função para alterar o tipo de storage dinamicamente
-        clientInstance.setStorageType = function (useLocalStorage) {
-            const newStorage = useLocalStorage ? window.localStorage : window.sessionStorage;
 
-            // Recriar o cliente com o novo storage
-            const newClient = createClient(supabaseUrl, supabaseAnonKey, {
-                auth: {
-                    autoRefreshToken: true,
-                    persistSession: true,
-                    detectSessionInUrl: true,
-                    flowType: 'pkce',
-                    storage: newStorage
-                }
-            });
-
-            // Copiar propriedades do novo cliente para o atual
-            clientInstance.auth = newClient.auth;
-
-            console.log(`🔄 [Supabase] Storage alterado para: ${useLocalStorage ? 'localStorage (persistente)' : 'sessionStorage (sessão única)'}`);
-        };
         subscribeFn = function (table, handler, opts = {}) {
             const pollMs = typeof opts.pollMs === 'number' ? opts.pollMs : 1000;
             let last = null;
@@ -233,7 +222,23 @@ export function getLastSupabaseError() { return lastSupabaseError; }
 
 export async function buscarTodasEntregas() {
     if (!clientInstance) return [];
+    // Se estivermos no browser e o cliente suportar auth, verificar sessão ativa
     try {
+        if (clientInstance.auth && typeof clientInstance.auth.getSession === 'function') {
+            try {
+                const { data: { session } = {} } = await clientInstance.auth.getSession();
+                if (!session) {
+                    // Não buscar dados sem sessão
+                    console.log('🔒 buscarTodasEntregas: sessão ausente — abortando fetch de entregas');
+                    return [];
+                }
+            } catch (e) {
+                // Se falhar ao obter sessão, abortar por segurança
+                console.warn('🔒 buscarTodasEntregas: falha ao obter sessão, abortando:', e);
+                return [];
+            }
+        }
+
         const res = await clientInstance.from('entregas').select('*');
         if (res.error) throw res.error;
         return res.data || [];

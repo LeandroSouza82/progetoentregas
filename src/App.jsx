@@ -207,7 +207,7 @@ class ErrorBoundary extends React.Component {
 // Agora usamos Leaflet diretamente no JSX do mapa
 
 // Linha da tabela de motorista memoizada (modo 'Gestão'): mostra apenas NOME | EMAIL | ENDEREÇO | AÇÕES
-const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme, onApprove, onReject }) {
+const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtivos, theme, darkMode, onApprove, onReject }) {
     // Mostrar apenas dados reais do Supabase: nome, email e telefone
     const email = m.email || null;
     const telefone = (m.telefone && String(m.telefone).trim().length > 0) ? m.telefone : null;
@@ -216,9 +216,9 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
     const waMessage = `Olá! Sou o gestor do V10. Recebemos seu cadastro para trabalhar conosco. Para validar seu perfil e liberar seu acesso agora, por favor, responda com um 'OK' a esta mensagem.`;
 
     return (
-        <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>
+        <tr key={m.id} onClick={() => onClick && onClick(m)} style={{ borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`, cursor: 'pointer' }}>
             <td style={{ padding: '15px 10px', textAlign: 'center', wordWrap: 'break-word', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                <span style={{ color: '#ffffff', fontWeight: 600 }}>{fullName(m)}</span>
+                <span style={{ color: theme.textMain, fontWeight: 600 }}>{fullName(m)}</span>
             </td>
 
             <td style={{ padding: '15px 10px', color: theme.textLight, fontSize: '13px', textAlign: 'center', wordWrap: 'break-word', overflow: 'hidden', textOverflow: 'ellipsis' }}>{email || 'Sem email'}</td>
@@ -229,7 +229,7 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
                         href={`https://api.whatsapp.com/send?phone=${encodeURIComponent(String(m.telefone).replace(/\D/g, ''))}&text=${encodeURIComponent(waMessage)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        style={{ color: '#60a5fa', textDecoration: 'none', fontWeight: 700 }}
+                        style={{ color: theme.primary, textDecoration: 'none', fontWeight: 700 }}
                         onClick={(e) => { e.stopPropagation && e.stopPropagation(); }}
                     >
                         {m.telefone}
@@ -241,17 +241,17 @@ const MotoristaRow = React.memo(function MotoristaRow({ m, onClick, entregasAtiv
                 <td style={{ padding: '10px', textAlign: 'center' }}>
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
                         {onApprove && (
-                            <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) { } }} style={{ background: '#10b981', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }} className="action-btn green">APROVAR</button>
+                            <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onApprove && onApprove(m); } catch (err) { } }} style={{ background: theme.success, color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }} className="action-btn green">APROVAR</button>
                         )}
                         {onReject && (
-                            <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) { } }} style={{ background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }} className="action-btn red">REPROVAR</button>
+                            <button onClick={(e) => { e.stopPropagation && e.stopPropagation(); try { onReject && onReject(m); } catch (err) { } }} style={{ background: theme.danger, color: '#fff', fontWeight: 700, border: 'none', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }} className="action-btn red">REPROVAR</button>
                         )}
                     </div>
                 </td>
             )}
         </tr>
     );
-}, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme);
+}, (p, n) => p.m === n.m && p.entregasAtivos === n.entregasAtivos && p.theme === n.theme && p.darkMode === n.darkMode);
 
 /**
  * ✅ FUNÇÃO UTILITÁRIA: Extrai e formata o primeiro nome do usuário
@@ -582,28 +582,25 @@ function App() {
     // 👤 Efeito: Buscar e Formatar Nome do Usuário (Gestor)
     React.useEffect(() => {
         const fetchProfileName = async () => {
-            if (!user) {
+            // Somente tentar buscar profile se tivermos um usuário válido com id
+            if (!user || !user.id) {
                 setPrimeiroNome(null);
                 return;
             }
 
             try {
-                // Tentar buscar na tabela profiles
+                // Tentar buscar na tabela profiles apenas quando user.id existir
                 const { data } = await supabase
                     .from('profiles')
                     .select('full_name')
                     .eq('id', user.id)
                     .single();
 
-                // ✅ Usar função utilitária para extrair e formatar o primeiro nome
                 const firstName = extractFirstName(user, data);
                 setPrimeiroNome(firstName);
-
                 console.log(`👤 [V10 Delivery] Nome do gestor formatado: ${firstName}`);
             } catch (err) {
                 console.error('⚠️ [V10 Delivery] Erro ao buscar perfil:', err);
-
-                // ✅ Mesmo com erro, extrair nome do user objeto (Google OAuth ou email)
                 const firstName = extractFirstName(user, null);
                 setPrimeiroNome(firstName);
             }
@@ -867,7 +864,6 @@ function App() {
     const [supabaseConnectedLocal, setSupabaseConnectedLocal] = useState(Boolean(SUPABASE_CONNECTED));
     const [supabaseChecking, setSupabaseChecking] = useState(false);
     const [supabaseErrorLocal, setSupabaseErrorLocal] = useState(() => { try { return getLastSupabaseError ? getLastSupabaseError() : null; } catch (e) { return null; } });
-    const [motoristasOnlineCount, setMotoristasOnlineCount] = useState(0);
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
     // Componente isolado para a tela de aprovação do motorista
@@ -928,6 +924,8 @@ function App() {
     const DEBUG_FORCE_SHOW_ALL = true; // força mostrar tudo temporariamente (debug)
     const [avisos, setAvisos] = useState([]);
     const [gestorPhone, setGestorPhone] = useState(null);
+    const [modalContatoAberto, setModalContatoAberto] = useState(false);
+    const [telefoneTemp, setTelefoneTemp] = useState('');
     const [primeiroNome, setPrimeiroNome] = useState(null); // Estado para nome do gestor formatado
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
@@ -944,9 +942,20 @@ function App() {
     // Estado para mensagens de erro de geocodificação visíveis na tela
     const [geocodingError, setGeocodingError] = useState(null);
 
-    // Initial fetch: load entregas once on mount (minimal logging)
+    // Initial fetch: load entregas when there is an active session+user
     React.useEffect(() => {
         let mounted = true;
+
+        // Não executar sem sessão ativa
+        if (!session || !user) {
+            // Garantir limpeza de qualquer dado previamente carregado sem sessão
+            setEntregas([]);
+            setEntregasEmEspera([]);
+            setAllEntregas([]);
+            setTotalEntregas(0);
+            return () => { mounted = false; };
+        }
+
         async function carregarEntregasInicial() {
             try {
                 const data = await buscarTodasEntregas();
@@ -1006,7 +1015,7 @@ function App() {
         }
         carregarEntregasInicial();
         return () => { mounted = false; };
-    }, []);
+    }, [session, user]);
 
     // ✅ VERIFICAÇÃO EXTRA: Se entregas foram carregadas mas não há sessão, forçar revalidação
     React.useEffect(() => {
@@ -1161,7 +1170,6 @@ function App() {
     const [dispatchLoading, setDispatchLoading] = useState(false);
     const [mensagemGeral, setMensagemGeral] = useState('');
     const [enviandoGeral, setEnviandoGeral] = useState(false);
-    const [enviandoPush, setEnviandoPush] = useState(false);
     const [btnPressed, setBtnPressed] = useState(false);
     const [destinatario, setDestinatario] = useState('all');
     const [nomeCliente, setNomeCliente] = useState('');
@@ -1657,8 +1665,6 @@ function App() {
 
                 setFrota(merged);
                 lastFrotaRef.current = merged;
-                // update online counter
-                try { setMotoristasOnlineCount((merged || []).filter(m => m && (m.esta_online === true || String(m.esta_online) === 'true')).length); } catch (e) { }
                 // clear any pending retry
                 if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
                 // reset retry counter on success
@@ -3701,12 +3707,11 @@ function App() {
         />;
     }
 
-    // ✅ PRIORIDADE MÁXIMA: Se dados carregados, renderizar Dashboard (usuário autenticado implícitamente)
-    const hasDadosCarregados = entregas && entregas.length > 0;
-    const isAuthenticated = (session && user) || hasDadosCarregados;
+    // ✅ Autenticação segura: Dashboard só é exibido quando houver session && user (removida autenticação implícita)
+    const isAuthenticated = !!(session && user);
 
-    // Renderizar tela de login APENAS se não autenticado E não está carregando E não há dados
-    if (!isAuthenticated && !sessionLoading && !hasDadosCarregados) {
+    // Renderizar tela de login APENAS se não autenticado E não está carregando
+    if (!isAuthenticated && !sessionLoading) {
         return <Login
             onLoginSuccess={async (userData) => {
                 console.log('✅ [App] Login bem-sucedido, atualizando estados:', userData?.email);
@@ -3719,19 +3724,13 @@ function App() {
                         setUser(newSession.user);
                         console.log('🚀 [App] Redirecionando para dashboard...');
                     } else {
-                        // Se não encontrar sessão, usar autenticação implícita
-                        setUser(userData || {
-                            id: 'implicit-auth',
-                            email: 'authenticated-user'
-                        });
+                        // Sem sessão válida: não configuramos autenticação implícita
+                        console.error('❌ [App] Login não criou uma sessão válida. Não será possível acessar o Dashboard sem sessão.');
+                        alert('Erro: não foi possível estabelecer sessão. Verifique suas credenciais.');
                     }
                 } catch (err) {
                     console.error('❌ [App] Erro ao atualizar sessão:', err);
-                    // Mesmo com erro, setar user para desbloquear
-                    setUser(userData || {
-                        id: 'implicit-auth',
-                        email: 'authenticated-user'
-                    });
+                    alert('Erro ao verificar sessão após login. Tente novamente.');
                 }
             }}
             onIrParaCadastro={() => {
@@ -3744,7 +3743,7 @@ function App() {
     // console.log('🎯 [App] Renderizando Dashboard - Auth:', isAuthenticated, 'Dados:', hasDadosCarregados);
 
     const appContent = (
-        <div style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+        <div style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain, display: 'flex', flexDirection: 'column' }}>
             {/* Animação CSS para sugestão fuzzy search */}
             <style>{`
                 /* Prevenir scroll horizontal global */
@@ -3845,10 +3844,7 @@ function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                             <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1a365d,#f6ad55)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <h2 className="dashboard-title" style={{ margin: 0, fontSize: '22px', fontFamily: "Inter, Roboto, sans-serif", fontWeight: '700', background: 'linear-gradient(to right, #1a365d, #f6ad55)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 DELIVERY</h2>
-                                <div style={{ fontSize: '13px', color: '#a9b8d3', background: 'rgba(255,255,255,0.02)', padding: '6px 8px', borderRadius: '8px' }} title="Motoristas online">Online: <strong style={{ color: '#60a5fa' }}>{motoristasOnlineCount}</strong></div>
-                            </div>
+                            <h2 className="dashboard-title" style={{ margin: 0, fontSize: '22px', fontFamily: "Inter, Roboto, sans-serif", fontWeight: '700', background: 'linear-gradient(to right, #1a365d, #f6ad55)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>V10 DELIVERY</h2>
                         </div>
 
                         <nav style={{ display: 'flex', gap: '8px' }}>
@@ -5306,7 +5302,7 @@ function App() {
                             <h2 style={{ margin: 0 }}>Motoristas Cadastrados</h2>
 
                             {/* 🎨 LEGENDA DE CORES - Explicação visual rápida */}
-                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 16px', background: darkMode ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '12px', border: `1px solid ${darkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)'}` }}>
                                 <span style={{ fontSize: '11px', color: theme.textLight, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status:</span>
                                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -5322,8 +5318,8 @@ function App() {
                                         <span style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 500 }}>Outros</span>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                        <div style={{ width: '12px', height: '12px', background: '#9ca3af', borderRadius: '3px' }}></div>
-                                        <span style={{ fontSize: '11px', color: '#9ca3af', fontWeight: 500 }}>Disponível</span>
+                                        <div style={{ width: '12px', height: '12px', background: theme.textLight, borderRadius: '3px' }}></div>
+                                        <span style={{ fontSize: '11px', color: theme.textLight, fontWeight: 500 }}>Disponível</span>
                                     </div>
                                 </div>
                             </div>
@@ -5333,7 +5329,7 @@ function App() {
                         <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
+                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: `1px solid ${darkMode ? '#cbd5e1' : '#e6eef8'}`, minWidth: '220px', background: theme.card, color: theme.textMain }}>
                                     <option value="all">📢 Enviar para Todos</option>
                                     {motoristasAtivos.map(m => (
                                         <option key={m.id} value={String(m.id)}>{fullName(m)}</option>
@@ -5344,203 +5340,35 @@ function App() {
                                 </div>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                                {/* Botão ENVIAR PUSH */}
+                                {/* Botão CONFIGURAR CONTATO */}
                                 <button
                                     onMouseDown={() => setBtnPressed(true)}
                                     onMouseUp={() => setBtnPressed(false)}
                                     onMouseLeave={() => setBtnPressed(false)}
-                                    onClick={async () => {
-                                        const texto = String(mensagemGeral || '').trim();
-                                        if (!texto) {
-                                            alert('⚠️ Digite a mensagem antes de enviar.');
-                                            return;
-                                        }
-
-                                        if (!confirm('📣 Confirma o envio de notificação PUSH para os motoristas?')) {
-                                            return;
-                                        }
-
-                                        try {
-                                            setEnviandoPush(true);
-
-                                            // 📢 ENVIO DE NOTIFICAÇÃO PUSH
-                                            // Identifica qual motorista receberá a notificação
-                                            let targetMotoristas = [];
-
-                                            if (destinatario === 'all') {
-                                                // Enviar para todos os motoristas ativos
-                                                targetMotoristas = motoristasAtivos.map(m => ({
-                                                    id: m.id,
-                                                    nome: fullName(m),
-                                                    email: m.email
-                                                }));
-                                            } else {
-                                                // Enviar para motorista específico
-                                                const motorista = motoristasAtivos.find(m => String(m.id) === String(destinatario));
-                                                if (motorista) {
-                                                    targetMotoristas = [{
-                                                        id: motorista.id,
-                                                        nome: fullName(motorista),
-                                                        email: motorista.email
-                                                    }];
-                                                }
-                                            }
-
-                                            if (targetMotoristas.length === 0) {
-                                                throw new Error('Nenhum motorista selecionado para envio.');
-                                            }
-
-                                            console.log('📣 Enviando PUSH para:', targetMotoristas);
-
-                                            // 🔥 INTEGRAÇÃO COM WEB PUSH (VAPID)
-                                            // Credenciais Firebase Web Push:
-                                            // - Sender ID: 830604173148
-                                            // - VAPID Key: BHT9A7tP7ounjOVO4XyvS2Dpj0hstwxw03BrvX3de_5Hsdrh0Uq7OwPXvCvTvda0k4yFNv56FfK1Ue6poAuXhME
-
-                                            const pushPayload = {
-                                                title: 'V10 Delivery - Comunicado',
-                                                message: texto,
-                                                recipients: targetMotoristas.map(m => m.id),
-                                                data: {
-                                                    tipo: 'comunicado',
-                                                    timestamp: new Date().toISOString()
-                                                }
-                                            };
-
-                                            // 🔌 ENVIO VIA WEB PUSH (VAPID)
-                                            try {
-                                                // VAPID Key (cliente-side para Web Push)
-                                                const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || 'BHT9A7tP7ounjOVO4XyvS2Dpj0hstwxw03BrvX3de_5Hsdrh0Uq7OwPXvCvTvda0k4yFNv56FfK1Ue6poAuXhME';
-
-                                                console.log('✅ VAPID Key configurada:', vapidKey.substring(0, 20) + '...');
-
-                                                // Payload da notificação Web Push
-                                                const webPushPayload = {
-                                                    notification: {
-                                                        title: 'V10 Delivery - Comunicado',
-                                                        body: texto,
-                                                        icon: '/assets/logo-v10.png.png',
-                                                        badge: '/assets/logo-v10.png.png',
-                                                        vibrate: [200, 100, 200],
-                                                        tag: 'comunicado-' + Date.now(),
-                                                        requireInteraction: true
-                                                    },
-                                                    data: {
-                                                        tipo: 'comunicado',
-                                                        timestamp: new Date().toISOString(),
-                                                        motoristas: targetMotoristas.map(m => m.id),
-                                                        url: 'https://v10delivery.vercel.app'
-                                                    }
-                                                };
-
-                                                console.log('📤 Payload Web Push preparado:', webPushPayload);
-
-                                                // Registrar no banco que uma push foi enviada
-                                                const sb = supabaseRef.current || supabase;
-                                                if (sb && typeof sb.from === 'function') {
-                                                    try {
-                                                        const insertResult = await sb.from('avisos_gestor').insert([{
-                                                            titulo: 'Comunicado',  // ✅ Sem prefixo PUSH
-                                                            mensagem: texto,
-                                                            lida: false,
-                                                            motorista_id: destinatario === 'all' ? null : Number(destinatario)
-                                                        }]);
-
-                                                        if (insertResult.error) {
-                                                            console.warn('⚠️ Falha ao registrar push no banco:', insertResult.error);
-                                                        } else {
-                                                            console.log('✅ Push registrado no banco de dados');
-                                                        }
-                                                    } catch (dbErr) {
-                                                        console.warn('⚠️ Erro ao registrar no banco:', dbErr);
-                                                    }
-                                                }
-
-                                                // 📢 DISPARAR NOTIFICAÇÃO REAL VIA SUPABASE REALTIME
-                                                // Envia um evento via canal realtime para que o app do motorista receba
-                                                try {
-                                                    const sb = supabaseRef.current || supabase;
-                                                    const channel = sb.channel('avisos-push');
-
-                                                    // ✅ SUBSCREVER AO CANAL ANTES DE ENVIAR (evita fallback mode)
-                                                    await new Promise((resolve) => {
-                                                        channel.subscribe((status) => {
-                                                            if (status === 'SUBSCRIBED') {
-                                                                console.log('🔌 Canal avisos-push subscrito com sucesso');
-                                                                resolve();
-                                                            }
-                                                        });
-                                                    });
-
-                                                    // Publicar evento de nova notificação
-                                                    await channel.send({
-                                                        type: 'broadcast',
-                                                        event: 'nova-notificacao',
-                                                        payload: {
-                                                            titulo: 'Comunicado',
-                                                            mensagem: texto,
-                                                            motorista_id: destinatario === 'all' ? null : Number(destinatario),
-                                                            timestamp: new Date().toISOString()
-                                                        }
-                                                    });
-
-                                                    console.log('✅ Evento de notificação enviado via Supabase Realtime');
-
-                                                    // Limpar o canal após envio
-                                                    setTimeout(() => {
-                                                        channel.unsubscribe();
-                                                    }, 1000);
-                                                } catch (realtimeErr) {
-                                                    console.warn('⚠️ Erro ao enviar via Realtime:', realtimeErr);
-                                                }
-
-                                                // 📱 SIMULAÇÃO DE ENVIO PARA MOTORISTAS
-                                                // Em produção, o app Flutter deve estar inscrito no tópico /topics/motoristas
-                                                // e receberá as notificações via Firebase Cloud Messaging SDK
-                                                console.log('🚀 Notificação registrada para:', {
-                                                    destinatarios: targetMotoristas.length,
-                                                    tipo: destinatario === 'all' ? 'broadcast' : 'individual',
-                                                    vapidKey: vapidKey.substring(0, 30) + '...'
-                                                });
-
-                                                // ✅ FEEDBACK DE SUCESSO
-                                                alert(`✅ Notificação enviada com sucesso!\n\n📱 ${targetMotoristas.length} motorista(s) receberão a notificação.\n\n💡 Os motoristas verão a mensagem no app V10 Delivery.`);
-                                                setMensagemGeral('');
-                                                setDestinatario('all');
-
-                                            } catch (pushError) {
-                                                console.error('❌ Erro ao processar notificação:', pushError);
-                                                throw pushError; // Re-throw para ser capturado pelo catch externo
-                                            }
-                                        } catch (e) {
-                                            console.error('❌ Erro ao enviar PUSH:', e);
-                                            alert('❌ Falha ao enviar notificação PUSH: ' + (e && e.message ? e.message : String(e)));
-                                        } finally {
-                                            setEnviandoPush(false);
-                                            setBtnPressed(false);
-                                        }
+                                    onClick={() => {
+                                        setTelefoneTemp(gestorPhone || '');
+                                        setModalContatoAberto(true);
                                     }}
                                     style={{
                                         padding: '10px 16px',
-                                        background: enviandoPush ? '#f59e0b' : '#ff6b35',
+                                        background: darkMode ? '#475569' : '#e2e8f0',
                                         border: 'none',
-                                        color: '#fff',
+                                        color: darkMode ? '#fff' : theme.textMain,
                                         borderRadius: '8px',
                                         fontWeight: 700,
-                                        cursor: enviandoPush ? 'not-allowed' : 'pointer',
-                                        opacity: btnPressed || enviandoPush ? 0.7 : 1,
-                                        transition: 'all 120ms ease-in-out',
-                                        boxShadow: '0 6px 14px rgba(255,107,53,0.25)',
+                                        cursor: 'pointer',
+                                        opacity: btnPressed ? 0.7 : 1,
+                                        transition: 'opacity 120ms ease-in-out',
+                                        boxShadow: darkMode ? '0 6px 14px rgba(71,85,105,0.18)' : '0 6px 14px rgba(16,24,40,0.04)',
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '8px'
                                     }}
-                                    disabled={enviandoPush}
                                 >
-                                    📣 {enviandoPush ? 'ENVIANDO PUSH...' : 'ENVIAR PUSH'}
+                                    ⚙️ CONFIGURAR CONTATO
                                 </button>
 
-                                {/* Botão ENVIAR MENSAGEM (original) */}
+                                {/* Botão ENVIAR MENSAGEM */}
                                 <button
                                     onMouseDown={() => setBtnPressed(true)}
                                     onMouseUp={() => setBtnPressed(false)}
@@ -5603,7 +5431,7 @@ function App() {
                                             try { alert('❌ Falha ao enviar mensagem: ' + (e && e.message ? e.message : String(e))); } catch (e2) { }
                                         } finally { setEnviandoGeral(false); setBtnPressed(false); }
                                     }}
-                                    style={{ padding: '10px 16px', background: '#0ea5e9', border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', opacity: btnPressed ? 0.7 : 1, transition: 'opacity 120ms ease-in-out', boxShadow: '0 6px 14px rgba(14,165,233,0.18)' }}
+                                    style={{ padding: '10px 16px', background: theme.accent, border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', opacity: btnPressed ? 0.7 : 1, transition: 'opacity 120ms ease-in-out', boxShadow: '0 6px 14px rgba(14,165,233,0.08)' }}
                                 >
                                     {enviandoGeral ? 'ENVIANDO...' : 'ENVIAR MENSAGEM'}
                                 </button>
@@ -5611,7 +5439,7 @@ function App() {
                         </div>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
-                                <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
+                                <tr style={{ textAlign: 'left', borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)'}`, color: theme.textLight }}>
                                     <th style={{ padding: '10px' }}>NOME</th>
                                     <th style={{ padding: '10px' }}>EMAIL</th>
                                     <th style={{ padding: '10px' }}>TELEFONE</th>
@@ -5621,7 +5449,7 @@ function App() {
                             <tbody>
                                 {motoristasAtivos.map(m => {
                                     const isOnline = m.esta_online === true;
-                                    const dotColor = isOnline ? '#10b981' : '#ef4444';
+                                    const dotColor = isOnline ? theme.success : theme.danger;
                                     const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
 
                                     // 🎯 LÓGICA DE CORES POR ATIVIDADE ATUAL
@@ -5632,7 +5460,7 @@ function App() {
                                     const entregaAtiva = entregasMot.find(e => String(e.status || '').toLowerCase() === 'em_rota');
 
                                     // 🎨 DETERMINAR COR BASEADA NO TIPO DA ENTREGA ATIVA
-                                    let activityColor = '#9ca3af'; // CINZA (padrão - sem entrega em_rota)
+                                    let activityColor = theme.textLight; // CINZA (padrão - sem entrega em_rota)
                                     let activityLabel = isOnline ? 'Disponível' : 'Offline';
                                     let activityGlow = 'none';
 
@@ -5667,11 +5495,11 @@ function App() {
                                             key={m.id}
                                             onClick={() => setSelectedMotorista(m)}
                                             style={{
-                                                borderBottom: '1px solid #f1f5f9',
+                                                borderBottom: `1px solid ${darkMode ? '#f1f5f9' : 'rgba(0,0,0,0.06)'}`,
                                                 cursor: 'pointer',
                                                 borderLeft: `5px solid ${activityColor}`, // 🎨 BORDA LATERAL COLORIDA
                                                 transition: 'all 0.3s ease',
-                                                backgroundColor: entregaAtiva ? 'rgba(255,255,255,0.02)' : 'transparent'
+                                                backgroundColor: entregaAtiva ? (darkMode ? 'rgba(255,255,255,0.02)' : 'rgba(2,6,23,0.02)') : 'transparent'
                                             }}
                                             onMouseEnter={(e) => {
                                                 e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)';
@@ -5684,7 +5512,7 @@ function App() {
                                         >
                                             <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
-                                                <span style={{ color: '#ffffff', fontWeight: 600 }}>{fullName(m)}</span>
+                                                <span style={{ color: theme.textMain, fontWeight: 600 }}>{fullName(m)}</span>
                                             </td>
                                             <td>
                                                 {/* 🎯 INDICADOR DE ATIVIDADE ATUAL COM COR DINÂMICA */}
@@ -5710,24 +5538,24 @@ function App() {
                                                     )}
                                                 </div>
                                             </td>
-                                            <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
-                                            <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
+                                            <td style={{ color: isOnline ? undefined : theme.textLight }}>{m.veiculo}</td>
+                                            <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : theme.textLight }}>{m.placa}</td>
                                             <td style={{ padding: '10px' }}>
                                                 {/* 📊 CONTADOR INDIVIDUAL: mostra progresso real (ex: 1/3) */}
                                                 <span style={{
                                                     display: 'inline-flex',
                                                     alignItems: 'center',
                                                     gap: '6px',
-                                                    background: '#0f172a',
-                                                    color: '#fff',
+                                                    background: theme.headerBg,
+                                                    color: theme.headerText,
                                                     padding: '6px 10px',
                                                     borderRadius: '999px',
                                                     fontSize: '13px',
                                                     fontWeight: 700
                                                 }}>
                                                     <span style={{ color: activityColor }}>{indexAtual || concluidas}</span>
-                                                    <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
-                                                    <span style={{ color: '#60a5fa', opacity: 0.9 }}>{totalEmRota + concluidas}</span>
+                                                    <span style={{ color: theme.textLight, fontWeight: 600 }}>/</span>
+                                                    <span style={{ color: theme.primary, opacity: 0.9 }}>{totalEmRota + concluidas}</span>
                                                 </span>
                                             </td>
                                             <td style={{ padding: '10px', textAlign: 'center' }}>
@@ -5743,14 +5571,14 @@ function App() {
 
                 {/* GESTÃO DE MOTORISTAS */}
                 {abaAtiva === 'Gestão de Motoristas' && (
-                    <div style={{ background: 'transparent', padding: '30px', borderRadius: '16px', boxShadow: theme.shadow, width: '100%' }}>
+                    <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow, width: '100%' }}>
                         <h2 style={{ marginTop: 0, textAlign: 'center', color: theme.textMain }}>Gestão de Motoristas</h2>
                         <p style={{ color: theme.textLight, marginTop: '8px', textAlign: 'center', marginBottom: '30px' }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
 
                         <div style={{ width: '100%', maxWidth: '100%', margin: '0 auto', overflowX: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent', tableLayout: 'fixed' }}>
                                 <thead>
-                                    <tr style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
+                                    <tr style={{ textAlign: 'center', borderBottom: `1px solid ${darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)'}`, color: theme.textLight }}>
                                         <th style={{ padding: '10px', width: '25%' }}>NOME</th>
                                         <th style={{ padding: '10px', width: '25%' }}>EMAIL</th>
                                         <th style={{ padding: '10px', width: '25%' }}>TELEFONE</th>
@@ -5759,7 +5587,7 @@ function App() {
                                 </thead>
                                 <tbody>
                                     {motoristasPendentes.map(m => (
-                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
+                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} darkMode={darkMode} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
                                     ))}
                                 </tbody>
                             </table>
@@ -5982,60 +5810,124 @@ function App() {
                 </div>
             )}
 
-            {/* Footer com links de Política e Termos - Alta Visibilidade (Forçado) */}
-            <div style={{
-                position: 'fixed',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                padding: '0',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                zIndex: 10000,
-                pointerEvents: 'none'
-            }}>
-                <a
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); setShowPrivacyPolicy(true); }}
-                    style={{
-                        position: 'fixed',
-                        bottom: '10px',
-                        left: '10px',
-                        fontSize: '10px',
-                        color: 'white',
-                        textDecoration: 'none',
-                        opacity: 1,
-                        pointerEvents: 'auto',
-                        cursor: 'pointer',
-                        zIndex: 10000,
-                        textShadow: '1px 1px 2px black',
-                        fontWeight: 'normal'
-                    }}
-                >
-                    Política de Privacidade
-                </a>
-                <a
-                    href="#"
-                    onClick={(e) => { e.preventDefault(); setShowTermsOfService(true); }}
-                    style={{
-                        position: 'fixed',
-                        bottom: '10px',
-                        right: '10px',
-                        fontSize: '10px',
-                        color: 'white',
-                        textDecoration: 'none',
-                        opacity: 1,
-                        pointerEvents: 'auto',
-                        cursor: 'pointer',
-                        zIndex: 10000,
-                        textShadow: '1px 1px 2px black',
-                        fontWeight: 'normal'
-                    }}
-                >
-                    Termos de Serviço
-                </a>
-            </div>
+            {/* Modal de Configuração de Contato */}
+            {modalContatoAberto && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 10000,
+                    padding: '20px'
+                }}>
+                    <div style={{
+                        background: '#fff',
+                        borderRadius: '16px',
+                        padding: '30px',
+                        maxWidth: '500px',
+                        width: '100%',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+                    }}>
+                        <h2 style={{ margin: '0 0 20px 0', color: '#1e293b', fontSize: '24px', fontWeight: '800' }}>⚙️ Configurar Contato do Gestor</h2>
+                        <div style={{ lineHeight: '1.8', color: '#475569', fontSize: '14px', marginBottom: '20px' }}>
+                            <p>Digite o número de telefone/WhatsApp que será usado nos comunicados e contato com os motoristas.</p>
+                        </div>
+
+                        <div style={{ marginBottom: '20px' }}>
+                            <label style={{ display: 'block', fontWeight: '600', color: '#1e293b', marginBottom: '8px' }}>
+                                Número de Telefone (com DDD)
+                            </label>
+                            <input
+                                type="tel"
+                                value={telefoneTemp}
+                                onChange={(e) => setTelefoneTemp(e.target.value)}
+                                placeholder="Ex: 5548996525008"
+                                style={{
+                                    width: '100%',
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #cbd5e1',
+                                    fontSize: '16px',
+                                    boxSizing: 'border-box'
+                                }}
+                            />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px' }}>
+                            <button
+                                onClick={() => setModalContatoAberto(false)}
+                                style={{
+                                    flex: 1,
+                                    padding: '12px 30px',
+                                    background: '#e2e8f0',
+                                    color: '#475569',
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    fontWeight: '700',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const telefone = String(telefoneTemp || '').trim();
+                                    if (!telefone) {
+                                        alert('⚠️ Por favor, digite um número de telefone.');
+                                        return;
+                                    }
+
+                                    try {
+                                        const sb = supabaseRef.current || supabase;
+                                        if (!sb || typeof sb.from !== 'function') {
+                                            throw new Error('Cliente Supabase não está disponível');
+                                        }
+
+                                        // Atualizar a configuração gestor_phone (id=1)
+                                        const { error } = await sb
+                                            .from('configuracoes')
+                                            .update({ valor: telefone })
+                                            .eq('chave', 'gestor_phone');
+
+                                        if (error) {
+                                            console.error('❌ Erro ao atualizar contato:', error);
+                                            throw error;
+                                        }
+
+                                        console.log('✅ Contato do gestor atualizado:', telefone);
+                                        setGestorPhone(telefone);
+                                        setModalContatoAberto(false);
+                                        alert('✅ Contato atualizado com sucesso!');
+                                    } catch (e) {
+                                        console.error('❌ Erro ao salvar contato:', e);
+                                        alert('❌ Falha ao atualizar contato: ' + (e && e.message ? e.message : String(e)));
+                                    }
+                                }}
+                                style={{
+                                    flex: 1,
+                                    padding: '12px 30px',
+                                    background: 'linear-gradient(135deg, #3b82f6, #1e40af)',
+                                    color: '#fff',
+                                    border: 'none',
+                                    borderRadius: '8px',
+                                    fontSize: '14px',
+                                    fontWeight: '700',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                💾 Salvar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 
