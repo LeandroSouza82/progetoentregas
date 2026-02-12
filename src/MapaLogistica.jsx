@@ -36,16 +36,29 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             title: e.cliente || e.endereco
         })), [entregas]);
 
-    // Show any passed fleet items that have valid SC coords — do not hide the moto if offline; ensures a stable, fixed icon
-    // ❌ TRAVA FÍSICA: Filtrar motoristas com coordenadas inválidas (0,0)
+    // Show any passed fleet items that have valid SC coords and are online & recent
     const frotaMarkers = React.useMemo(() => (frota || [])
         .filter(m => {
-            if (!m || m.lat == null || m.lng == null) return false;
+            if (!m) return false;
+            // Não desenhar se não estiver marcado como online
+            if (m.esta_online === false) return false;
+            // Verificar coordenadas
+            if (m.lat == null || m.lng == null) return false;
             const lat = Number(m.lat);
             const lng = Number(m.lng);
-            // ❌ EXTERMINAR pinos em (0,0)
             if (lat === 0 || lng === 0) return false;
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+            // Verificar timeout de inatividade (ultima_atualizacao > 5 minutos => sinal perdido)
+            if (m.ultima_atualizacao) {
+                try {
+                    const last = new Date(m.ultima_atualizacao);
+                    if (!isNaN(last.getTime())) {
+                        const age = Date.now() - last.getTime();
+                        if (age > (5 * 60 * 1000)) return false;
+                    }
+                } catch (e) { /* ignore parse errors */ }
+            }
+            // Validar limites de SC
             return isValidSC(lat, lng);
         })
         .map(m => ({

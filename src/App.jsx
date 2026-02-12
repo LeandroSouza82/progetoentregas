@@ -983,17 +983,22 @@ function App() {
                     console.log('🔵 Tentando carregar motoristas...');
                     const sb = supabaseRef.current || supabase;
                     if (sb && typeof sb.from === 'function') {
-                        const { data: motoristas, error: motorErr } = await sb.from('motoristas').select('*').order('id');
+                        // Filtrar apenas motoristas online no fetch inicial
+                        let q = sb.from('motoristas').select('*').eq('esta_online', true);
+                        if (q && typeof q.order === 'function') q = q.order('id');
+                        const { data: motoristas, error: motorErr } = await q;
                         console.log('🔵 Resposta motoristas:', { motoristas, motorErr, count: motoristas?.length });
 
                         if (motorErr) {
                             console.error('❌ Erro ao carregar motoristas:', motorErr);
                         } else if (motoristas && mounted) {
+                            // Normalizar e aplicar mesmo filtro de presença usado pelo mapa
                             const normalized = (motoristas || []).map(m => ({
                                 ...m,
                                 lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
-                                lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
-                            }));
+                                lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng,
+                                status: m.status || null
+                            })).filter(m => m.esta_online === true && String(m.status || '').toLowerCase() === 'online' && m.lat != null && m.lng != null);
                             setFrota(normalized);
                             console.log('✅ Motoristas carregados com sucesso:', normalized.length);
                             console.log('✅ Lista de motoristas:', normalized);
@@ -1206,6 +1211,13 @@ function App() {
 
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
+
+    // Estado derivado usado apenas para renderização no mapa: filtra por presença (esta_online) e status 'online'
+    const frotaParaMapa = React.useMemo(() => {
+        try {
+            return (frota || []).filter(m => m && m.esta_online === true && String(m.status || '').toLowerCase() === 'online' && m.lat && m.lng);
+        } catch (e) { return []; }
+    }, [frota]);
     const mapContainerRef = useRef(null);
 
     // ===== PERSISTÊNCIA DO HISTÓRICO NO LOCALSTORAGE =====
@@ -1634,7 +1646,8 @@ function App() {
         setLoadingFrota(true);
 
         try {
-            let q = sb.from('motoristas').select('*');
+            // Buscar apenas motoristas marcados como online
+            let q = sb.from('motoristas').select('*').eq('esta_online', true);
             if (q && typeof q.order === 'function') q = q.order('id');
             const { data: motoristas, error: motorErr } = await q;
             if (motorErr) {
@@ -1642,11 +1655,12 @@ function App() {
                 // Preserve last known valid frota
                 setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
             } else {
+                // Normalizar e filtrar motoristas sem coordenadas
                 const normalized = (motoristas || []).map(m => ({
                     ...m,
                     lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
                     lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
-                }));
+                })).filter(m => m.lat != null && m.lng != null);
 
                 const merged = (function (prev) {
                     try {
@@ -2351,6 +2365,27 @@ function App() {
                 if (parsed.lat != null) parsed.lat = Number(parsed.lat);
                 if (parsed.lng != null) parsed.lng = Number(parsed.lng);
 
+                // Tratamento de timeout e offline:
+                try {
+                    const FIVE_MIN = 5 * 60 * 1000;
+                    const now = Date.now();
+                    // Se houver campo ultima_atualizacao, parsear e verificar idade
+                    let lastTs = null;
+                    if (parsed.ultima_atualizacao) {
+                        try { lastTs = new Date(parsed.ultima_atualizacao); if (isNaN(lastTs.getTime())) lastTs = null; } catch (e) { lastTs = null; }
+                    }
+                    const isStale = lastTs ? (now - lastTs.getTime() > FIVE_MIN) : false;
+                    const isExplicitOffline = (parsed.esta_online === false) || (parsed.status && String(parsed.status).toLowerCase() === 'offline');
+                    const missingCoords = (parsed.lat == null || parsed.lng == null);
+
+                    if (isExplicitOffline || isStale || missingCoords) {
+                        // Remover motorista da frota local para não renderizar marcador
+                        setFrota(prev => Array.isArray(prev) ? prev.filter(m => String(m.id) !== String(parsed.id)) : prev || []);
+                        console.log('🔴 Motorista removido do mapa (offline/stale/sem-coords):', parsed.id);
+                        return;
+                    }
+                } catch (e) { /* ignore parsing errors */ }
+
                 // 🔍 DEBUG: Log quando dados de motorista chegam
                 console.log('📍 Dados do motorista recebidos:', {
                     id: parsed.id,
@@ -2362,14 +2397,25 @@ function App() {
                 });
 
                 // Atualiza por mapeamento para preservar referências de objetos
+                // Seja cirúrgico: só manter/adicionar se cumprir a regra de presença (esta_online=true && status==='online' && coords presentes)
                 setFrota(prev => {
                     try {
                         const arr = Array.isArray(prev) ? prev : [];
-                        const found = arr.find(m => String(m.id) === String(parsed.id));
-                        if (found) {
-                            return arr.map(m => String(m.id) === String(parsed.id) ? { ...m, ...parsed } : m);
+                        const idStr = String(parsed.id);
+                        const idx = arr.findIndex(m => String(m.id) === idStr);
+                        const meetsPresence = parsed && parsed.esta_online === true && String(parsed.status || '').toLowerCase() === 'online' && parsed.lat != null && parsed.lng != null;
+
+                        if (idx >= 0) {
+                            if (!meetsPresence) {
+                                // remover do estado se não cumprir presença
+                                return arr.filter(m => String(m.id) !== idStr);
+                            }
+                            // atualizar existente
+                            return arr.map(m => String(m.id) === idStr ? { ...m, ...parsed } : m);
                         }
-                        // Se não existir, adiciona ao final
+
+                        // não existe ainda
+                        if (!meetsPresence) return arr;
                         return [...arr, parsed];
                     } catch (e) {
                         return prev || [];
@@ -2768,7 +2814,7 @@ function App() {
         if (!map._loaded) return;
 
         const pinsDeliveries = (orderedRota || []).filter(p => isValidSC(Number(p.lat), Number(p.lng))).map(p => [Number(p.lat), Number(p.lng)]);
-        const motoCoords = (frota || []).filter(m => m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng))).map(m => [Number(m.lat), Number(m.lng)]);
+        const motoCoords = (frotaParaMapa || []).filter(m => isValidSC(Number(m.lat), Number(m.lng))).map(m => [Number(m.lat), Number(m.lng)]);
 
         const todosOsPontos = [...pinsDeliveries, ...motoCoords];
 
@@ -3920,7 +3966,8 @@ function App() {
 
                                         {/* Motoristas online */}
                                         {(() => {
-                                            const motoristasOnline = (frota || []).filter(m => m.aprovado === true && m.esta_online === true && isValidSC(Number(m.lat), Number(m.lng)));
+                                            // Usar lista derivada exclusiva para o mapa (presença = online + coords)
+                                            const motoristasOnline = (frotaParaMapa || []).filter(m => isValidSC(Number(m.lat), Number(m.lng)) && m.aprovado === true);
 
                                             // 🔍 DEBUG: Log total de motoristas online filtrados (REMOVIDO PARA LIMPEZA)
 
