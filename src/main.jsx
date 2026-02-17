@@ -5,6 +5,6 @@ import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <MapaLogistica />
+    <MapaLogistica height="100vh" />
   </React.StrictMode>
 );
