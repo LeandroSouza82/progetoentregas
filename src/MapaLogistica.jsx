@@ -279,14 +279,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     const mapInner = useMemo(() => {
         try {
-            const mapboxUrl = `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${MAPBOX_TOKEN}`;
+            const mapboxUrl = MAPBOX_TOKEN && MAPBOX_TOKEN.length > 0
+                ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${MAPBOX_TOKEN}`
+                : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
             // center on motorista Leandro if available
             const leandro = (frota || []).find(m => m && m.nome && String(m.nome).toLowerCase().includes('leandro') && m.lat != null && m.lng != null);
             const initialCenter = leandro && Number(leandro.lat) && Number(leandro.lng) ? [Number(leandro.lat), Number(leandro.lng)] : [computedCenter.lat, computedCenter.lng];
 
             return (
                 <MapContainer center={initialCenter} zoom={12} style={mapStyle} whenCreated={handleLoad}>
-                    <TileLayer url={mapboxUrl} attribution={'© Mapbox © OpenStreetMap'} tileSize={512} zoomOffset={-1} />
+                    <TileLayer url={mapboxUrl} attribution={MAPBOX_TOKEN ? '© Mapbox © OpenStreetMap' : '© OpenStreetMap contributors'} tileSize={MAPBOX_TOKEN ? 512 : 256} zoomOffset={MAPBOX_TOKEN ? -1 : 0} />
 
                     {/* Frota (drivers) markers */}
                     {frotaMarkers.map(m => {
