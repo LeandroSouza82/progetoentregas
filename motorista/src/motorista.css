@@ -1,0 +1,8 @@
+/* Arquivo CSS do sub-app motorista.
+   Conteúdo JavaScript duplicado foi removido para evitar chamadas indevidas a navigator.geolocation.
+   Adicione aqui regras CSS reais conforme necessário. */
+
+body {
+  margin: 0;
+  font-family: Inter, sans-serif;
+}

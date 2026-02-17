@@ -1,0 +1,17 @@
+Estou com um problema de deploy no Vercel. Meu projeto é um dashboard em Vite/React. O arquivo principal está em motorista/src/App.jsx, mas o Vercel está se perdendo na estrutura de pastas.
+
+Por favor, realize as seguintes correções:
+
+Verifique se todos os imports dentro de motorista/src/main.jsx e App.jsx estão com as letras maiúsculas/minúsculas idênticas aos nomes dos arquivos (o Vercel usa Linux e diferencia App de app).
+
+No package.json dentro da pasta motorista, verifique se o script de build está configurado corretamente como "vite build".
+
+Crie ou ajuste o arquivo vercel.json na raiz do projeto (dashboard/) com a seguinte configuração para apontar o deploy diretamente para a pasta motorista:
+
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "rootDirectory": "motorista"
+}
+Verifique se há algum erro de linting ou variáveis não utilizadas que possam cancelar o build do Vite no servidor.

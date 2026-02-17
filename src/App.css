@@ -1,0 +1,624 @@
+/* Ícone de motorista limpo - sem fundo, sem borda, sem círculo */
+/* Ícone de motorista limpo - sem fundo, sem borda, sem círculo */
+.moto-fix {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.moto-fix img {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.marker-motorista-limpo {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.marker-motorista-limpo img {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.icon-limpo {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.icon-limpo img {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* ========================================
+   PINOS DE ENTREGA - Formato Gota (Google Maps Style)
+   ======================================== */
+
+/* Wrapper do pino - sem fundo */
+/* ========================================
+   MARCADORES PERSONALIZADOS - Inline HTML
+   ======================================== */
+.custom-pin-wrapper {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* DEPRECATED: Estilos antigos dos pinos (mantidos para compatibilidade mas não usados) */
+.delivery-pin-wrapper {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Container principal do pino */
+.delivery-pin {
+  position: relative;
+  width: 32px;
+  height: 45px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.25));
+}
+
+/* Formato de gota */
+.pin-drop {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  background: var(--pin-color, #2196F3);
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  border: 2px solid white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Círculo branco central para o ícone */
+.pin-circle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(45deg);
+  width: 15px;
+  height: 15px;
+  background: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+/* Ícone SVG dentro do círculo */
+.pin-circle svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+/* Cores específicas por tipo (opcional - já definido por CSS variable) */
+.pin-entrega .pin-drop {
+  background: #2196F3;
+  /* Azul Material Design */
+}
+
+.pin-recolha .pin-drop {
+  background: #FF9800;
+  /* Laranja Material Design */
+}
+
+.pin-outros .pin-drop {
+  background: #9C27B0;
+  /* Lilás Material Design */
+}
+
+.pin-concluido .pin-drop {
+  background: #4CAF50;
+  /* Verde Material Design */
+}
+
+.pin-falha .pin-drop {
+  background: #F44336;
+  /* Vermelho Material Design */
+}
+
+/* Tooltip dos pinos - pequeno e discreto */
+.pin-tooltip {
+  font-size: 11px !important;
+  padding: 4px 8px !important;
+  background: rgba(0, 0, 0, 0.85) !important;
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  white-space: nowrap !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* ========================================
+   ÍCONE DO MOTORISTA - Limpo
+   ======================================== */
+.marker-motorista-limpo {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* ========================================
+   TOOLTIPS E POPUPS
+   ======================================== */
+
+/* Estilos para Tooltips permanentes do Leaflet - Estilo Google Maps */
+.leaflet-tooltip.entrega-tooltip {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border: 2px solid #2563eb !important;
+  border-radius: 8px !important;
+  padding: 4px 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25) !important;
+  color: #1e293b !important;
+  white-space: nowrap !important;
+}
+
+.leaflet-tooltip {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  border-radius: 8px !important;
+  padding: 5px 12px !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #1e293b !important;
+}
+
+/* Ajustar pontinha do tooltip para ficar posicionada corretamente acima do pino */
+.leaflet-tooltip-top:before {
+  border-top-color: rgba(255, 255, 255, 0.98) !important;
+  bottom: -7px !important;
+  left: 50% !important;
+  margin-left: -7px !important;
+}
+
+.leaflet-tooltip-bottom:before {
+  border-bottom-color: rgba(255, 255, 255, 0.98) !important;
+  top: -7px !important;
+  left: 50% !important;
+  margin-left: -7px !important;
+}
+
+/* Estilo do Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  padding: 30px;
+  border-radius: 16px;
+  width: 450px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.form-group input,
+.form-group select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.btn-confirmar {
+  width: 100%;
+  padding: 12px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  margin-top: 10px;
+}
+
+:root {
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --bg-dark: #0f172a;
+  --bg-light: #f8fafc;
+  --text-main: #1e293b;
+  --text-muted: #64748b;
+  --success: #22c55e;
+  --warning: #eab308;
+  --danger: #ef4444;
+  --card-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-light);
+  color: var(--text-main);
+}
+
+.dashboard-container {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 260px;
+  background-color: var(--bg-dark);
+  color: white;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar h2 {
+  font-size: 1.4rem;
+  color: #38bdf8;
+  margin-bottom: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Efeito Glow para botões da sidebar */
+.btn-sidebar-glow {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.btn-sidebar-glow:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.45) !important;
+  border-color: rgba(59, 130, 246, 0.4) !important;
+  transform: translateY(-1.5px);
+}
+
+.btn-sidebar-glow:active {
+  transform: scale(0.95);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.65) !important;
+}
+
+.nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.nav-item {
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: 0.3s;
+  color: #94a3b8;
+  margin-bottom: 8px;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
+  padding: 40px;
+  overflow-y: auto;
+}
+
+header h1 {
+  font-size: 1.8rem;
+  margin: 0;
+}
+
+header p {
+  color: var(--text-muted);
+  margin-top: 5px;
+}
+
+/* Grid de Cards KPIs */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 24px;
+  margin: 32px 0;
+}
+
+.kpi-card {
+  background: white;
+  padding: 24px;
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  border-bottom: 4px solid var(--primary);
+}
+
+.kpi-card h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0;
+  letter-spacing: 0.05em;
+}
+
+.kpi-card .value {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-top: 12px;
+  display: block;
+}
+
+/* Layout do Mapa e Lista */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 24px;
+}
+
+.content-box {
+  background: white;
+  padding: 24px;
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+}
+
+.map-placeholder {
+  width: 100%;
+  height: 450px;
+  background-color: #e2e8f0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed #cbd5e1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Lista de Motoristas */
+.driver-list {
+  list-style: none;
+  padding: 0;
+  margin-top: 16px;
+}
+
+.driver-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.status-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  text-transform: uppercase;
+}
+
+.status-en-route {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-stopped {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.status-alert {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Animação para o Caminhão do João (Movimento Horizontal) */
+@keyframes moverJoao {
+  0% {
+    left: 35%;
+  }
+
+  50% {
+    left: 55%;
+  }
+
+  100% {
+    left: 35%;
+  }
+}
+
+/* Animação para o Caminhão do Ricardo (Movimento Diagonal) */
+@keyframes moverRicardo {
+  0% {
+    top: 55%;
+    left: 65%;
+  }
+
+  50% {
+    top: 65%;
+    left: 75%;
+  }
+
+  100% {
+    top: 55%;
+    left: 65%;
+  }
+}
+
+/* Efeito de pulsar para o Alerta */
+@keyframes pulsarAlerta {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.2);
+    opacity: 0.7;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animar-joao {
+  animation: moverJoao 15s infinite ease-in-out;
+}
+
+.animar-ricardo {
+  animation: moverRicardo 20s infinite ease-in-out;
+}
+
+.animar-alerta {
+  animation: pulsarAlerta 2s infinite ease-in-out;
+}
+
+/* Estilos para o Event Log (Feed/Terminal) */
+.event-log {
+  margin-top: 20px;
+  background: #f8fafc;
+  border-radius: 12px;
+  padding: 15px;
+  border: 1px solid #e2e8f0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.event-item {
+  display: flex;
+  gap: 10px;
+  font-size: 0.85rem;
+  padding: 8px 0;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.event-time {
+  color: var(--text-muted);
+  font-weight: bold;
+  min-width: 60px;
+}
+
+.event-msg {
+  color: #334155;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 5px;
+}
+
+/* Fixed Gestor Badge */
+/* gestor-fixed-badge removido (duplicata removida) */
+
+/* Estilo do botão de refresh no mapa - garantir clicabilidade e visibilidade */
+.map-refresh-button {
+  z-index: 9999 !important;
+  pointer-events: auto !important;
+  cursor: pointer !important;
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: none;
+  box-shadow: 0 6px 18px rgba(2, 6, 23, 0.3);
+}
+
+.action-btn {
+  transition: filter 120ms ease, transform 120ms ease;
+}
+
+.action-btn.green:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.action-btn.red:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+/* Gradient text for DASHBOARD title */
+.dashboard-title {
+  background: linear-gradient(90deg, #1E3A8A 0%, #FFFFFF 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+/* ==========================================================================
+   STATUS DA ENTREGA - REALTIME (Solicitado no Plano Técnico)
+   ========================================================================== */
+.icon-verde img {
+  filter: hue-rotate(90deg) brightness(1.2) !important;
+}
+
+.icon-vermelho img {
+  filter: hue-rotate(300deg) brightness(1.1) !important;
+}
+
+/* Padrão para entrega pendente/azul (opcional, se precisar forçar azul) */
+.icon-azul img {
+  filter: none !important;
+}
+
+.icon-verde img {
+  filter: hue-rotate(90deg) brightness(1.2) !important;
+}
+
+.icon-vermelho img {
+  filter: hue-rotate(300deg) brightness(1.1) !important;
+}
