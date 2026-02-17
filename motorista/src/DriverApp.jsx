@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient';
-import MapaLogistica from '../../src/MapaLogistica';
+import MapComponent from '../../src/MapComponent';
 
 // Safety helper: Santa Catarina bounds per manager request
 const isValidSC = (lat, lng) => lat < -25.0 && lat > -30.0 && lng < -54.0 && lng > -48.0;
@@ -779,7 +779,7 @@ export default function AppMotorista() {
             {/* Map area (mobile-first) */}
             {loggedIn && (
                 <div style={{ marginBottom: '18px' }}>
-                    <MapaLogistica entregas={entregas} mobile={true} />
+                    <MapComponent entregas={entregas} mobile={true} />
                 </div>
             )}
 
