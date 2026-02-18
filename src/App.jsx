@@ -1249,6 +1249,18 @@ function App() {
         return '#10b981'; // verde livre / padrão
     };
 
+    const getContrastText = (hex) => {
+        try {
+            if (!hex) return '#fff';
+            const h = hex.replace('#', '');
+            const r = parseInt(h.substring(0,2),16)/255;
+            const g = parseInt(h.substring(2,4),16)/255;
+            const b = parseInt(h.substring(4,6),16)/255;
+            const lum = 0.2126 * (r<=0.03928 ? r/12.92 : Math.pow((r+0.055)/1.055,2.4)) + 0.7152 * (g<=0.03928 ? g/12.92 : Math.pow((g+0.055)/1.055,2.4)) + 0.0722 * (b<=0.03928 ? b/12.92 : Math.pow((b+0.055)/1.055,2.4));
+            return lum > 0.5 ? '#000000' : '#ffffff';
+        } catch (e) { return '#fff'; }
+    };
+
     const getDriverServiceType = (motoristaId) => {
         try {
             const found = (rotaAtiva || []).find(r => Number(r.motorista_id) === Number(motoristaId) && String(r.status || '').trim().toLowerCase() === 'em_rota');
@@ -2303,17 +2315,22 @@ function App() {
                         </div>
                         {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-                                {entregasEmEspera?.map(p => (
-                                    <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
-                                            <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: '#f1f5f9', color: '#374151' }}>{p.tipo || 'Entrega'}</span>
+                                {entregasEmEspera?.map(p => {
+                                    const tipo = p.tipo || 'Entrega';
+                                    const tipoColor = getColorForType(tipo);
+                                    const contrast = getContrastText(tipoColor);
+                                    return (
+                                        <div key={p.id} style={{ border: `1px solid ${tipoColor}`, padding: '20px', borderRadius: '12px', borderLeft: `6px solid ${tipoColor}`, background: theme.card }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
+                                                <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: tipoColor, color: contrast, fontWeight: 700 }}>{tipo}</span>
+                                            </div>
+                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco}</p>
+                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
+                                            <button onClick={() => excluirPedido(p.id)} style={{ marginTop: '10px', background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
                                         </div>
-                                        <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco}</p>
-                                        <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
-                                        <button onClick={() => excluirPedido(p.id)} style={{ marginTop: '10px', background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
