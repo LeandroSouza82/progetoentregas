@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersControl } from 'react-leaflet';
 import L from 'leaflet';
 import polyline from 'polyline';
 import { supabase } from './supabaseClient';
 
-const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_KEY || '';
+const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
 
 // Safety helper: Santa Catarina bounds (manager requested)
 const isValidSC = (lat, lng) => {
@@ -279,8 +280,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     const mapInner = useMemo(() => {
         try {
-            const mapboxUrl = MAPBOX_TOKEN && MAPBOX_TOKEN.length > 0
-                ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${MAPBOX_TOKEN}`
+            const mapboxUrl = token && token.length > 0
+                ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
                 : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
             // center on motorista Leandro if available
             const leandro = (frota || []).find(m => m && m.nome && String(m.nome).toLowerCase().includes('leandro') && m.lat != null && m.lng != null);
@@ -288,7 +289,18 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
             return (
                 <MapContainer center={initialCenter} zoom={12} style={mapStyle} whenCreated={handleLoad}>
-                    <TileLayer url={mapboxUrl} attribution={MAPBOX_TOKEN ? '© Mapbox © OpenStreetMap' : '© OpenStreetMap contributors'} tileSize={MAPBOX_TOKEN ? 512 : 256} zoomOffset={MAPBOX_TOKEN ? -1 : 0} />
+                    {token ? (
+                        <LayersControl position="topright">
+                            <LayersControl.BaseLayer name="Modo Noturno" checked>
+                                <TileLayer url={`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`} attribution={'© Mapbox © OpenStreetMap'} tileSize={512} zoomOffset={-1} />
+                            </LayersControl.BaseLayer>
+                            <LayersControl.BaseLayer name="Modo Rua">
+                                <TileLayer url={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=${token}`} attribution={'© Mapbox © OpenStreetMap'} tileSize={512} zoomOffset={-1} />
+                            </LayersControl.BaseLayer>
+                        </LayersControl>
+                    ) : (
+                        <TileLayer url={mapboxUrl} attribution={'© OpenStreetMap contributors'} tileSize={256} zoomOffset={0} />
+                    )}
 
                     {/* Frota (drivers) markers */}
                     {frotaMarkers.map(m => {
