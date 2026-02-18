@@ -116,20 +116,28 @@ export async function geocodeMapbox(address, bounds = null) {
         // TOKEN OFICIAL MAPBOX
         const MAPBOX_TOKEN = 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
 
-        // VIEWBOX CIRÚRGICO: Grande Florianópolis COMPLETA + Santo Amaro da Imperatriz
-        // Inclui: Biguaçu, São José, Florianópolis, Palhoça, Santo Amaro da Imperatriz
+        // VIEWBOX RÍGIDO: região operacional estrita (Grande Florianópolis / Biguaçu)
+        // Formato bbox: west,south,east,north
+        // Valores fornecidos pelo time: -48.815, -27.600, -48.450, -27.350
         const defaultBounds = {
-            south: -27.90,  // Expandido para cobrir Santo Amaro da Imperatriz (sul)
-            north: -27.35,  // Limite norte (Biguaçu)
-            west: -48.90,   // Expandido para cobrir Santo Amaro da Imperatriz (oeste)
-            east: -48.35    // Limite leste (Florianópolis/litoral)
+            south: -27.600,
+            north: -27.350,
+            west: -48.815,
+            east: -48.450
         };
 
         const b = bounds || defaultBounds;
         const bbox = `${b.west},${b.south},${b.east},${b.north}`;
 
+        // FORÇAR SUFIXO: garantir que a busca seja em Biguaçu, SC
+        let addressWithCity = address;
+        const citySuffix = 'Biguaçu, SC';
+        if (!/biguaç[uú]/i.test(addressWithCity) && !/\bsc\b/i.test(addressWithCity) && !/santa catarina/i.test(addressWithCity)) {
+            addressWithCity = `${addressWithCity.trim()}, ${citySuffix}`;
+        }
+
         // LIMPEZA RIGOROSA: Remover vírgulas duplas, espaços extras e vírgulas vazias
-        const addressClean = address
+        const addressClean = (addressWithCity || address)
             .replace(/,\s*,+/g, ',')        // Remove vírgulas múltiplas (, , ou , , ,)
             .replace(/\s*,\s*/g, ', ')      // Normaliza espaços ao redor de vírgulas
             .replace(/,\s*$/g, '')          // Remove vírgula final
@@ -140,7 +148,8 @@ export async function geocodeMapbox(address, bounds = null) {
 
         // Mapbox Geocoding API - Centro em Florianópolis para proximity
         const proximity = '-48.54,-27.59'; // Centro de Florianópolis
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
+        // Primeiro: tentar obter endereço com house number (address)
+        let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
             `access_token=${MAPBOX_TOKEN}` +
             `&proximity=${proximity}` +
             `&bbox=${bbox}` +
@@ -166,19 +175,40 @@ export async function geocodeMapbox(address, bounds = null) {
         const data = await response.json();
         console.log('📊 Mapbox Resposta:', data);
 
-        if (!data || !data.features || data.features.length === 0) {
-            console.warn('❌ Mapbox não encontrou resultados');
-            return null;
+        let result = data && data.features && data.features.length > 0 ? data.features[0] : null;
+
+        // Se não encontrou 'address' com número, tente como 'street' (centro da rua)
+        if (!result) {
+            console.warn('❌ Mapbox não encontrou resultados para address, tentando street...');
+            const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
+                `access_token=${MAPBOX_TOKEN}` +
+                `&proximity=${proximity}` +
+                `&bbox=${bbox}` +
+                `&types=street` +
+                `&language=pt` +
+                `&limit=1`;
+
+            const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
+            if (resp2 && resp2.ok) {
+                const data2 = await resp2.json();
+                if (data2 && data2.features && data2.features.length > 0) {
+                    result = data2.features[0];
+                }
+            }
         }
 
-        const result = data.features[0];
+        if (!result) {
+            console.warn('❌ Mapbox não encontrou resultados mesmo tentando street');
+            return null;
+        }
         const coords = result.center; // [lng, lat] no Mapbox
         const lng = coords[0];
         const lat = coords[1];
 
-        // Validação SC
-        if (lat < -25.0 || lat > -30.0 || lng > -48.0 || lng < -54.0) {
-            console.warn('⚠️ Mapbox retornou coordenadas fora de SC:', { lat, lng });
+        // Validação: garantir que o ponto esteja DENTRO do bbox operacional
+        const inBounds = (lat <= b.north && lat >= b.south && lng >= b.west && lng <= b.east);
+        if (!inBounds) {
+            console.warn('⚠️ Mapbox retornou coordenadas fora do bbox operacional:', { lat, lng, bbox });
             return null;
         }
 
@@ -206,12 +236,12 @@ export async function searchMapbox(query, bounds = null) {
         // TOKEN OFICIAL MAPBOX
         const MAPBOX_TOKEN = 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
 
-        // VIEWBOX: Grande Florianópolis + Santo Amaro da Imperatriz
+        // VIEWBOX RÍGIDO: região operacional estrita (Grande Florianópolis / Biguaçu)
         const defaultBounds = {
-            south: -27.90,
-            north: -27.35,
-            west: -48.90,
-            east: -48.35
+            south: -27.600,
+            north: -27.350,
+            west: -48.815,
+            east: -48.450
         };
 
         const b = bounds || defaultBounds;
@@ -219,18 +249,26 @@ export async function searchMapbox(query, bounds = null) {
         const proximity = '-48.54,-27.59'; // Centro de Florianópolis
 
         // Limpeza do query
-        const queryClean = query
+        // FORÇAR SUFIXO: garantir que as sugestões sejam dentro de Biguaçu, SC
+        let queryWithCity = query;
+        const citySuffix = 'Biguaçu, SC';
+        if (!/biguaç[uú]/i.test(queryWithCity) && !/\bsc\b/i.test(queryWithCity) && !/santa catarina/i.test(queryWithCity)) {
+            queryWithCity = `${queryWithCity.trim()}, ${citySuffix}`;
+        }
+
+        const queryClean = (queryWithCity || query)
             .replace(/,\s*,+/g, ',')
             .replace(/\s*,\s*/g, ', ')
             .replace(/,\s*$/g, '')
             .replace(/\s+/g, ' ')
             .trim();
 
+        // Permitir street também para garantir centro da via quando número não existir
         const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(queryClean)}.json?` +
             `access_token=${MAPBOX_TOKEN}` +
             `&proximity=${proximity}` +
             `&bbox=${bbox}` +
-            `&types=address,poi` +
+            `&types=address,street,poi` +
             `&language=pt` +
             `&limit=10`;
 

@@ -3,6 +3,7 @@ import { useRef, useState, useEffect } from 'react';
 import supabase, { subscribeToTable } from './supabaseClient';
 import MapaLogistica from './MapaLogistica';
 import { SearchBox } from '@mapbox/search-js-react';
+import { geocodeMapbox } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
@@ -418,7 +419,7 @@ function App() {
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
 
     // Quando o resultado do SearchBox do Mapbox for selecionado, atualiza o formulário
-    const handleAddressRetrieve = (result) => {
+    const handleAddressRetrieve = async (result) => {
         try {
             const features = result?.features || result?.result?.features || result?.response?.features || [];
             const feat = Array.isArray(features) && features.length > 0 ? features[0] : null;
@@ -428,11 +429,39 @@ function App() {
                 setEnderecoEntrega(text);
                 setEnderecoFromHistory(false);
             }
-            if (coords && coords.length >= 2) {
+
+            // BBOX operacional rígido (garante que o ponto não escape)
+            const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
+
+            const coordsValid = (c) => {
+                if (!c || c.length < 2) return false;
+                const lng = Number(c[0]);
+                const lat = Number(c[1]);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+                return lat <= bbox.north && lat >= bbox.south && lng >= bbox.west && lng <= bbox.east;
+            };
+
+            if (coords && coordsValid(coords)) {
                 const lng = Number(coords[0]);
                 const lat = Number(coords[1]);
-                if (Number.isFinite(lat) && Number.isFinite(lng)) setEnderecoCoords({ lat, lng });
+                setEnderecoCoords({ lat, lng });
+            } else {
+                // Fallback seguro: forçar geocoding interno (appends Biguaçu, SC e aplica bbox)
+                try {
+                    const attempt = await geocodeMapbox(text || enderecoEntrega || String(result?.query || ''), bbox);
+                    if (attempt && attempt.lat != null && attempt.lng != null) {
+                        setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
+                        if (!text && attempt.display_name) setEnderecoEntrega(attempt.display_name);
+                    } else {
+                        // sem resultado válido: limpar coords
+                        setEnderecoCoords(null);
+                    }
+                } catch (e) {
+                    console.warn('handleAddressRetrieve geocodeMapbox fallback failed', e);
+                    setEnderecoCoords(null);
+                }
             }
+
             // limpa previsões/histórico temporário
             try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
         } catch (e) { console.warn('handleAddressRetrieve', e); }
@@ -2193,19 +2222,17 @@ function App() {
                                                             // Keep history accepted but without coords
                                                             setEnderecoCoords(null);
                                                             try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
-                                                        } else if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.Geocoder) {
+                                                        } else {
+                                                            // Tentar geocoding interno (Mapbox + bbox) como fallback
                                                             try {
-                                                                const geocoder = new window.google.maps.Geocoder();
-                                                                const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
-                                                                if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
-                                                                    const loc = geo.results[0].geometry.location;
-                                                                    setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                                                const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
+                                                                const attempt = await geocodeMapbox(it.endereco || String(it.address || ''), bbox);
+                                                                if (attempt && attempt.lat != null && attempt.lng != null) {
+                                                                    setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
                                                                 } else {
                                                                     setEnderecoCoords(null);
                                                                 }
-                                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
-                                                        } else {
-                                                            setEnderecoCoords(null);
+                                                            } catch (e) { console.warn('historico onClick geocode failed (mapbox fallback)', e); setEnderecoCoords(null); }
                                                         }
                                                     } else {
                                                         setEnderecoCoords(null);
