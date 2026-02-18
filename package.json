@@ -14,7 +14,7 @@
     "@emotion/styled": "^11.14.1",
     "@mapbox/polyline": "^1.2.1",
     "@mui/material": "^7.3.7",
-    "@supabase/supabase-js": "^2.89.0",
+    "@supabase/supabase-js": "^2.97.0",
     "@vis.gl/react-google-maps": "^1.7.1",
     "firebase": "^11.0.0",
     "jspdf": "^3.0.4",
