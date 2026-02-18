@@ -333,10 +333,24 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     {token ? (
                         <LayersControl position="topright">
                             <LayersControl.BaseLayer name="Modo Noturno" checked>
-                                <TileLayer url={`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`} attribution={'© Mapbox © OpenStreetMap'} tileSize={512} zoomOffset={-1} />
+                                <TileLayer
+                                    url={`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`}
+                                    attribution={'© Mapbox'}
+                                    tileSize={512}
+                                    zoomOffset={-1}
+                                    maxZoom={20}
+                                />
                             </LayersControl.BaseLayer>
                             <LayersControl.BaseLayer name="Modo Rua">
-                                <TileLayer url={`https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/{z}/{x}/{y}?access_token=${token}`} attribution={'© Mapbox © OpenStreetMap'} tileSize={512} zoomOffset={-1} />
+                                <TileLayer
+                                    url={`https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/tiles/{z}/{x}/{y}?access_token=${token}`}
+                                    attribution={'© Mapbox'}
+                                    tileSize={512}
+                                    zoomOffset={-1}
+                                    maxZoom={20}
+                                    detectRetina={true}
+                                    opacity={1}
+                                />
                             </LayersControl.BaseLayer>
                         </LayersControl>
                     ) : (
@@ -421,7 +435,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         <div style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
             {mapInner}
             <button onClick={handleCenterClick} title="Minha localização" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1500, background: '#ffffffcc', border: 'none', padding: 8, borderRadius: 8, cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M17.7 6.3l1.4-1.4M4.9 19.1l1.4-1.4" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M17.7 6.3l1.4-1.4M4.9 19.1l1.4-1.4" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
         </div>
     );
