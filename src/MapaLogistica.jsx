@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersControl, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import polyline from 'polyline';
 import { supabase } from './supabaseClient';
@@ -23,6 +23,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // cache último ângulo de cada motorista (id -> angulo)
     const lastAnglesRef = useRef(new Map());
     const [dbEntregas, setDbEntregas] = useState([]);
+    const [gestorPos, setGestorPos] = useState(null);
 
     // build marker lists
     // Memoize markers to avoid re-computation each render
@@ -119,6 +120,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // Track last known markers to avoid refitting on every render
     const lastPointsKeyRef = useRef('');
     const hasInitializedBoundsRef = useRef(false);
+    const hasAutoCenteredRef = useRef(false);
     useEffect(() => {
         try {
             // APENAS ajustar bounds na primeira renderização, nunca mais (evita re-centralização quando motoristas piscam)
@@ -175,6 +177,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             iconSize: [50, 50],
             iconAnchor: [25, 25]
         });
+    }
+
+    function getGestorIcon() {
+        const html = '<div style="width:22px;height:22px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.4);"></div>';
+        return L.divIcon({ html, className: 'gestor-pos-icon', iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -12] });
     }
 
     // Decode encoded polyline or parse JSON array (uses polyline lib)
@@ -278,6 +285,38 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
     }, [polylinesByMotorista, frota]);
 
+    // Geolocation helper: locate user and set marker
+    function Geolocate() {
+        const map = useMapEvents({
+            locationfound(e) {
+                try {
+                    const lat = Number(e.latlng.lat);
+                    const lng = Number(e.latlng.lng);
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                        setGestorPos([lat, lng]);
+                        if (!hasAutoCenteredRef.current) {
+                            try { map.flyTo(e.latlng, 15); } catch (err) { }
+                            hasAutoCenteredRef.current = true;
+                        }
+                    }
+                } catch (err) { /* ignore */ }
+            },
+            locationerror() {
+                // user denied or unavailable — fallback handled by initial center
+            }
+        });
+
+        useEffect(() => {
+            try {
+                if (!map) return;
+                // request location once on mount (will only auto-center once)
+                if (!hasAutoCenteredRef.current) map.locate({ setView: false, maxZoom: 15 });
+            } catch (e) { /* ignore */ }
+        }, [map]);
+
+        return null;
+    }
+
     const mapInner = useMemo(() => {
         try {
             const mapboxUrl = token && token.length > 0
@@ -289,6 +328,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
             return (
                 <MapContainer center={initialCenter} zoom={12} style={mapStyle} whenCreated={handleLoad}>
+                    {/* Geolocation: locate user and set marker */}
+                    <Geolocate />
                     {token ? (
                         <LayersControl position="topright">
                             <LayersControl.BaseLayer name="Modo Noturno" checked>
@@ -348,6 +389,12 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             <Polyline key={`poly-${idx}-${dbEntregas.length}`} positions={coords} pathOptions={{ color: '#2563eb', weight: 7, opacity: 1, lineJoin: 'round' }} />
                         ) : null
                     ))}
+                    {/* Gestor (you) marker */}
+                    {gestorPos && (
+                        <Marker position={gestorPos} icon={getGestorIcon()}>
+                            <Popup>Você está aqui</Popup>
+                        </Marker>
+                    )}
                 </MapContainer>
             );
         } catch (e) {
@@ -356,9 +403,26 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         }
     }, [mapStyle, computedCenter, entregaMarkers, frotaMarkers, polylinesByMotorista, dbEntregas]);
 
+    const handleCenterClick = () => {
+        try {
+            const map = mapRef.current;
+            if (!map) return;
+            if (gestorPos && Array.isArray(gestorPos)) {
+                map.flyTo(gestorPos, 15);
+                hasAutoCenteredRef.current = true;
+            } else {
+                // try to re-locate and center
+                try { map.locate({ setView: true, maxZoom: 15 }); } catch (e) { }
+            }
+        } catch (e) { /* ignore */ }
+    };
+
     return (
-        <div style={{ width: '100%', height: mobile ? 250 : height }}>
+        <div style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
             {mapInner}
+            <button onClick={handleCenterClick} title="Minha localização" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1500, background: '#ffffffcc', border: 'none', padding: 8, borderRadius: 8, cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M17.7 6.3l1.4-1.4M4.9 19.1l1.4-1.4" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
         </div>
     );
 }
