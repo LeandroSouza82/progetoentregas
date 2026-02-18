@@ -115,3 +115,16 @@ button:focus-visible {
     transform: rotate(360deg);
   }
 }
+
+/* Mapbox SearchBox input styling to match our form fields */
+.v10-mapbox-search-input {
+  width: 100% !important;
+  padding: 15px !important;
+  border-radius: 8px !important;
+  border: 1px solid #cbd5e1 !important;
+  outline: none !important;
+  font-size: 14px !important;
+  background: #ffffff !important;
+  color: #000000 !important;
+  box-sizing: border-box !important;
+}

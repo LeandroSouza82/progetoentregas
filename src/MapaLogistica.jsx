@@ -16,7 +16,7 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -24,6 +24,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     const lastAnglesRef = useRef(new Map());
     const [dbEntregas, setDbEntregas] = useState([]);
     const [gestorPos, setGestorPos] = useState(null);
+    const [focusMarker, setFocusMarker] = useState(null);
 
     // build marker lists
     // Memoize markers to avoid re-computation each render
@@ -103,6 +104,9 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
     };
 
+    // Quando `focusCoords` externo mudar, faz flyTo e marca temporariamente
+    // (o App passa `enderecoCoords` como prop para solicitar o foco)
+
     const mapStyle = { width: '100%', height: mobile ? 250 : height };
 
     // Determine safe center: prefer fleet first, then entregas, fallback to Florianópolis
@@ -122,6 +126,19 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     const hasInitializedBoundsRef = useRef(false);
     const hasAutoCenteredRef = useRef(false);
     useEffect(() => {
+        try {
+            if (focusCoords && focusCoords.lat != null && focusCoords.lng != null && mapRef.current && typeof mapRef.current.flyTo === 'function') {
+                try {
+                    const lat = Number(focusCoords.lat);
+                    const lng = Number(focusCoords.lng);
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                        mapRef.current.flyTo([lat, lng], 16);
+                        setFocusMarker({ lat, lng });
+                        setTimeout(() => setFocusMarker(null), 8000);
+                    }
+                } catch (e) { /* ignore */ }
+            }
+        } catch (e) { /* ignore */ }
         try {
             // APENAS ajustar bounds na primeira renderização, nunca mais (evita re-centralização quando motoristas piscam)
             if (hasInitializedBoundsRef.current) return;
@@ -330,6 +347,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 <MapContainer center={initialCenter} zoom={12} style={mapStyle} whenCreated={handleLoad}>
                     {/* Geolocation: locate user and set marker */}
                     <Geolocate />
+                    {/* SearchBox was moved to the Nova Carga form; no floating search here */}
                     {token ? (
                         <LayersControl position="topright">
                             <LayersControl.BaseLayer name="Modo Noturno" checked>
@@ -407,6 +425,12 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     {gestorPos && (
                         <Marker position={gestorPos} icon={getGestorIcon()}>
                             <Popup>Você está aqui</Popup>
+                        </Marker>
+                    )}
+                    {/* Marcador temporário solicitado pelo formulário de Nova Carga */}
+                    {focusMarker && (
+                        <Marker position={[focusMarker.lat, focusMarker.lng]} icon={createPinIcon('search', 'selected', null)}>
+                            <Popup>Destino selecionado</Popup>
                         </Marker>
                     )}
                 </MapContainer>

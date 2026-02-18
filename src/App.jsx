@@ -2,6 +2,7 @@ import React from 'react';
 import { useRef, useState, useEffect } from 'react';
 import supabase, { subscribeToTable } from './supabaseClient';
 import MapaLogistica from './MapaLogistica';
+import { SearchBox } from '@mapbox/search-js-react';
 import ErrorBoundary from './ErrorBoundary.jsx';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
@@ -532,6 +533,27 @@ function App() {
     const placesServiceRef = useRef(null);
     const predictionTimerRef = useRef(null);
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
+
+    // Quando o resultado do SearchBox do Mapbox for selecionado, atualiza o formulário
+    const handleAddressRetrieve = (result) => {
+        try {
+            const features = result?.features || result?.result?.features || result?.response?.features || [];
+            const feat = Array.isArray(features) && features.length > 0 ? features[0] : null;
+            const coords = feat && (feat.geometry?.coordinates || feat.center);
+            const text = feat?.place_name || feat?.properties?.label || feat?.text || feat?.description || '';
+            if (text) {
+                setEnderecoEntrega(text);
+                setEnderecoFromHistory(false);
+            }
+            if (coords && coords.length >= 2) {
+                const lng = Number(coords[0]);
+                const lat = Number(coords[1]);
+                if (Number.isFinite(lat) && Number.isFinite(lng)) setEnderecoCoords({ lat, lng });
+            }
+            // limpa previsões/histórico temporário
+            try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
+        } catch (e) { console.warn('handleAddressRetrieve', e); }
+    };
 
     // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
     const [recentList, setRecentList] = useState([]);
@@ -2108,7 +2130,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} />
+                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} focusCoords={enderecoCoords} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2172,39 +2194,19 @@ function App() {
                                         <option>Outros</option>
                                     </select>
                                 </label>
-                                <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
+                                <input name="cliente" placeholder="Nome do Cliente" style={{ ...inputStyle, width: '95% !important', boxSizing: 'border-box' }} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
                                 <div style={{ position: 'relative' }}>
-                                    <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
-                                        try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
-                                        try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
-                                    }} />
-
-                                    {/* Suggestions dropdown: history first, then Google predictions */}
-                                    {((historySuggestions && historySuggestions.length > 0) || (predictions && predictions.length > 0)) && (
-                                        <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
-                                            {historySuggestions?.map((h, idx) => (
-                                                <div key={'h-' + idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                    <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
-                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
-                                                </div>
-                                            ))}
-                                            {predictions?.map((p, idx) => (
-                                                <div key={'p-' + idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                    <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
-                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {/* If Places is unavailable, show a small hint and keep the input usable for manual paste */}
-                                    {(googleQuotaExceeded || !predictionServiceRef.current) && (
-                                        <div style={{ marginTop: '8px', color: '#f8e9c2', fontSize: '12px' }}>
-                                            {googleQuotaExceeded ? 'Busca de endereços via Google indisponível hoje — cole o endereço manualmente ou escolha do Histórico.' : 'Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.'}
-                                        </div>
-                                    )}
+                                    <div style={{ width: '93% !important', boxSizing: 'border-box' }}>
+                                        <SearchBox
+                                            accessToken={import.meta.env.VITE_MAPBOX_TOKEN || ''}
+                                            options={{ language: 'pt', country: 'BR' }}
+                                            onRetrieve={handleAddressRetrieve}
+                                            placeholder="Endereço de Entrega"
+                                            inputProps={{ className: 'v10-mapbox-search-input' }}
+                                        />
+                                    </div>
                                 </div>
-                                <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
+                                <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical', width: '95% !important', boxSizing: 'border-box' }} />
                                 <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
                             </form>
                         </div>
