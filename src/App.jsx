@@ -19,7 +19,8 @@ function numberedIconUrl(number) {
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-const motoristaIconUrl = 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png';
+// Use local moto image instead of Google marker
+const motoristaIconUrl = '/moto.png';
 
 function motoristaIconUrlFor(heading = 0, color = '#2563eb') {
     // simple truck / arrow SVG rotated by `heading` degrees around center
@@ -134,41 +135,31 @@ const otimizarRota = (pontoPartida, listaEntregas) => {
 // Otimiza rota usando Google Distance Matrix API + heuristic (nearest neighbor + 2-opt) quando disponível
 // Retorna a lista de entregas reordenada conforme otimização de menor distância
 async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = null) {
-    // Filtrar apenas entregas ativas com status 'pendente' (sanitizado)
+    // Renamed: agora usa apenas heurística local (nearest neighbor) — sem dependência do Google
     const remaining = (listaEntregas || []).filter(p => String(p.status || '').trim().toLowerCase() === 'pendente' || String(p.status || '').trim().toLowerCase() === 'em_rota');
     if (!remaining || remaining.length === 0) return [];
-
-    // Config: limite de entregas por ciclo antes de retornar à sede
-    const ROUTE_CYCLE_LIMIT = Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10);
 
     // Determinar origem dinâmica: prefere lat/lng do motorista atual (se fornecido) -> última entrega concluída -> pontoPartida (empresa)
     let originLatLng = null;
     try {
         if (motoristaId != null) {
-            // tentar buscar lat/lng atual do motorista diretamente (estado real-time)
             try {
                 const { data: mdata } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId);
                 const m = (mdata && mdata[0]) ? mdata[0] : null;
                 if (m && typeof m.esta_online !== 'undefined' && m.esta_online !== true) {
-                    // driver not online — abort optimization per regra de ouro
                     return remaining;
                 }
-                if (m && m.lat != null && m.lng != null) {
-                    originLatLng = { lat: Number(m.lat), lng: Number(m.lng) };
-                }
+                if (m && m.lat != null && m.lng != null) originLatLng = { lat: Number(m.lat), lng: Number(m.lng) };
             } catch (e) { /* fallback below */ }
             if (!originLatLng) {
                 const { data: lastDone } = await supabase.from('entregas').select('lat,lng').eq('motorista_id', motoristaId).eq('status', 'concluido').order('id', { ascending: false });
-                if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) {
-                    originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
-                }
+                if (lastDone && lastDone.length > 0 && lastDone[0].lat != null && lastDone[0].lng != null) originLatLng = { lat: Number(lastDone[0].lat), lng: Number(lastDone[0].lng) };
             }
         }
     } catch (e) {
-        console.warn('otimizarRotaComGoogle: falha ao buscar última entrega concluída ou estado do motorista', e);
+        console.warn('otimizarRotaComGoogle (fallback): erro obtendo origem', e);
     }
 
-    // Se não determinamos origin a partir do motorista, derive de pontoPartida (empresa)
     if (!originLatLng) {
         if (pontoPartida && typeof pontoPartida === 'object' && 'lat' in pontoPartida && 'lng' in pontoPartida) {
             originLatLng = { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) };
@@ -179,96 +170,10 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
         }
     }
 
-    // Distance Matrix removed: we now rely exclusively on DirectionsService.optimizeWaypoints for routing to avoid additional billing and permissions issues.
-    // Nearest-neighbor and 2-opt helpers were removed to ensure we don't accidentally call DistanceMatrix.
+    // Heurística local (nearest neighbor)
+    const ordered = otimizarRota(originLatLng, remaining);
 
-    // If DistanceMatrix available, compute matrix: origins=[origin] + waypoints, destinations=waypoints+ [origin]
-    const waypoints = remaining.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
-
-    // Use DirectionsService.optimizeWaypoints exclusively (no DistanceMatrix)
-    // If Google is blocked for the day, do not attempt DirectionsService — fall back to local heuristic
-    if (googleQuotaExceededRef.current) {
-        try { /* silent fallback when quota exceeded */ } catch (err) { }
-        const localOrder = otimizarRota(originLatLng, remaining);
-        return localOrder;
-    }
-
-    // Avoid calling Google if another routing is in progress — return heuristic fallback
-    if (routingInProgressRef.current) {
-        try { /* suppressed routing-in-progress log to avoid noise */ } catch (e) { }
-        const localOrder = otimizarRota(originLatLng, remaining);
-        return localOrder;
-    }
-
-    let orderedIndices = null;
-    try {
-        routingInProgressRef.current = true;
-        if (typeof window === 'undefined' || !window.google || !window.google.maps || !window.google.maps.DirectionsService) throw new Error('No DirectionsService');
-        const directionsService = new window.google.maps.DirectionsService();
-        const dsWaypoints = waypoints.map(p => ({ location: p, stopover: true }));
-        // Destination MUST be the company base (pontoPartida param) or mapCenter fallback
-        const baseCoord = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : (mapCenterState || DEFAULT_MAP_CENTER);
-        const request = { origin: originLatLng, destination: baseCoord, travelMode: window.google.maps.TravelMode.DRIVING, waypoints: dsWaypoints, optimizeWaypoints: true };
-        const res = await new Promise((resolve, reject) => directionsService.route(request, (r, s) => s === 'OK' ? resolve(r) : reject(s)));
-        const wpOrder = res.routes?.[0]?.waypoint_order || null;
-        if (Array.isArray(wpOrder) && wpOrder.length === waypoints.length) orderedIndices = wpOrder;
-        // Extract KM/time and set UI immediately from legs
-        try {
-            const legs = res.routes?.[0]?.legs || [];
-            const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
-            const secs = legs.reduce((s, l) => s + ((l && l.duration && typeof l.duration.value === 'number') ? l.duration.value : 0), 0);
-            if (meters > 0) try { setEstimatedDistanceKm(Number((meters / 1000).toFixed(1))); } catch (e) { }
-            if (secs > 0) try { setEstimatedTimeSec(secs); setEstimatedTimeText(formatDuration(secs)); } catch (e) { }
-            // cache preview result for small window
-            try {
-                const hash = JSON.stringify((remaining || []).map(r => `${r.id || ''}:${r.lat || ''},${r.lng || ''}`));
-                lastRouteCacheRef.current.set('preview|' + hash, { optimizedOrder: Array.isArray(wpOrder) ? wpOrder : null, drawResult: { meters, secs }, timestamp: Date.now() });
-            } catch (e) { /* ignore cache issues */ }
-        } catch (e) { /* ignore */ }
-    } catch (e) {
-        const es = String(e || '');
-        if (es.includes && es.includes('OVER_QUERY_LIMIT')) {
-            // Google quota reached — mark and fallback silently
-            markGoogleQuotaExceeded('Directions');
-        } else if (es.includes && (es.includes('REQUEST_DENIED') || es.includes('API_NOT_ALLOWED'))) {
-            // API key not authorized for Directions
-            markGoogleQuotaExceeded('Directions', '⚠️ Chave do Google não autorizada para Directions. Verifique as restrições de API no Google Cloud Console. Usando histórico/heurística local.');
-        } else {
-            try { console.warn('otimizarRotaComGoogle: DirectionsService.optimizeWaypoints failed', e); } catch (err) { }
-        }
-        // last resort: local nearest neighbor by coord distance
-        const localOrder = otimizarRota(originLatLng, remaining);
-        try { for (let i = 0; i < localOrder.length; i++) { const pid = localOrder[i].id; if (!pid) continue; await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid); } } catch (e2) { }
-        return localOrder;
-    } finally {
-        routingInProgressRef.current = false;
-    }
-
-
-    // Apply cycle rule: if remaining count > ROUTE_CYCLE_LIMIT, plan a return to HQ (pontoPartida) after first chunk
-    const includeHQ = remaining.length > ROUTE_CYCLE_LIMIT;
-
-    // Build ordered list
-    const ordered = orderedIndices.map(idx => remaining[idx]);
-
-    // If include HQ, we will limit first chunk and set HQ insertion for map only (we persist ordem_logistica sequentially)
-    if (includeHQ) {
-        // Persist ordem_logistica with HQ virtual waypoint inserted after the first chunk
-        try {
-            if (motoristaId != null) {
-                for (let i = 0; i < ordered.length; i++) {
-                    const pedido = ordered[i];
-                    const pid = pedido.id;
-                    if (!pid) continue;
-                    const ordem = i + 1;
-                    await supabase.from('entregas').update({ ordem_logistica: Number(ordem) }).eq('id', pid);
-                }
-            }
-        } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_logistica com HQ', e); }
-        return ordered; // Map drawing logic will insert HQ waypoint visually
-    }
-
-    // Persist ordem_logistica when normal (only if motoristaId is provided - preview mode should NOT persist)
+    // Persist ordem_logistica se solicitado (motoristaId fornecido)
     try {
         if (motoristaId != null) {
             for (let i = 0; i < ordered.length; i++) {
@@ -278,7 +183,8 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
                 await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
             }
         }
-    } catch (e) { console.warn('otimizarRotaComGoogle: falha ao persistir ordem_logistica', e); }
+    } catch (e) { console.warn('otimizarRotaComGoogle (persist): falha ao persistir ordem_logistica', e); }
+
     return ordered;
 }
 
@@ -363,35 +269,10 @@ function App() {
     const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
-    // Google quota guard: quando o Google retornar OVER_QUERY_LIMIT, bloqueamos chamadas automáticas por 1 dia
-    const [googleQuotaExceeded, setGoogleQuotaExceeded] = useState(false);
+    // Google-related quota/banners disabled — keep a ref stub for legacy checks
     const googleQuotaExceededRef = useRef(false);
-    const [quotaBannerMessage, setQuotaBannerMessage] = useState('⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.');
-
-    // Inicializa a partir do localStorage (persistência por dia)
-    useEffect(() => {
-        try {
-            const k = localStorage.getItem('googleQuotaExceededAt');
-            const today = new Date().toISOString().slice(0, 10);
-            if (k === today) { setGoogleQuotaExceeded(true); googleQuotaExceededRef.current = true; }
-            else { localStorage.removeItem('googleQuotaExceededAt'); }
-        } catch (e) { /* ignore */ }
-    }, []);
-
-    // Marca o bloqueio de quota / autorização de forma idempotente
     function markGoogleQuotaExceeded(source, customMessage) {
-        try {
-            if (googleQuotaExceededRef.current) return;
-            const today = new Date().toISOString().slice(0, 10);
-            localStorage.setItem('googleQuotaExceededAt', today);
-            setGoogleQuotaExceeded(true);
-            googleQuotaExceededRef.current = true;
-            // Allow custom message for different failure modes
-            const defaultMsg = '⚠️ Limite diário do Google atingido para sua segurança. O sistema voltará a calcular rotas e buscar endereços automaticamente amanhã.';
-            const msg = customMessage || defaultMsg;
-            setQuotaBannerMessage(msg);
-            try { console.info('Google blocked:', source); } catch (e) { }
-        } catch (e) { /* ignore */ }
+        try { googleQuotaExceededRef.current = true; } catch (e) { }
     }
 
     // Componente isolado para a tela de aprovação do motorista
@@ -466,6 +347,8 @@ function App() {
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
     const [estimatedTimeText, setEstimatedTimeText] = useState(null);
     const [distanceCalculating, setDistanceCalculating] = useState(false);
+    const queueCalcTimerRef = useRef(null);
+    const lastQueueHashRef = useRef('');
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
     const [logsHistory, setLogsHistory] = useState([]);
     const [showLogsPopover, setShowLogsPopover] = useState(false);
@@ -554,6 +437,71 @@ function App() {
             try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
         } catch (e) { console.warn('handleAddressRetrieve', e); }
     };
+
+    // Calculate route distance & duration via Mapbox Directions API when queue changes
+    useEffect(() => {
+        try {
+            if (!Array.isArray(entregasEmEspera)) return;
+            // build hash of coordinates/order to detect real changes
+            const coordsKey = (entregasEmEspera || []).map(p => `${p.lat || ''},${p.lng || ''}`).join('|');
+            if (!coordsKey || coordsKey.length === 0) {
+                // nothing to calculate
+                try { setEstimatedDistanceKm(null); setEstimatedTimeSec(null); } catch (e) { }
+                return;
+            }
+            if (coordsKey === lastQueueHashRef.current) return; // no change
+            lastQueueHashRef.current = coordsKey;
+            // debounce small changes
+            try { if (queueCalcTimerRef.current) clearTimeout(queueCalcTimerRef.current); } catch (e) { }
+            queueCalcTimerRef.current = setTimeout(async () => {
+                try {
+                    setDistanceCalculating(true);
+                    const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
+                    const pts = (entregasEmEspera || []).filter(p => p && p.lat != null && p.lng != null);
+                    if (!pts || pts.length < 2) {
+                        setEstimatedDistanceKm(null);
+                        setEstimatedTimeSec(null);
+                        setDistanceCalculating(false);
+                        return;
+                    }
+                    if (token && token.length > 10) {
+                        const coords = pts.map(p => `${Number(p.lng)},${Number(p.lat)}`).join(';');
+                        const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=false&geometries=polyline&access_token=${token}`;
+                        try {
+                            const resp = await fetch(url);
+                            if (!resp.ok) throw new Error('Mapbox Directions failed');
+                            const data = await resp.json();
+                            const route = data && data.routes && data.routes[0];
+                            if (route) {
+                                const meters = route.distance || 0;
+                                const secs = route.duration || 0;
+                                if (meters > 0) try { setEstimatedDistanceKm(Number((meters / 1000).toFixed(1))); } catch (e) { }
+                                if (secs > 0) try { setEstimatedTimeSec(Math.round(secs)); } catch (e) { }
+                            } else {
+                                // fallback to haversine estimate
+                                const km = computeRouteDistanceKm(null, pts, null);
+                                if (km > 0) try { setEstimatedDistanceKm(Number(km.toFixed(1))); setEstimatedTimeSec(Math.round((km / 40) * 3600)); } catch (e) { }
+                            }
+                        } catch (e) {
+                            console.warn('Mapbox directions error', e);
+                            const km = computeRouteDistanceKm(null, pts, null);
+                            if (km > 0) try { setEstimatedDistanceKm(Number(km.toFixed(1))); setEstimatedTimeSec(Math.round((km / 40) * 3600)); } catch (e) { }
+                        }
+                    } else {
+                        // no token: fallback to haversine + rough time estimate (40 km/h)
+                        const km = computeRouteDistanceKm(null, pts, null);
+                        if (km > 0) try { setEstimatedDistanceKm(Number(km.toFixed(1))); setEstimatedTimeSec(Math.round((km / 40) * 3600)); } catch (e) { }
+                    }
+                } catch (e) { console.warn('queue calc failed', e); }
+                try { setDistanceCalculating(false); } catch (e) { }
+            }, 350);
+        } catch (e) { console.warn('useEffect queue calc error', e); }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [JSON.stringify(entregasEmEspera)]);
+    // cleanup on unmount
+    useEffect(() => {
+        return () => { try { if (queueCalcTimerRef.current) clearTimeout(queueCalcTimerRef.current); } catch (e) { } };
+    }, []);
 
     // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
     const [recentList, setRecentList] = useState([]);
@@ -1253,10 +1201,10 @@ function App() {
         try {
             if (!hex) return '#fff';
             const h = hex.replace('#', '');
-            const r = parseInt(h.substring(0,2),16)/255;
-            const g = parseInt(h.substring(2,4),16)/255;
-            const b = parseInt(h.substring(4,6),16)/255;
-            const lum = 0.2126 * (r<=0.03928 ? r/12.92 : Math.pow((r+0.055)/1.055,2.4)) + 0.7152 * (g<=0.03928 ? g/12.92 : Math.pow((g+0.055)/1.055,2.4)) + 0.0722 * (b<=0.03928 ? b/12.92 : Math.pow((b+0.055)/1.055,2.4));
+            const r = parseInt(h.substring(0, 2), 16) / 255;
+            const g = parseInt(h.substring(2, 4), 16) / 255;
+            const b = parseInt(h.substring(4, 6), 16) / 255;
+            const lum = 0.2126 * (r <= 0.03928 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4)) + 0.7152 * (g <= 0.03928 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4)) + 0.0722 * (b <= 0.03928 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4));
             return lum > 0.5 ? '#000000' : '#ffffff';
         } catch (e) { return '#fff'; }
     };
@@ -2110,18 +2058,14 @@ function App() {
                 </div>
             </header>
 
-            {googleQuotaExceeded && (
-                <div style={{ position: 'fixed', top: 70, left: 0, right: 0, zIndex: 1299, background: '#fbbf24', color: '#0f172a', display: 'flex', justifyContent: 'center', padding: '10px 0', fontWeight: 700 }}>
-                    <div style={{ width: '100%', maxWidth: '1450px', padding: '0 20px', boxSizing: 'border-box' }}>{quotaBannerMessage}</div>
-                </div>
-            )}
+            {/* Google quota banner removed (project uses Mapbox/Leaflet) */}
 
             {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
 
             {/* 2. ÁREA DE CONTEÚDO */}
 
 
-            <main style={{ maxWidth: '1450px', width: '95%', margin: googleQuotaExceeded ? '190px auto 0' : '140px auto 0', padding: '0 20px' }}>
+            <main style={{ maxWidth: '1450px', width: '95%', margin: '140px auto 0', padding: '0 20px' }}>
 
 
                 {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}

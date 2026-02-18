@@ -75,6 +75,15 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 const lngN = Number(m.lng);
 
                 if (Number.isFinite(latN) && latN !== 0 && isValidSC(latN, lngN)) {
+                    // compute angle based on previous coords (if available) before updating cache
+                    try {
+                        const prev = lastCoordsRef.current.get(m.id);
+                        let ang = lastAnglesRef.current.get(m.id) || 0;
+                        if (prev && prev.lat != null && prev.lng != null && (prev.lat !== latN || prev.lng !== lngN)) {
+                            ang = calcularAngulo(prev.lat, prev.lng, latN, lngN);
+                            lastAnglesRef.current.set(m.id, ang);
+                        }
+                    } catch (e) { /* ignore */ }
                     // Atualiza cache apenas de quem está online de fato
                     lastCoordsRef.current.set(m.id, { lat: latN, lng: lngN });
                     out.push({ id: m.id, lat: latN, lng: lngN, title: m.nome || 'Motorista', online: true });
@@ -182,17 +191,17 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
     };
 
-    // Gera o ícone da moto final (transplante solicitado)
+    // Gera o ícone da moto limpo: somente a imagem, sem sombras/bordas
     function getV10MotoIcon(online, angulo = 0) {
-        const corFundo = online ? '#10b981' : '#6b7280';
-        const html = '<div style="width: 50px; height: 50px; border-radius: 50%; background: ' + corFundo + '; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.4); transform: rotate(' + angulo + 'deg); transition: transform 0.4s;">'
-            + '<img src="/moto.png" style="width: 40px; height: 40px; object-fit: contain;" />'
-            + '</div>';
+        // Use L.divIcon com html mínimo. Classe pedida: 'moto-icon-limpo'
+        const html = `<div class="moto-icon-limpo" style="width:60px;height:60px;display:flex;align-items:center;justify-content:center;padding:0;margin:0;">` +
+            `<img src="/moto.png" alt="moto" style="width:56px;height:56px;object-fit:contain;transform: rotate(${angulo}deg);transition: transform 0.3s ease-in-out;background:none;border:none;box-shadow:none;pointer-events:none;"/>` +
+            `</div>`;
         return L.divIcon({
             html,
-            className: 'v10-moto-final-actual-v3',
-            iconSize: [50, 50],
-            iconAnchor: [25, 25]
+            className: 'moto-icon-limpo',
+            iconSize: [60, 60],
+            iconAnchor: [30, 30]
         });
     }
 
@@ -377,7 +386,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
                     {/* Frota (drivers) markers */}
                     {frotaMarkers.map(m => {
-                        if (String(m.esta_online) !== 'true') return null;
+                        if (!(m.online === true || String(m.esta_online) === 'true')) return null;
                         // Recupera última posição conhecida
                         const cache = lastCoordsRef.current.get(m.id);
                         let angulo = 0;
@@ -389,22 +398,15 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             angulo = lastAngle;
                         }
                         if (!m.lat || !m.lng) return null;
-                        return (
-                            <Marker
-                                key={'v10-marker-' + m.id + '-' + Math.round(angulo)}
-                                position={[m.lat, m.lng]}
-                                icon={getV10MotoIcon(m.online, angulo)}
-                            >
-                                <Tooltip permanent direction="top" offset={[0, -20]}>
-                                    <strong>{m.title}</strong>
-                                </Tooltip>
-                                <Popup>
-                                    <div style={{ minWidth: '160px', fontSize: '13px' }}>
-                                        <strong>👤 Motorista:</strong> {m.title}
-                                    </div>
-                                </Popup>
-                            </Marker>
-                        );
+                            // Use posição mais recente do cache quando disponível para vincular ao estado real-time
+                            const pos = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
+                            return (
+                                <Marker
+                                    key={'v10-marker-' + m.id}
+                                    position={[Number(pos.lat), Number(pos.lng)]}
+                                    icon={getV10MotoIcon(m.online, angulo)}
+                                />
+                            );
                     })}
 
                     {/* Entrega markers */}

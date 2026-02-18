@@ -1,12 +1,68 @@
-/* Ícone de motorista limpo - sem fundo, sem borda, sem círculo */
-/* Ícone de motorista limpo - sem fundo, sem borda, sem círculo */
-.moto-fix {
+/* ========================================
+   ÍCONE DA MOTO - CLASSE 'moto-icon-limpo'
+   - imagem somente, sem fundo, sem borda, sem sombra
+   - rotação aplicada na imagem com transição suave
+   - (pulso opcional e discreto implementado abaixo)
+   ======================================== */
+.moto-icon-limpo {
   background: none !important;
   border: none !important;
   box-shadow: none !important;
   padding: 0 !important;
   margin: 0 !important;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+
+.moto-icon-limpo img {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  width: 36px;
+  height: 36px;
+  display: block;
+  transition: transform 0.3s ease-in-out;
+  will-change: transform;
+}
+
+/* pulso discreto e opcional (subtle ping under the bike) */
+.moto-icon-limpo {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 60px;
+  height: 60px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.moto-icon-limpo img {
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  width: 56px;
+  height: 56px;
+  display: block;
+  transition: transform 0.3s ease-in-out;
+  will-change: transform;
+  pointer-events: none;
+}
+    opacity: 0;
+  }
+
+  100% {
+    transform: translateX(-50%) scale(1.6);
+    opacity: 0;
+  }
+}
+
+/* Ícone de motorista limpo - sem fundo, sem borda, sem círculo */
 
 .moto-fix img {
   background: transparent !important;

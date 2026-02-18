@@ -406,8 +406,8 @@ function InternalMobileApp() {
         if (app === 'waze') {
             window.open('https://waze.com/ul?ll=' + latN + ',' + lngN + '&navigate=yes', '_blank');
         } else {
-            // Use search query URL which is more appropriate for pinpointing a lat/lng
-            window.open('https://www.google.com/maps/search/?api=1&query=' + latN + ',' + lngN, '_blank');
+            // Open in OpenStreetMap instead of Google Maps
+            window.open('https://www.openstreetmap.org/?mlat=' + latN + '&mlon=' + lngN + '#map=18/' + latN + '/' + lngN, '_blank');
         }
     };
 

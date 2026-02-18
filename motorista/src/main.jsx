@@ -2,9 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'           // O Dashboard do Gestor
 import DriverApp from './DriverApp.jsx' // O App do Motorista
-import { APIProvider } from '@vis.gl/react-google-maps'
-
-const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
+// No Google: render app directly without APIProvider
 
 // --- REGISTRO DO SERVICE WORKER ---
 // Registra o SW para permitir notificações push em background
@@ -41,7 +39,5 @@ const hash = (typeof window !== 'undefined' && window.location && window.locatio
 const isMotorista = path.startsWith('/motorista') || hash.includes('/motorista') || hash.includes('motorista');
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
-    {isMotorista ? <DriverApp /> : <App />}
-  </APIProvider>
+  isMotorista ? <DriverApp /> : <App />
 );
