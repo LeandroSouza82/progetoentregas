@@ -16,7 +16,7 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -44,7 +44,10 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             lat: Number(e.lat),
             lng: Number(e.lng),
             label: (e.ordem_logistica && Number(e.ordem_logistica) > 0) ? String(Number(e.ordem_logistica)) : null,
-            title: e.cliente || e.endereco
+            title: e.cliente || e.endereco,
+            cliente: e.cliente || null,
+            endereco: e.endereco || null,
+            status: e.status || 'pendente'
         })), [entregas]);
 
     // Show any passed fleet items that have valid SC coords and are online & recent
@@ -108,7 +111,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             }
             try {
                 const bounds = L.latLngBounds(points.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
-                inst.fitBounds(bounds, { padding: [80, 80] });
+                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
     };
@@ -149,9 +152,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             }
         } catch (e) { /* ignore */ }
         try {
-            // APENAS ajustar bounds na primeira renderização, nunca mais (evita re-centralização quando motoristas piscam)
-            if (hasInitializedBoundsRef.current) return;
-
+            // Ajustar bounds sempre que as entregas ou frota mudarem (auto-fit)
             const key = JSON.stringify({ e: entregaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })), f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })) });
             if (key === lastPointsKeyRef.current) return; // nothing changed
             lastPointsKeyRef.current = key;
@@ -160,13 +161,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             const points = [...entregaMarkers.map(p => ({ lat: p.lat, lng: p.lng })), ...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
             if (!points || points.length === 0) {
                 try { inst.setView([defaultCenter.lat, defaultCenter.lng], 12); } catch (e) { }
-                hasInitializedBoundsRef.current = true;
                 return;
             }
             try {
                 const bounds = L.latLngBounds(points.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
-                inst.fitBounds(bounds, { padding: [80, 80] });
-                hasInitializedBoundsRef.current = true;
+                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
     }, [entregaMarkers, frotaMarkers]);
@@ -195,11 +194,13 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     function getV10MotoIcon(online, angulo = 0, nome = '') {
         const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         const safeName = esc(nome);
+        // usar caminho absoluto root para /moto.png (garante consistência de deploy)
+        const motoSrc = '/moto.png';
         const html = `
 <div style="position: relative; width: 60px; height: 60px; display: flex; justify-content: center; align-items: center;">
-  <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1;"></div>
-  <img src="/moto.png" style="position: absolute; width: 50px; height: 50px; transform: rotate(${angulo}deg); z-index: 2; opacity: 1;" />
-  <div style="position: absolute; top: -20px; background: rgba(0,0,0,0.8); color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; z-index: 3;">${safeName}</div>
+    <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1;"></div>
+    <img src="${motoSrc}" style="position: absolute; width: 50px; height: 50px; transform: rotate(${angulo}deg); z-index: 2; opacity: 1;" />
+    <div style="position: absolute; top: -20px; background: rgba(0,0,0,0.8); color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; z-index: 3;">${safeName}</div>
 </div>`;
         return L.divIcon({
             html,
@@ -296,6 +297,37 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return map; // Map motoristId -> coords
     }, [entregas, dbEntregas]);
 
+    // Conectar entregas em ordem (1->2->3) para conferência visual no dashboard
+    const entregaRoutePositions = useMemo(() => {
+        try {
+            if (!entregaMarkers || entregaMarkers.length < 2) return null;
+            const sorted = entregaMarkers.slice().sort((a, b) => {
+                const na = a.label ? Number(a.label) : 0;
+                const nb = b.label ? Number(b.label) : 0;
+                return na - nb;
+            });
+            const positions = sorted.map(p => [Number(p.lat), Number(p.lng)]);
+            // if a motoristaDaRota is provided, try to prepend their current position
+            try {
+                if (motoristaDaRota && motoristaDaRota.id) {
+                    const mid = String(motoristaDaRota.id);
+                    const cachePos = lastCoordsRef.current.get(mid);
+                    let drvPos = null;
+                    if (cachePos && cachePos.lat != null && cachePos.lng != null) drvPos = { lat: Number(cachePos.lat), lng: Number(cachePos.lng) };
+                    else {
+                        // fallback: find in frotaMarkers
+                        const fm = (frotaMarkers || []).find(x => String(x.id) === mid);
+                        if (fm) drvPos = { lat: Number(fm.lat), lng: Number(fm.lng) };
+                    }
+                    if (drvPos && isValidSC(drvPos.lat, drvPos.lng)) {
+                        positions.unshift([Number(drvPos.lat), Number(drvPos.lng)]);
+                    }
+                }
+            } catch (e) { /* ignore driver prepend issues */ }
+            return positions;
+        } catch (e) { return null; }
+    }, [entregaMarkers, motoristaDaRota, frotaMarkers]);
+
     // Focus on Leandro's route when available (executa apenas uma vez)
     const hasFocusedLeandroRef = useRef(false);
     useEffect(() => {
@@ -346,6 +378,21 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
         return null;
     }
+
+    // Inject CSS to ensure delivery popups are above polylines
+    useEffect(() => {
+        try {
+            if (typeof document === 'undefined') return;
+            if (document.getElementById('delivery-popup-style')) return;
+            const style = document.createElement('style');
+            style.id = 'delivery-popup-style';
+            style.innerHTML = `
+                .delivery-popup.leaflet-popup-content-wrapper { z-index: 5000 !important; }
+                .delivery-popup.leaflet-popup-tip { z-index: 5000 !important; }
+            `;
+            document.head.appendChild(style);
+        } catch (e) { /* ignore */ }
+    }, []);
 
     const mapInner = useMemo(() => {
         try {
@@ -402,26 +449,45 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             angulo = lastAngle;
                         }
                         if (!m.lat || !m.lng) return null;
-                            // Use posição mais recente do cache quando disponível para vincular ao estado real-time
-                            const pos = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
-                            return (
-                                <Marker
-                                    key={'v10-marker-' + m.id}
-                                    position={[Number(pos.lat), Number(pos.lng)]}
-                                    icon={getV10MotoIcon(m.online, angulo, m.title)}
-                                />
-                            );
+                        // Use posição mais recente do cache quando disponível para vincular ao estado real-time
+                        const pos = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
+                        return (
+                            <Marker
+                                key={'v10-marker-' + m.id}
+                                position={[Number(pos.lat), Number(pos.lng)]}
+                                icon={getV10MotoIcon(m.online, angulo, m.title)}
+                            />
+                        );
                     })}
 
                     {/* Entrega markers */}
-                    {entregaMarkers.map((p, i) => (
-                        <Marker key={`e-${p.id || i}`} position={[p.lat, p.lng]} icon={createPinIcon('entrega', 'em_rota', p.label || (i + 1))}>
-                            <Tooltip permanent direction="top" offset={[0, -42]} className="pin-tooltip" opacity={0.98}>
-                                <span style={{ fontWeight: '600', fontSize: '12px' }}>{p.title}</span>
-                            </Tooltip>
-                        </Marker>
-                    ))}
+                    {entregaMarkers.map((p, i) => {
+                        const status = String(p.status || '').toLowerCase().trim();
+                        const statusColor = (s) => {
+                            if (!s) return '#374151';
+                            if (s === 'concluido' || s === 'entregue' || s === 'concluído') return '#16a34a';
+                            if (s === 'em_rota' || s === 'em rota' || s === 'em-rota') return '#2563eb';
+                            if (s === 'falha' || s === 'failed') return '#ef4444';
+                            if (s === 'pendente' || s === 'pending') return '#f97316';
+                            return '#374151';
+                        };
+                        return (
+                            <Marker key={`e-${p.id || i}`} position={[p.lat, p.lng]} icon={createPinIcon('entrega', 'em_rota', p.label || (i + 1))}>
+                                <Popup className="delivery-popup" closeButton={true}>
+                                    <div style={{ minWidth: 220 }}>
+                                        <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>{p.cliente || p.title || 'Cliente'}</div>
+                                        <div style={{ color: '#374151', fontSize: 13, marginBottom: 8 }}>{p.endereco || ''}</div>
+                                        <div style={{ fontSize: 13 }}>Status: <span style={{ color: statusColor(status), fontWeight: 700 }}>{(p.status || 'Pendente').toString()}</span></div>
+                                    </div>
+                                </Popup>
+                            </Marker>
+                        );
+                    })}
 
+                    {/* Linha de conferência: conecta entregas na ordem (1->2->3...) */}
+                    {entregaRoutePositions && entregaRoutePositions.length > 1 && (
+                        <Polyline positions={entregaRoutePositions} pathOptions={{ color: '#2563eb', weight: 5, opacity: 0.95, lineJoin: 'round' }} />
+                    )}
                     {Array.from(polylinesByMotorista.entries()).map(([mid, coords], idx) => (
                         Array.isArray(coords) && coords.length > 0 ? (
                             <Polyline key={`poly-${idx}-${dbEntregas.length}`} positions={coords} pathOptions={{ color: '#2563eb', weight: 7, opacity: 1, lineJoin: 'round' }} />

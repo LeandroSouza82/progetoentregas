@@ -18,6 +18,7 @@
   position: relative;
   pointer-events: none;
 }
+
 .moto-icon-limpo .moto-aura {
   position: absolute;
   width: 70px;
@@ -30,6 +31,7 @@
   filter: blur(6px);
   pointer-events: none;
 }
+
 .moto-icon-limpo img {
   background: none !important;
   border: none !important;
@@ -42,12 +44,13 @@
   opacity: 1 !important;
   pointer-events: none;
 }
+
 .moto-icon-limpo .moto-name {
   position: absolute;
   top: -18px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(0,0,0,0.7);
+  background: rgba(0, 0, 0, 0.7);
   color: #fff;
   padding: 4px 8px;
   border-radius: 999px;

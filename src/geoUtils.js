@@ -102,6 +102,154 @@ export function calculateTotalDistance(origin, route, destination = null) {
     return total;
 }
 
+// ===== Helpers para detecção e validação de cidade =====
+function normalizeText(t) {
+    if (!t) return '';
+    try { return String(t).toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); } catch (e) { return String(t).toLowerCase(); }
+}
+
+function detectCityStrict(address) {
+    if (!address || !address.trim()) return null;
+    const s = normalizeText(address).trim();
+    // verifica fim da string após possíveis vírgulas/traços
+    const endings = s.split(/[,\-]+/).map(p => p.trim()).filter(Boolean);
+    const last = endings.length ? endings[endings.length - 1] : s;
+
+    // Mapeamento das cidades esperadas
+    const cityMap = {
+        palhoca: 'Palhoça',
+        'palhoca': 'Palhoça',
+        'sao jose': 'São José',
+        'são jose': 'São José',
+        'florianopolis': 'Florianópolis',
+        'florianópolis': 'Florianópolis',
+        'ingleses': 'Florianópolis',
+        biguacu: 'Biguaçu',
+        'biguaçu': 'Biguaçu',
+        sorocaba: 'Biguaçu'
+    };
+
+    // comparar final da string com chaves sem acento
+    for (const k of Object.keys(cityMap)) {
+        if (last.endsWith(k)) return cityMap[k];
+    }
+    return null;
+}
+
+function getCityCenter(cityName) {
+    if (!cityName) return null;
+    const map = {
+        'Palhoça': { lat: -27.64, lng: -48.67 },
+        'São José': { lat: -27.59, lng: -48.61 },
+        'Biguaçu': { lat: -27.49, lng: -48.65 },
+        'Florianópolis': { lat: -27.59, lng: -48.54 }
+    };
+    return map[cityName] || null;
+}
+
+function resultBelongsToCity(result, cityName) {
+    if (!result || !cityName) return false;
+    const cityNorm = normalizeText(cityName);
+    const name = normalizeText(result.place_name || result.text || '');
+    if (name.indexOf(cityNorm) !== -1) return true;
+    // checar contexto (ex: context array do Mapbox)
+    const ctx = result.context || [];
+    for (const c of ctx) {
+        const txt = normalizeText(c.text || c.id || '');
+        if (txt.indexOf(cityNorm) !== -1) return true;
+    }
+    return false;
+}
+
+function cleanAndAssembleAddressForCity(rawAddress, cityName) {
+    if (!rawAddress) return null;
+    // remover símbolos como n°, nº, N°, # e parênteses vazios; normalizar espaços
+    let s = String(rawAddress || '')
+        .replace(/n\s*[º°]?/ig, '')
+        .replace(/\bno\.\b/ig, '')
+        .replace(/#/g, '')
+        .replace(/\(\s*\)/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    // Remover tokens de unidade/prédio como 'unidade', 'apt', 'apto', 'bloco', 'torre', 'condominio', 'andar'
+    s = s.replace(/\b(unidade|apt[o]?|apto|bloco|torre|condom[ií]nio|cond\.?|andar|apartamento|ap)\b/ig, '').replace(/\s{2,}/g, ' ').trim();
+
+    // tentar extrair número (primeiro token que é número ou começa com número)
+    let number = '';
+    const parts = s.split(',').map(p => p.trim()).filter(Boolean);
+    // procurar por último token contendo número
+    for (let i = 0; i < parts.length; i++) {
+        const tok = parts[i];
+        const m = tok.match(/(\d+[A-Za-z0-9\/-]*)/);
+        if (m) { number = m[1]; break; }
+    }
+
+    // Se ainda não achou, buscar no fim da string
+    if (!number) {
+        const m2 = s.match(/(\d+[A-Za-z0-9\/-]*)\s*$/);
+        if (m2) number = m2[1];
+    }
+
+    // Extrair logradouro removendo número
+    let street = s;
+    if (number) {
+        // remover ocorrência do número
+        street = street.replace(new RegExp(number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '').replace(/,\s*,/g, ',').trim();
+        // remover vírgula terminal
+        street = street.replace(/,\s*$/, '').trim();
+    }
+
+    const assembled = number ? `${street}, ${number} - ${cityName}, SC, Brasil` : `${street} - ${cityName}, SC, Brasil`;
+    return assembled;
+}
+
+// Gera variações simplificadas do endereço para tentativa fuzzy
+function createFuzzyCandidates(raw, cityName) {
+    const out = [];
+    if (!raw) return out;
+    const base = String(raw).trim();
+    // 1) original
+    out.push(base);
+    // 2) remove caracteres não alfanuméricos (exceto vírgula e espaço)
+    out.push(base.replace(/[^0-9a-zA-Z\s,À-ÿ]/g, '').replace(/\s{2,}/g, ' ').trim());
+    // 3) tokens sem palavras curtas (<=2 chars)
+    const tokens = base.split(/\s+/).filter(Boolean);
+    const longTokens = tokens.filter(t => t.length > 2);
+    if (longTokens.length >= 1) out.push(longTokens.join(' '));
+    // 4) keep last 3 tokens (useful when street name has multiple words)
+    if (tokens.length >= 1) out.push(tokens.slice(-3).join(' '));
+    // 5) if cityName provided, append it to strengthen query
+    if (cityName) {
+        const cn = cityName;
+        out.push((longTokens.join(' ') + ' ' + cn).trim());
+        out.push((tokens.slice(-3).join(' ') + ' ' + cn).trim());
+    }
+    // dedupe and return
+    return Array.from(new Set(out)).filter(s => s && s.length > 2);
+}
+
+async function tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_TOKEN, preferTypes = ['address', 'street']) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+    for (const cand of candidates) {
+        try {
+            for (const t of preferTypes) {
+                const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(cand)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=${t}&language=pt&limit=1`;
+                console.log('[GEO fuzzy] tentando:', url);
+                const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+                if (!resp || !resp.ok) continue;
+                const jd = await resp.json();
+                if (jd && jd.features && jd.features.length > 0) {
+                    const r = jd.features[0];
+                    if (r && r.center && r.center.length >= 2) return r;
+                }
+            }
+        } catch (e) { /* ignore per-candidate */ }
+    }
+    return null;
+}
+
+
 /**
  * Busca de coordenadas usando Mapbox Geocoding API - Motor OFICIAL
  * Tolerante a erros de digitação, extremamente preciso e rápido
@@ -109,114 +257,203 @@ export function calculateTotalDistance(origin, route, destination = null) {
  * @param {object} bounds - Bounds de busca (opcional) { south, north, west, east }
  * @returns {Promise<object|null>} { lat, lng, display_name } ou null
  */
-export async function geocodeMapbox(address, bounds = null) {
+export async function geocodeMapbox(address, bounds = null, proximity = null) {
     if (!address || address.trim().length < 3) return null;
 
     try {
-        // TOKEN OFICIAL MAPBOX
         const MAPBOX_TOKEN = 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
 
-        // VIEWBOX RÍGIDO: região operacional estrita (Grande Florianópolis / Biguaçu)
-        // Formato bbox: west,south,east,north
-        // Valores fornecidos pelo time: -48.815, -27.600, -48.450, -27.350
+        // Default operacional amplo
         const defaultBounds = {
-            south: -27.600,
+            south: -27.900,
             north: -27.350,
-            west: -48.815,
-            east: -48.450
+            west: -48.900,
+            east: -48.350
         };
 
-        const b = bounds || defaultBounds;
-        const bbox = `${b.west},${b.south},${b.east},${b.north}`;
+        // Detectar se o usuário especificou uma cidade ao final do endereço
+        const strictCity = detectCityStrict(address);
 
-        // FORÇAR SUFIXO: garantir que a busca seja em Biguaçu, SC
-        let addressWithCity = address;
-        const citySuffix = 'Biguaçu, SC';
-        if (!/biguaç[uú]/i.test(addressWithCity) && !/\bsc\b/i.test(addressWithCity) && !/santa catarina/i.test(addressWithCity)) {
-            addressWithCity = `${addressWithCity.trim()}, ${citySuffix}`;
-        }
+        // Se detectamos cidade estrita, montamos input rígido e usamos centro + bbox da cidade
+        if (strictCity) {
+            const cityCenter = getCityCenter(strictCity);
+            if (!cityCenter) return null; // sem coordenada de centro conhecida
 
-        // LIMPEZA RIGOROSA: Remover vírgulas duplas, espaços extras e vírgulas vazias
-        const addressClean = (addressWithCity || address)
-            .replace(/,\s*,+/g, ',')        // Remove vírgulas múltiplas (, , ou , , ,)
-            .replace(/\s*,\s*/g, ', ')      // Normaliza espaços ao redor de vírgulas
-            .replace(/,\s*$/g, '')          // Remove vírgula final
-            .replace(/\s+/g, ' ')           // Múltiplos espaços -> espaço único
-            .trim();
+            // montar string: {Logradouro}, {Número} - {Cidade}, SC, Brasil
+            const input = cleanAndAssembleAddressForCity(address, strictCity);
+            if (!input) return null;
 
-        console.log('🧹 Mapbox - Endereço limpo:', addressClean);
+            // usar proximity central da cidade (lng,lat)
+            const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
 
-        // Mapbox Geocoding API - Centro em Florianópolis para proximity
-        const proximity = '-48.54,-27.59'; // Centro de Florianópolis
-        // Primeiro: tentar obter endereço com house number (address)
-        let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
-            `access_token=${MAPBOX_TOKEN}` +
-            `&proximity=${proximity}` +
-            `&bbox=${bbox}` +
-            `&types=address,poi` +
-            `&language=pt` +
-            `&limit=1`;
+            // bbox restrito em torno do centro da cidade (aprox. ~6km raio)
+            const d = 0.06;
+            const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
+            const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
 
-        console.log('🗺️ Mapbox URL:', url);
+            console.log('[GEO v33] Cidade detectada (FORÇADA):', strictCity, 'input:', input, 'proximity:', proximityParam, 'bbox:', bbox);
 
-        const response = await fetch(url, {
-            headers: {
-                'Accept': 'application/json'
+            // 1) Tentar types=address
+            const urlAddr = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(input)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=3`;
+            console.log('[GEO v33] URL (address):', urlAddr);
+            const resp1 = await fetch(urlAddr, { headers: { 'Accept': 'application/json' } });
+            if (resp1 && resp1.ok) {
+                const d1 = await resp1.json();
+                const feats = (d1 && d1.features) ? d1.features : [];
+                // procurar primeiro resultado que pertença à cidade
+                for (const r of feats) {
+                    if (resultBelongsToCity(r, strictCity)) {
+                        const lng = r.center[0], lat = r.center[1];
+                        console.log('[GEO v33] Encontrado endereço em cidade correta (address):', { lat, lng });
+                        return { lat, lng, display_name: r.place_name || input };
+                    }
+                }
             }
-        });
 
-        console.log('📡 Mapbox Status:', response.status, response.statusText);
+            // 2) tentar tipos=street (centro da via) dentro da mesma bbox
+            const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(input)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=street&language=pt&limit=5`;
+            console.log('[GEO v33] URL (street):', urlStreet);
+            const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
+            if (resp2 && resp2.ok) {
+                const d2 = await resp2.json();
+                const feats2 = (d2 && d2.features) ? d2.features : [];
+                for (const r of feats2) {
+                    if (resultBelongsToCity(r, strictCity)) {
+                        const lng = r.center[0], lat = r.center[1];
+                        console.log('[GEO v33] Encontrado street em cidade correta:', { lat, lng });
+                        return { lat, lng, display_name: r.place_name || input };
+                    }
+                }
+            }
 
-        if (!response.ok) {
-            console.warn('⚠️ Mapbox resposta não-OK:', response.status);
+            // Se não encontramos nada dentro da cidade, tentar variações fuzzy antes de desistir
+            console.warn('[GEO v33] Nenhum resultado válido dentro da cidade especificada:', strictCity, 'tentando fallback fuzzy');
+            try {
+                const candidates = createFuzzyCandidates(input, strictCity);
+                if (candidates && candidates.length > 0) {
+                    const fuzzy = await tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_TOKEN, ['address', 'street']);
+                    if (fuzzy && resultBelongsToCity(fuzzy, strictCity)) {
+                        const lng = fuzzy.center[0], lat = fuzzy.center[1];
+                        return { lat, lng, display_name: fuzzy.place_name || input };
+                    }
+                }
+            } catch (e) { /* ignore fuzzy errors */ }
             return null;
         }
 
-        const data = await response.json();
-        console.log('📊 Mapbox Resposta:', data);
+        // --- Fluxo anterior (sem cidade estrita) ---
+        const b = bounds || defaultBounds;
+        const bbox = `${b.west},${b.south},${b.east},${b.north}`;
 
+        // Mantém comportamento anterior de anexar contexto quando cidade ausente
+        const knownCities = ['biguaçu', 'biguacu', 'florianópolis', 'florianopolis', 'são josé', 'sao jose', 'palhoça', 'palhoca', 'ingleses', 'santo amaro', 'campinas', 'kobrasol', 'pagani', 'pagãni', 'ponte do imaruí', 'ponte do imarui', 'bela vista', 'serraria'];
+        const lowerAddr = String(address || '').toLowerCase();
+        let addressWithCity = address;
+        const hasKnownCity = knownCities.some(c => lowerAddr.indexOf(c) !== -1) || /,\s*[a-zA-Z]/.test(address);
+        if (!hasKnownCity) {
+            addressWithCity = `${addressWithCity.trim()}, SC, Brasil`;
+        }
+
+        let addressClean = (addressWithCity || address)
+            .replace(/,\s*,+/g, ',')
+            .replace(/\s*,\s*/g, ', ')
+            .replace(/,\s*$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Remover tokens de unidade/prédio e normalizar espaços triplos antes de enviar ao Mapbox
+        addressClean = addressClean.replace(/\b(n[º°]?|n\.?|unidade|apt[o]?|apto|bloco|torre|condom[ií]nio|cond\.?|andar|apartamento|ap|#)\b/ig, '').replace(/\s{2,}/g, ' ').trim();
+
+        console.log('🧹 Mapbox - Endereço limpo:', addressClean);
+
+        // proximity: usar proximity param se fornecido, senão central Florianópolis
+        let proximityParam = '-48.54,-27.59';
+        try {
+            if (proximity && typeof proximity === 'object' && proximity.lat != null && proximity.lng != null) {
+                proximityParam = `${Number(proximity.lng)},${Number(proximity.lat)}`;
+            } else if (Array.isArray(proximity) && proximity.length === 2) {
+                proximityParam = `${proximity[0]},${proximity[1]}`;
+            }
+        } catch (e) { }
+
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
+            `access_token=${MAPBOX_TOKEN}` +
+            `&proximity=${proximityParam}` +
+            `&bbox=${bbox}` +
+            `&types=address` +
+            `&language=pt` +
+            `&limit=1`;
+
+        console.log('[GEO] Input original:', address);
+        console.log('[GEO] URL enviada ao Mapbox:', url);
+
+        const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!response.ok) {
+            console.warn('⚠️ Mapbox resposta não-OK:', response.status);
+            // Se Mapbox rejeitou a requisição por erro de payload (422), tentar variações simplificadas (fuzzy)
+            if (response.status === 422) {
+                try {
+                    const candidates = createFuzzyCandidates(addressClean, null);
+                    const fuzzy = await tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_TOKEN, ['address', 'street']);
+                    if (fuzzy && fuzzy.center && fuzzy.center.length >= 2) {
+                        const lng = fuzzy.center[0], lat = fuzzy.center[1];
+                        if (lat <= b.north && lat >= b.south && lng >= b.west && lng <= b.east) {
+                            return { lat, lng, display_name: fuzzy.place_name || addressClean };
+                        }
+                    }
+                } catch (e) { /* ignore fuzzy errors */ }
+            }
+            return null;
+        }
+        const data = await response.json();
         let result = data && data.features && data.features.length > 0 ? data.features[0] : null;
 
-        // Se não encontrou 'address' com número, tente como 'street' (centro da rua)
+        const isUnwantedPlaceType = (r) => {
+            if (!r || !r.place_type) return false;
+            const pt = r.place_type || [];
+            const unwanted = pt.includes('place') || pt.includes('locality') || pt.includes('region');
+            const wanted = pt.includes('address') || pt.includes('street');
+            return unwanted && !wanted;
+        };
+
+        if (result && isUnwantedPlaceType(result)) result = null;
+
+        // fallback street
         if (!result) {
-            console.warn('❌ Mapbox não encontrou resultados para address, tentando street...');
             const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
                 `access_token=${MAPBOX_TOKEN}` +
-                `&proximity=${proximity}` +
+                `&proximity=${proximityParam}` +
                 `&bbox=${bbox}` +
                 `&types=street` +
                 `&language=pt` +
                 `&limit=1`;
-
             const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
             if (resp2 && resp2.ok) {
                 const data2 = await resp2.json();
-                if (data2 && data2.features && data2.features.length > 0) {
-                    result = data2.features[0];
-                }
+                if (data2 && data2.features && data2.features.length > 0) result = data2.features[0];
+            }
+            // Se ainda não encontramos resultado, tentar fuzzy candidates (relaxado)
+            if (!result) {
+                try {
+                    const candidates = createFuzzyCandidates(addressClean, null);
+                    const fuzzy = await tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_TOKEN, ['address', 'street']);
+                    if (fuzzy && fuzzy.center && fuzzy.center.length >= 2) result = fuzzy;
+                } catch (e) { /* ignore */ }
             }
         }
 
-        if (!result) {
-            console.warn('❌ Mapbox não encontrou resultados mesmo tentando street');
-            return null;
-        }
-        const coords = result.center; // [lng, lat] no Mapbox
-        const lng = coords[0];
-        const lat = coords[1];
+        if (!result) return null;
 
-        // Validação: garantir que o ponto esteja DENTRO do bbox operacional
-        const inBounds = (lat <= b.north && lat >= b.south && lng >= b.west && lng <= b.east);
-        if (!inBounds) {
-            console.warn('⚠️ Mapbox retornou coordenadas fora do bbox operacional:', { lat, lng, bbox });
-            return null;
-        }
+        const coords = result.center; // [lng, lat]
+        const lng = coords[0], lat = coords[1];
+
+        // Validação: dentro do bbox operacional
+        const inBounds = (lat <= (b.north) && lat >= (b.south) && lng >= (b.west) && lng <= (b.east));
+        if (!inBounds) { console.warn('⚠️ Mapbox retornou coordenadas fora do bbox operacional:', { lat, lng, bbox }); return null; }
 
         const display_name = result.place_name || result.text || address;
-
         console.log('✅ Mapbox sucesso:', { lat, lng, display_name });
         return { lat, lng, display_name };
-
     } catch (err) {
         console.error('❌ Erro Mapbox:', err);
         return null;
@@ -236,12 +473,12 @@ export async function searchMapbox(query, bounds = null) {
         // TOKEN OFICIAL MAPBOX
         const MAPBOX_TOKEN = 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
 
-        // VIEWBOX RÍGIDO: região operacional estrita (Grande Florianópolis / Biguaçu)
+        // VIEWBOX expandido: Grande Florianópolis (Ingleses, Florianópolis, São José, Palhoça, Biguaçu, Santo Amaro)
         const defaultBounds = {
-            south: -27.600,
+            south: -27.900,
             north: -27.350,
-            west: -48.815,
-            east: -48.450
+            west: -48.900,
+            east: -48.350
         };
 
         const b = bounds || defaultBounds;
@@ -249,12 +486,12 @@ export async function searchMapbox(query, bounds = null) {
         const proximity = '-48.54,-27.59'; // Centro de Florianópolis
 
         // Limpeza do query
-        // FORÇAR SUFIXO: garantir que as sugestões sejam dentro de Biguaçu, SC
+        // Não forçar sufixo. Se o query não mencionar cidade, anexa 'SC, Brasil' para contexto.
+        const knownCities = ['biguaçu', 'biguacu', 'florianópolis', 'florianopolis', 'são josé', 'sao jose', 'palhoça', 'palhoca', 'ingleses', 'santo amaro', 'palhoça'];
+        const lowerQuery = String(query || '').toLowerCase();
         let queryWithCity = query;
-        const citySuffix = 'Biguaçu, SC';
-        if (!/biguaç[uú]/i.test(queryWithCity) && !/\bsc\b/i.test(queryWithCity) && !/santa catarina/i.test(queryWithCity)) {
-            queryWithCity = `${queryWithCity.trim()}, ${citySuffix}`;
-        }
+        const hasKnownCity = knownCities.some(c => lowerQuery.indexOf(c) !== -1) || /,\s*[a-zA-Z]/.test(query);
+        if (!hasKnownCity) queryWithCity = `${queryWithCity.trim()}, SC, Brasil`;
 
         const queryClean = (queryWithCity || query)
             .replace(/,\s*,+/g, ',')
@@ -628,6 +865,51 @@ export async function searchNominatim(query, bounds = null) {
     } catch (error) {
         console.warn('Busca de endereço falhou:', error);
         return [];
+    }
+}
+
+/**
+ * Obtém geometria de rota (seguindo ruas) usando Mapbox Directions API
+ * @param {object} origin - { lat, lng }
+ * @param {array} orderedPoints - array de pontos [{ lat, lng }, ...] na ordem desejada
+ * @param {object} options - { includeReturnTo?: {lat,lng} }
+ * @returns {Promise<{ coordsLatLng: Array, distanceMeters: number, durationSec: number, geometry: object }|null>}
+ */
+export async function getRouteGeometry(origin, orderedPoints = [], options = {}) {
+    try {
+        const MAPBOX_TOKEN = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_MAPBOX_TOKEN) ? import.meta.env.VITE_MAPBOX_TOKEN : null;
+        if (!MAPBOX_TOKEN) return null;
+        if (!origin || !Array.isArray(orderedPoints) || orderedPoints.length === 0) return null;
+
+        // Build coordinate string: origin -> waypoints -> optional return
+        const coordsArr = [];
+        coordsArr.push(`${Number(origin.lng)},${Number(origin.lat)}`);
+        for (const p of orderedPoints) {
+            if (!p || p.lat == null || p.lng == null) continue;
+            coordsArr.push(`${Number(p.lng)},${Number(p.lat)}`);
+        }
+        if (options && options.includeReturnTo && options.includeReturnTo.lat != null && options.includeReturnTo.lng != null) {
+            coordsArr.push(`${Number(options.includeReturnTo.lng)},${Number(options.includeReturnTo.lat)}`);
+        }
+
+        const coordsStr = coordsArr.join(';');
+        const base = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordsStr}`;
+        const params = `?geometries=geojson&overview=full&annotations=distance,duration&access_token=${MAPBOX_TOKEN}`;
+        const url = base + params;
+        const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!resp || !resp.ok) return null;
+        const jd = await resp.json();
+        if (!jd || !jd.routes || jd.routes.length === 0) return null;
+        const route = jd.routes[0];
+        const geometry = route.geometry || null; // geojson LineString
+        const distanceMeters = typeof route.distance === 'number' ? route.distance : null;
+        const durationSec = typeof route.duration === 'number' ? route.duration : null;
+        // geometry.coordinates are [lng,lat], convert to [lat,lng]
+        const coordsLatLng = (geometry && Array.isArray(geometry.coordinates)) ? geometry.coordinates.map(c => [Number(c[1]), Number(c[0])]) : [];
+        return { coordsLatLng, distanceMeters, durationSec, geometry };
+    } catch (e) {
+        console.error('getRouteGeometry failed:', e);
+        return null;
     }
 }
 

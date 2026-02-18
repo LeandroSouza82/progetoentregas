@@ -3,7 +3,7 @@ import { useRef, useState, useEffect } from 'react';
 import supabase, { subscribeToTable } from './supabaseClient';
 import MapaLogistica from './MapaLogistica';
 import { SearchBox } from '@mapbox/search-js-react';
-import { geocodeMapbox } from './geoUtils';
+import { geocodeMapbox, nearestNeighborRoute, getRouteGeometry } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
@@ -20,8 +20,8 @@ function numberedIconUrl(number) {
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-// Use local moto image instead of Google marker
-const motoristaIconUrl = '/moto.png';
+// Use local moto image instead of Google marker (resolve from app root)
+const motoristaIconUrl = (typeof window !== 'undefined' && window.location && window.location.origin) ? (window.location.origin + '/moto.png') : '/moto.png';
 
 function motoristaIconUrlFor(heading = 0, color = '#2563eb') {
     // simple truck / arrow SVG rotated by `heading` degrees around center
@@ -343,6 +343,8 @@ function App() {
     const [pendingRecalcCount, setPendingRecalcCount] = useState(0);
     const [selectedMotorista, setSelectedMotorista] = useState(null);
     const [showDriverSelect, setShowDriverSelect] = useState(false);
+    const [canSendRoute, setCanSendRoute] = useState(false);
+    const [canSendMotoristaId, setCanSendMotoristaId] = useState(null);
     // Distance and driver-select mode state
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
@@ -448,7 +450,8 @@ function App() {
             } else {
                 // Fallback seguro: forçar geocoding interno (appends Biguaçu, SC e aplica bbox)
                 try {
-                    const attempt = await geocodeMapbox(text || enderecoEntrega || String(result?.query || ''), bbox);
+                    const proximity = (selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null) ? { lat: Number(selectedMotorista.lat), lng: Number(selectedMotorista.lng) } : (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : null);
+                    const attempt = await geocodeMapbox(text || enderecoEntrega || String(result?.query || ''), bbox, proximity);
                     if (attempt && attempt.lat != null && attempt.lng != null) {
                         setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
                         if (!text && attempt.display_name) setEnderecoEntrega(attempt.display_name);
@@ -565,6 +568,12 @@ function App() {
     const [mapCenterState, setMapCenterState] = useState(DEFAULT_MAP_CENTER);
     const [pontoPartida, setPontoPartida] = useState(DEFAULT_MAP_CENTER); // sede/company fallback or dynamic driver origin
     const [gestorLocation, setGestorLocation] = useState('São Paulo, BR');
+
+    // Refs para estabilizar valores usados em callbacks assíncronos
+    const pontoPartidaRef = useRef(pontoPartida);
+    useEffect(() => { pontoPartidaRef.current = pontoPartida; }, [pontoPartida]);
+    const mapCenterRef = useRef(mapCenterState);
+    useEffect(() => { mapCenterRef.current = mapCenterState; }, [mapCenterState]);
 
     // Ensure Google Maps resizes after the container height changes
     useEffect(() => {
@@ -1499,6 +1508,13 @@ function App() {
                 return;
             }
             routingInProgressRef.current = true;
+
+            // v42 EMERGENCY: FORÇAR botão verde imediatamente, antes de qualquer chamada ao Supabase ou Mapbox
+            try {
+                setCanSendRoute(true);
+                setCanSendMotoristaId(motoristaId);
+                console.log('BOTÃO HABILITADO MANUALMENTE');
+            } catch (e) { console.error('Erro forçando estado do botão (v42):', e); }
             // capture previous distance for audit
             const previousDistanceKm = (typeof estimatedDistanceKm !== 'undefined' && estimatedDistanceKm != null) ? Number(estimatedDistanceKm) : null;
             // Fetch motorista to ensure online and get current lat/lng
@@ -1508,15 +1524,16 @@ function App() {
             if (!motor) return;
             if (motor.esta_online !== true) return; // RULE: only online drivers receive routing
 
-            // Determine origin: prefer current driver lat/lng, fallback to sede/mapCenter
+            // Determine origin: prefer current driver lat/lng, fallback to sede/mapCenterRef
             let origin = null;
             if (motor.lat != null && motor.lng != null) {
                 origin = { lat: Number(motor.lat), lng: Number(motor.lng) };
                 // Update pontoPartida to the driver's current location (dynamic)
                 try { setPontoPartida(origin); } catch (e) { /* ignore */ }
             } else {
-                // fallback to company HQ / mapCenterState
-                origin = (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null) ? pontoPartida : mapCenterState || DEFAULT_MAP_CENTER;
+                // fallback to company HQ / mapCenterRef
+                const fallback = mapCenterRef.current || DEFAULT_MAP_CENTER;
+                origin = (pontoPartidaRef.current && pontoPartidaRef.current.lat != null && pontoPartidaRef.current.lng != null) ? pontoPartidaRef.current : fallback;
                 try { setPontoPartida(origin); } catch (e) { /* ignore */ }
             }
 
@@ -1547,23 +1564,36 @@ function App() {
                 }
             } catch (e) { /* ignore hashing issues */ }
 
-            // Compute optimized order using company HQ as final destination and respecting driver position via motoristaId
+            // Compute optimized order using Nearest Neighbor (Haversine) starting from driver's current GPS position
             try { setDistanceCalculating(true); } catch (e) { }
-            // Log IDs being sent to Google for traceability
-            // IDs being sent to Google (verbose logging suppressed for stability)
-            let optimized = await otimizarRotaComGoogle(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver, motoristaId);
-            // Safety: avoid processing extremely large routes in one go to preserve browser stability
+            // Build clean points array for NN algorithm
+            const ptsForNN = (remainingForDriver || []).filter(r => r && r.lat != null && r.lng != null).map(r => ({ ...r, lat: Number(r.lat), lng: Number(r.lng) }));
+            let optimized = [];
             try {
+                optimized = nearestNeighborRoute({ lat: Number(origin.lat), lng: Number(origin.lng) }, ptsForNN) || [];
+                // Safety: cap extremely long optimized arrays
                 if (Array.isArray(optimized) && optimized.length > 200) {
                     try { setMensagemGeral('Rota muito longa — processando primeiros 200 pontos para estabilidade.'); } catch (e) { }
                     optimized = optimized.slice(0, 200);
                 }
-            } catch (e) { /* ignore */ }
+
+                // v42 EMERGENCY: liberar o botão IMEDIATAMENTE após o cálculo do vizinho mais próximo
+                try {
+                    setCanSendRoute(true);
+                    setCanSendMotoristaId(motoristaId);
+                    console.log('BOTÃO HABILITADO MANUALMENTE');
+                } catch (e) { /* ignore */ }
+
+            } catch (e) {
+                console.warn('recalcRotaForMotorista: nearestNeighborRoute failed, falling back to original heuristic', e);
+                // fallback to previous local heuristic
+                try { optimized = otimizarRota(mapCenterState || pontoPartida || DEFAULT_MAP_CENTER, remainingForDriver); } catch (e2) { optimized = remainingForDriver.slice(); }
+            }
             try { setDistanceCalculating(false); } catch (e) { }
 
             // Draw on map (include HQ if necessary). Always pass company HQ as the destination to keep base as final point
             const includeHQ = (remainingForDriver.length > Number((typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ROUTE_CYCLE_LIMIT) || 10));
-            // ensure UI shows calculating while we call Directions
+            // ensure UI shows calculating while we call drawRouteOnMap
             try { setDistanceCalculating(true); } catch (e) { }
             let drawResult = null;
             try {
@@ -1588,50 +1618,55 @@ function App() {
                 try { setDistanceCalculating(false); } catch (e) { }
             }
 
-            // Persist ordem_logistica per item (batched to avoid blocking UI and resource exhaustion)
+            // Persist ordem_logistica garantindo sobrescrita por ID (upsert único)
             let newOrderIds = [];
             let allOk = true;
-            const failedUpdates = [];
             try {
                 if (Array.isArray(optimized) && motoristaId != null) {
-                    const BATCH_SIZE = 10;
-                    const updates = (optimized || []).map((item, i) => ({ id: item && item.id, ordem: Number(i + 1) })).filter(u => u.id);
-                    for (let start = 0; start < updates.length; start += BATCH_SIZE) {
-                        const batch = updates.slice(start, start + BATCH_SIZE);
-                        // perform batch updates in parallel, but await the batch to yield to the event loop
-                        await Promise.all(batch.map(async (u) => {
-                            newOrderIds.push(u.id);
-                            try {
-                                const { data: updData, error } = await supabase.from('entregas').update({ ordem_logistica: u.ordem }).eq('id', u.id);
-                                if (error) {
-                                    allOk = false;
-                                    failedUpdates.push({ id: u.id, error });
-                                    console.error('recalcRotaForMotorista: erro atualizando ordem_logistica para id', u.id, error && error.message ? error.message : error);
-                                } else {
-                                    // successful update — no verbose console logging to avoid log pressure
-                                }
-                            } catch (err) {
+                    // Obter geometria de rota via Mapbox Directions (seguindo ruas)
+                    let routeGeo = null;
+                    try {
+                        routeGeo = await getRouteGeometry(origin, optimized, { includeReturnTo: (includeHQ ? (mapCenterState || DEFAULT_MAP_CENTER) : null) });
+                        if (routeGeo && routeGeo.distanceMeters) {
+                            try { setEstimatedDistanceKm(Number((routeGeo.distanceMeters / 1000).toFixed(1))); } catch (e) { }
+                            try { setEstimatedTimeSec(Math.round(routeGeo.durationSec || 0)); } catch (e) { }
+                        }
+                    } catch (e) { console.error('Erro obtendo geometria de rota (Mapbox):', e); routeGeo = null; }
+                    // Construir array de updates conforme v34
+                    const updates = (optimized || []).map((item, i) => {
+                        const rawId = item && item.id;
+                        const coercedId = (typeof rawId === 'string' && /^\d+$/.test(rawId)) ? Number(rawId) : rawId;
+                        const base = { id: coercedId, ordem_logistica: parseInt(Number(i + 1), 10) };
+                        if (routeGeo && Array.isArray(routeGeo.coordsLatLng) && routeGeo.coordsLatLng.length > 0) {
+                            // Persistir polyline (JSON array de [lat,lng]) e distancia_estimada em metros
+                            try { base.rota_polyline = JSON.stringify(routeGeo.coordsLatLng); } catch (e) { base.rota_polyline = null; }
+                            try { base.distancia_estimada = Math.round(routeGeo.distanceMeters || 0); } catch (e) { }
+                        }
+                        return base;
+                    }).filter(u => u.id !== undefined && u.id !== null);
+                    if (updates.length > 0) {
+                        try {
+                            // v38: usar upsert padrão sem opções que adicionem parâmetros na query string
+                            const { data: upsertData, error: upsertErr } = await supabase.from('entregas').upsert(updates);
+                            if (upsertErr) {
                                 allOk = false;
-                                failedUpdates.push({ id: u.id, error: err });
-                                console.error('recalcRotaForMotorista: exceção ao atualizar ordem_logistica para id', u.id, err && err.message ? err.message : err);
+                                console.error('recalcRotaForMotorista: erro on upsert (v38)', upsertErr);
+                                try { setMensagemGeral('Falha ao persistir ordem_logistica. Verifique logs.'); } catch (e) { }
+                            } else {
+                                newOrderIds = (upsertData || []).map(d => d && d.id).filter(Boolean);
+                                try { await carregarDados(); } catch (err) { /* non-blocking */ }
                             }
-                        }));
-                        // small pause to yield and avoid freezing the browser
-                        await new Promise(res => setTimeout(res, 150));
+                        } catch (err) {
+                            allOk = false;
+                            console.error('recalcRotaForMotorista: exceção on upsert (v38)', err);
+                        }
                     }
-                    // Refresh data so other components see updated ordem_logistica
-                    try { await carregarDados(); } catch (err) { /* non-blocking */ }
                 }
-            } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica', e); }
-            // If any updates failed, surface a non-blocking message and log details
-            try {
-                if (failedUpdates.length > 0) {
-                    const ids = failedUpdates.map(f => f.id).slice(0, 10);
-                    const msg = `Falha ao gravar ordem_logistica para ${failedUpdates.length} entregas (ex.: ${ids.join(', ')}). Verifique logs.`;
-                    try { setMensagemGeral(msg); } catch (e) { }
-                    console.warn('recalcRotaForMotorista: failedUpdates details:', failedUpdates.slice(0, 20));
-                }
-            } catch (e) { /* ignore */ }
+            } catch (e) { console.warn('recalcRotaForMotorista: erro persistindo ordem_logistica (v34)', e); allOk = false; }
+
+            // LIBERAÇÃO IMEDIATA: permita envio apenas se a persistência ocorreu com sucesso
+            // Nota: não alteramos `canSendRoute` aqui para evitar sobrescrita indesejada — o botão
+            // já foi liberado após a otimização (v41). Persistência falha não deve bloquear a ação manual.
 
             // After persistence, create an audit log entry with previous/new distances and the new order
             try {
@@ -1667,6 +1702,13 @@ function App() {
                 } catch (e) { /* ignore */ }
             } catch (err) { console.warn('recalcRotaForMotorista: falha ao atualizar UI com rota otimizada', err); }
 
+            // v42: Forçar liberação do botão ao final do processamento (não limpar automaticamente em outros efeitos)
+            try {
+                setCanSendRoute(true);
+                setCanSendMotoristaId(motoristaId);
+                console.log('!!! BOTÃO DESTRANCADO COM SUCESSO !!!');
+            } catch (e) { /* ignore */ }
+
             // Update UI state immediately so dashboard shows new order and motorista app can pick it via realtime DB changes
             try {
                 const optimizedWithOrder = (optimized || []).map((p, i) => ({ ...p, ordem: Number(i + 1), ordem_logistica: Number(i + 1), motorista_id: motoristaId }));
@@ -1687,8 +1729,10 @@ function App() {
         } finally {
             // release routing lock with a small grace period
             try { setTimeout(() => { routingInProgressRef.current = false; }, 400); } catch (e) { routingInProgressRef.current = false; }
+            // ensure we always remove this motorista from pending set (defensive cleanup)
+            try { if (motoristaId) { pendingRecalcRef.current.delete(String(motoristaId)); setPendingRecalcCount(pendingRecalcRef.current.size); } } catch (e) { }
         }
-    }, [pontoPartida, mapCenterState]);
+    }, []);
 
     // Fetch last 3 logs for a given motorista
     async function fetchLogsForMotorista(motoristaId) {
@@ -1713,13 +1757,22 @@ function App() {
                 if (rec.motorista_id) {
                     const st = String(rec.status || '').trim().toLowerCase();
                     if (payload.event === 'INSERT' || (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
-                        // Do NOT auto-trigger recalculation. Mark that driver's route needs manual reoptimization by a manager.
+                        // Auto-trigger recalculation for driver's route using Nearest Neighbor.
                         try {
                             const mid = String(rec.motorista_id);
                             if (!pendingRecalcRef.current.has(mid)) {
                                 pendingRecalcRef.current.add(mid);
                                 try { setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
-                                try { setMensagemGeral(`Novas alterações para motorista ${mid}. Clique em REORGANIZAR ROTA para processar.`); } catch (e) { }
+                                // run async recalculation but keep track in pending set to avoid duplicates
+                                (async () => {
+                                    try {
+                                        await recalcRotaForMotorista(mid);
+                                    } catch (e) {
+                                        console.warn('Auto recalcRotaForMotorista failed for', mid, e);
+                                    } finally {
+                                        try { pendingRecalcRef.current.delete(mid); setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
+                                    }
+                                })();
                             }
                         } catch (e) { /* ignore */ }
                     }
@@ -1748,6 +1801,9 @@ function App() {
 
         return () => { try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
     }, [recalcRotaForMotorista]);
+
+    // NOTE: v34 — removidos efeitos que resetavam `canSendRoute` automaticamente.
+    // O botão permanece verde após persistência até envio manual pelo gestor.
 
     // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
     useEffect(() => {
@@ -1791,6 +1847,8 @@ function App() {
         }, INTERVAL);
         return () => clearInterval(id);
     }, []);
+
+    // NOTE: v42 cleanup: removed automatic clearing of canSendRoute (managed manually)
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
@@ -1864,7 +1922,48 @@ function App() {
 
     const dispararRota = async () => {
         if (entregasEmEspera.length === 0) return alert("⚠️ Fila vazia.");
-        // Open driver selector modal to choose which driver will receive the route
+        // Auto-selecionar o motorista ONLINE mais próximo do primeiro ponto da fila
+        try {
+            const first = (entregasEmEspera && entregasEmEspera.length > 0) ? entregasEmEspera[0] : null;
+            if (first && first.lat != null && first.lng != null && Array.isArray(frota) && frota.length > 0) {
+                // calc haversine local
+                const haversineLocal = (lat1, lon1, lat2, lon2) => {
+                    const R = 6371; const toRad = (d) => d * Math.PI / 180;
+                    const dLat = toRad(lat2 - lat1); const dLon = toRad(lon2 - lon1);
+                    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)); return R * c;
+                };
+                let best = null; let bestDist = Infinity;
+                for (const m of (frota || [])) {
+                    try {
+                        if (!m || (!m.lat && m.lat !== 0) || (!m.lng && m.lng !== 0)) continue;
+                        const online = String(m.esta_online) === 'true' || m.esta_online === true;
+                        if (!online) continue;
+                        const d = haversineLocal(Number(first.lat), Number(first.lng), Number(m.lat), Number(m.lng));
+                        if (d < bestDist) { bestDist = d; best = m; }
+                    } catch (e) { /* ignore per-driver */ }
+                }
+                if (best && best.id) {
+                    // Pergunta de confirmação ao gestor antes de disparar
+                    try {
+                        const nome = best.nome || best.title || best.name || String(best.id);
+                        const confirmMsg = `Motorista ${nome} selecionado por proximidade. Confirmar?`;
+                        if (!window.confirm(confirmMsg)) {
+                            // usuário cancelou: abrir modal para seleção manual
+                            setShowDriverSelect(true);
+                            return;
+                        }
+                    } catch (e) { /* ignore confirm issues */ }
+                    // Recalcula rota já usando o motorista mais próximo (sem enviar ainda)
+                    try {
+                        await recalcRotaForMotorista(String(best.id));
+                        return;
+                    } catch (e) { console.warn('dispararRota:auto recalc failed', e); }
+                }
+            }
+        } catch (e) { console.warn('dispararRota: auto-select failed', e); }
+
+        // Fallback: abrir modal para seleção manual
         setShowDriverSelect(true);
     };
 
@@ -2002,6 +2101,8 @@ function App() {
 
             await recalcRotaForMotorista(String(m.id));
             try { pendingRecalcRef.current.delete(String(m.id)); setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
+            // mark that the route for this motorista is ready to be sent
+            try { setCanSendMotoristaId(String(m.id)); } catch (e) { }
             // close modal and show success feedback after persistence
             try { setShowDriverSelect(false); } catch (e) { }
             try { alert('✅ Rota re-otimizada e gravada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
@@ -2115,7 +2216,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} focusCoords={enderecoCoords} />
+                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} focusCoords={enderecoCoords} motoristaDaRota={motoristaDaRota} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2226,7 +2327,8 @@ function App() {
                                                             // Tentar geocoding interno (Mapbox + bbox) como fallback
                                                             try {
                                                                 const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
-                                                                const attempt = await geocodeMapbox(it.endereco || String(it.address || ''), bbox);
+                                                                const proximity = (selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null) ? { lat: Number(selectedMotorista.lat), lng: Number(selectedMotorista.lng) } : (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : null);
+                                                                const attempt = await geocodeMapbox(it.endereco || String(it.address || ''), bbox, proximity);
                                                                 if (attempt && attempt.lat != null && attempt.lng != null) {
                                                                     setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
                                                                 } else {
@@ -2280,7 +2382,27 @@ function App() {
                                             <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
                                         )}
                                     </button>
-                                    <button onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} style={{ ...btnStyle(theme.success), width: 'auto' }}>ENVIAR ROTA</button>
+                                    {(() => {
+                                        const enviarEnabled = Boolean(canSendRoute);
+                                        const onEnviarClick = async () => {
+                                            if (!enviarEnabled) return;
+                                            try {
+                                                // if we have a prepared motorista id, send directly to that motorista
+                                                if (canSendMotoristaId) {
+                                                    const drv = (frota || []).find(x => String(x.id) === String(canSendMotoristaId));
+                                                    if (drv) {
+                                                        await assignDriver(drv);
+                                                        try { setCanSendMotoristaId(null); } catch (e) { }
+                                                        return;
+                                                    }
+                                                }
+                                            } catch (e) { /* ignore and fallback to modal */ }
+                                            setDriverSelectMode('dispatch'); setShowDriverSelect(true);
+                                        };
+                                        return (
+                                            <button disabled={!canSendRoute} onClick={onEnviarClick} style={{ backgroundColor: canSendRoute ? '#28a745' : '#6c757d', opacity: 1, cursor: 'pointer' }}>ENVIAR ROTA</button>
+                                        );
+                                    })()}
                                 </div>
                             </div>
                         </div>
@@ -2469,6 +2591,7 @@ function App() {
         </div>
     );
 
+    // estado do botão gerenciado exclusivamente em recalcRotaForMotorista (true) ou logout do motorista (false)
     return appContent;
 }
 
