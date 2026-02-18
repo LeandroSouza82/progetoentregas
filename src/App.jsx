@@ -1,7 +1,8 @@
 import React from 'react';
 import { useRef, useState, useEffect } from 'react';
 import supabase, { subscribeToTable } from './supabaseClient';
-import useGoogleMapsLoader from './useGoogleMapsLoader';
+import MapaLogistica from './MapaLogistica';
+import ErrorBoundary from './ErrorBoundary.jsx';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
 
 // Ícone em Data URL SVG (moto verde) definido logo no topo com fallback seguro
@@ -9,8 +10,7 @@ const _motoSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 // Símbolo SVG como Path (configuração do Google Maps Symbol) para evitar qualquer fundo
 
 // --- CONFIGURAÇÃO VISUAL ---
-// Google Maps helpers
-const GOOGLE_MAPS_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM') : 'AIzaSyBeec8r4DWBdNIEFSEZg1CgRxIHjYMV9dM';
+// Usamos Leaflet/Mapbox neste projeto; não há Google Maps API key aqui.
 
 function numberedIconUrl(number) {
     const n = number || '';
@@ -281,25 +281,7 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     return ordered;
 }
 
-// ErrorBoundary para evitar que falhas no componente do mapa quebrem o app
-class ErrorBoundary extends React.Component {
-    constructor(props) {
-        super(props);
-        this.state = { hasError: false };
-    }
-    static getDerivedStateFromError() {
-        return { hasError: true };
-    }
-    componentDidCatch(error, info) {
-        console.error('ErrorBoundary capturou erro:', error, info);
-    }
-    render() {
-        if (this.state.hasError) {
-            return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>Erro ao carregar componente de mapa.</div>;
-        }
-        return this.props.children;
-    }
-}
+// Using shared ErrorBoundary component from src/ErrorBoundary.jsx
 
 // Nota: badge fixo do gestor removido para evitar duplicidade visual
 
@@ -550,16 +532,8 @@ function App() {
     const placesServiceRef = useRef(null);
     const predictionTimerRef = useRef(null);
     const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
-    const { loaded: gmapsLoaded, error: gmapsError } = useGoogleMapsLoader({ apiKey: GOOGLE_MAPS_API_KEY });
 
-    // If loader reports error (e.g., API key not authorized or script blocked), surface a manager-facing banner
-    useEffect(() => {
-        try {
-            if (!gmapsError) return;
-            const msg = (gmapsError && gmapsError.message && (String(gmapsError.message).includes('not authorized') || String(gmapsError.message).includes('API key'))) ? '⚠️ Google Maps não autorizado para o projeto atual. Verifique as restrições de API no Google Cloud Console.' : '⚠️ Falha ao carregar Google Maps: serviço indisponível.';
-            markGoogleQuotaExceeded('Loader', msg);
-        } catch (e) { }
-    }, [gmapsError]);
+    // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
     const [recentList, setRecentList] = useState([]);
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
@@ -659,7 +633,7 @@ function App() {
 
         // Initialize services when Google loaded
         try {
-            if (gmapsLoaded && window.google && window.google.maps && window.google.maps.places) {
+            if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places) {
                 if (!predictionServiceRef.current && window.google.maps.places.AutocompleteService) predictionServiceRef.current = new window.google.maps.places.AutocompleteService();
                 if (!placesServiceRef.current && window.google.maps.places.PlacesService) {
                     try { placesServiceRef.current = new window.google.maps.places.PlacesService(document.createElement('div')); } catch (e) { placesServiceRef.current = null; }
@@ -668,7 +642,7 @@ function App() {
         } catch (e) { console.warn('AutocompleteService init failed', e); }
 
         return () => { /* nothing to clean for services */ };
-    }, [abaAtiva, gmapsLoaded]);
+    }, [abaAtiva]);
 
     // Draft point: set when gestor seleciona um endereço
     useEffect(() => {
@@ -716,7 +690,7 @@ function App() {
         }, 700);
 
         return () => { mounted = false; clearTimeout(draftOptimizeTimerRef.current); };
-    }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState, gmapsLoaded]);
+    }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState]);
 
     // Suggestions: fetch history matches from Supabase
     async function fetchHistoryMatches(q) {
@@ -1080,20 +1054,16 @@ function App() {
                     return;
                 }
 
-                // Fallback: usar Nominatim (OpenStreetMap)
+                // Fallback: desativado (Nominatim pode causar CORS/425).
+                // Em vez de buscar endereço por nome, usamos coordenadas brutas para não bloquear a renderização.
                 try {
-                    const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}`);
-                    if (resp.ok) {
-                        const j = await resp.json();
-                        const addr = j.address || {};
-                        const city = addr.city || addr.town || addr.village || addr.county || '';
-                        const state = addr.state || addr.region || '';
-                        if (city || state) setGestorLocation(`${city || 'São Paulo'}, ${state || 'BR'}`);
-                        else setGestorLocation('São Paulo, BR');
+                    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+                        setGestorLocation(`${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`);
                         return;
                     }
                 } catch (e) {
-                    // swallow and fallback
+                    // garante que qualquer erro aqui não quebre o dashboard
+                    console.warn('Fallback de localização falhou, usando padrão', e);
                 }
             } catch (e) {
                 if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) { markGoogleQuotaExceeded('Geocoder'); }
@@ -1108,35 +1078,7 @@ function App() {
         return () => { mounted = false; };
     }, []);
 
-    // Import dinâmico do pacote de mapas (evita crash no build/SSR quando o pacote falha)
-    useEffect(() => {
-        let mounted = true;
-        (async () => {
-            setLoadingFrota(true);
-            try {
-                // Only attempt to import maps library when we have a valid API key
-                const key = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env.VITE_GOOGLE_MAPS_KEY || '') : '';
-                if (!key || String(key).trim().length === 0) {
-                    setMapsLoadError(true);
-                    return;
-                }
-                const lib = await import('@vis.gl/react-google-maps');
-                if (!mounted) return;
-                setMapsLib(lib || null);
-            } catch (e) {
-                try { console.warn('Falha ao carregar @vis.gl/react-google-maps (fallback ativado):', e && e.message ? e.message : e); } catch (err) { }
-                if (!mounted) return;
-                setFrota([]);
-                setMapsLoadError(true);
-                // If the import fails because the API is not authorized, mark the app as blocked to provide a clear banner to managers
-                try {
-                    const msg = (e && e.message && (String(e.message).includes('Unauthorized') || String(e.message).includes('not authorized'))) ? '⚠️ Google Maps carregado, mas a chave não está autorizada para esta API. Verifique as restrições.' : null;
-                    if (msg) markGoogleQuotaExceeded('Loader', msg);
-                } catch (err) { }
-            }
-        })();
-        return () => { mounted = false; };
-    }, []);
+    // Google Maps dynamic import removed. This project uses Leaflet/Mapbox; avoid importing external Google map libs.
 
     // Failsafe do Gestor: marcar offline com fetch keepalive no pagehide
     useEffect(() => {
@@ -1841,852 +1783,766 @@ function App() {
 
     const adicionarAosPendentes = async (e) => {
         e.preventDefault();
-        // Se o Google Maps/Places está carregado, exigir que o usuário selecione uma sugestão que traga coords
-        if (gmapsLoaded) {
-            if (!window.google || !window.google.maps || !window.google.maps.places) {
-                console.error('Google Maps Places não está disponível (verifique se a library `places` foi carregada)');
-                // Permitimos fallback quando a library não está disponível, mas registramos o erro.
-            }
-            // If coords are not set (user pasted address / didn't click suggestion)
-            if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords.lat)) || !Number.isFinite(Number(enderecoCoords.lng))) {
-                if (enderecoFromHistory) {
-                    // History is sovereign — accept the address without forcing Google validation
-                    try { console.info('adicionarAosPendentes: address from history accepted without geocode'); } catch (e) { }
-                } else if (typeof window !== 'undefined') {
-                    // Prefer history coords from Supabase before calling Google Geocoder
+        // Não exigir Google Places/Geocoder — preferir coordenadas do histórico quando disponíveis,
+        // mas permitir que o gestor salve um pedido sem coordenadas (será tratado posteriormente).
+        try {
+            if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords?.lat)) || !Number.isFinite(Number(enderecoCoords?.lng))) {
+                if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
                     try {
-                        if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
-                            const { data: hist, error: histErr } = await supabase.from('entregas').select('lat,lng').ilike('endereco', `%${enderecoEntrega}%`).limit(1);
-                            if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
-                                setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
-                            } else {
-                                // No coords in history: if Google quota blocked, activate safety mode and inform user
-                                if (googleQuotaExceededRef.current) {
-                                    markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
-                                    try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar o endereço colado porque as APIs do Google estão indisponíveis. Por favor, verifique o endereço ou selecione do Histórico.'); } catch (e) { }
-                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                        try { enderecoRef.current.focus(); } catch (e) { }
-                                    }
-                                    return;
-                                }
-
-                                // Google Geocoder allowed — attempt to geocode
-                                if (window.google && window.google.maps && window.google.maps.Geocoder) {
-                                    try {
-                                        if (!inputIdleRef.current) await new Promise(res => setTimeout(res, 600));
-                                        const geocoder = new window.google.maps.Geocoder();
-                                        const geoRes = await new Promise((resolve) => geocoder.geocode({ address: enderecoEntrega }, (results, status) => resolve({ results, status })));
-                                        if (geoRes && geoRes.status === 'OK' && geoRes.results && geoRes.results[0] && geoRes.results[0].geometry && geoRes.results[0].geometry.location) {
-                                            const loc = geoRes.results[0].geometry.location;
-                                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                                        } else {
-                                            if (geoRes && geoRes.status === 'OVER_QUERY_LIMIT') {
-                                                markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico');
-                                                try { alert('Modo de Segurança Ativado: Usando dados locais do histórico. Não foi possível geocodificar — quota excedida.'); } catch (e) { }
-                                                if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                                    try { enderecoRef.current.focus(); } catch (e) { }
-                                                }
-                                                return;
-                                            }
-                                            try { alert('Não foi possível localizar o endereço colado. Por favor, verifique o texto ou escolha uma sugestão.'); } catch (err) { }
-                                            if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                                try { enderecoRef.current.focus(); } catch (e) { }
-                                            }
-                                            return;
-                                        }
-                                    } catch (err) {
-                                        console.warn('adicionarAosPendentes: geocoder error', err);
-                                        try { alert('Erro ao tentar localizar o endereço. Tente novamente.'); } catch (e) { }
-                                        return;
-                                    }
-                                } else {
-                                    // Geocoder not available and no history coords
-                                    try { alert('Geocoding não disponível. Selecione um endereço do Histórico ou cole um endereço que já esteja registrado com coordenadas.'); } catch (e) { }
-                                    if (enderecoRef && enderecoRef.current && typeof enderecoRef.current.focus === 'function') {
-                                        try { enderecoRef.current.focus(); } catch (e) { }
-                                    }
-                                    return;
-                                }
-                            }
+                        const { data: hist, error: histErr } = await supabase.from('entregas').select('lat,lng').ilike('endereco', `%${enderecoEntrega}%`).limit(1);
+                        if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
+                            setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
+                        } else {
+                            // No coords in history: keep enderecoCoords null and allow saving without geocode
+                            setEnderecoCoords(null);
                         }
                     } catch (e) {
-                        // If the Supabase lookup fails, fall back to existing behavior but be conservative
-                        try { console.warn('adicionarAosPendentes: supabase history lookup failed, falling back to geocoder', e); } catch (err) { }
+                        // ignore history lookup failures and allow adding without coords
+                        setEnderecoCoords(null);
                     }
                 }
             }
+        } catch (e) { /* non-blocking */ }
 
-            // Preferir coordenadas obtidas via Google Places Autocomplete. Se não houver coords, usar fallback randômico baseado no centro do mapa.
-            let lat = null;
-            let lng = null;
-            if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
-                lat = Number(enderecoCoords.lat);
-                lng = Number(enderecoCoords.lng);
-            } else {
-                const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
-                const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
-                lat = baseLat + (Math.random() - 0.5) * 0.04;
-                lng = baseLng + (Math.random() - 0.5) * 0.04;
-            }
-            // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
-            const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
-            const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
-            const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
-            if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
-            const { error } = await supabase.from('entregas').insert([{
-                cliente: clienteVal,
-                endereco: enderecoVal,
-                tipo: String(tipoEncomenda || '').trim(),
-                lat: lat,
-                lng: lng,
-                status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
-                observacoes: obsValue
-            }]);
-            if (!error) {
-                alert("✅ Salvo com sucesso!");
-                setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); setEnderecoFromHistory(false);
-                // clear draft preview point after persisting
-                setDraftPoint(null);
-                try { carregarDados(); } catch (e) { }
-            }
-        };
-
-        const excluirPedido = async (id) => {
-            const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
-            if (!parsedId || isNaN(parsedId)) {
-                console.warn('excluirPedido: id inválido', id);
-                return () => {
-                    try { supabase.removeChannel && supabase.removeChannel(channel); } catch (e) { /* ignore */ }
-                };
-            }
-            const { error } = await supabase.from('entregas').delete().eq('id', parsedId);
-            if (!error) carregarDados();
-        };
-
-        const dispararRota = async () => {
-            if (entregasEmEspera.length === 0) return alert("⚠️ Fila vazia.");
-            // Open driver selector modal to choose which driver will receive the route
-            setShowDriverSelect(true);
-        };
-
-        // Assign a selected driver: optimize route and update each entrega to 'em_rota' with motorista_id e ordem
-        const assignDriver = async (driver) => {
-            // allow caller to omit driver and use selectedMotorista from state
-            if ((!driver || !driver.id) && selectedMotorista) driver = selectedMotorista;
-            const selectedDriver = driver || selectedMotorista || null;
-            if (!selectedDriver?.id) {
-                console.error('Erro: Nenhum motorista selecionado');
-                return;
-            }
-            // Garantir que usamos UUID como string (nunca converter para Number)
-            const motoristaIdVal = String(selectedDriver.id);
-            setDispatchLoading(true);
-            try {
-                try { audioRef.current.play().catch(() => { }); } catch (e) { }
-                let rotaOtimizada = [];
-                try {
-                    try { setDistanceCalculating(true); } catch (e) { }
-                    rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, entregasEmEspera, motoristaIdVal);
-                    try { setDistanceCalculating(false); } catch (e) { }
-                    if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
-                } catch (e) {
-                    // fallback para algoritmo local em caso de erro com Google API
-                    rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
-                }
-                // Validate motorista exists in local `frota` to avoid sending wrong id
-                const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
-                if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
-                // status para despacho: seguir regra solicitada ('pendente')
-                const statusValue = String('pendente').trim().toLowerCase();
-
-                // Determine entregas to dispatch and collect their IDs (preserve original type)
-                const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
-                const assignedIds = entregasParaDespachar.map(p => p.id).filter(id => id !== undefined && id !== null);
-                const assignedIdsStr = assignedIds.map(id => String(id));
-
-                if (assignedIds.length === 0) {
-                    console.warn('assignDriver: nenhum pedido válido para atualizar');
-                } else {
-                    let updErr = null;
-                    try {
-                        // Try bulk update; if .in is not available (mock), fallback to per-item updates
-                        let q = supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
-                        if (q && typeof q.in === 'function') {
-                            const { data: updData, error } = await q.in('id', assignedIds);
-                            updErr = error;
-                            if (!updErr) {
-                                setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
-                            }
-                        } else {
-                            // Fallback: update one by one
-                            for (const id of assignedIds) {
-                                try {
-                                    const { error } = await supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
-                                    if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
-                                } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
-                            }
-                            if (!updErr) setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
-                        }
-                    } catch (err) {
-                        updErr = err;
-                        console.error('Erro ao tentar atualizar entregas (bulk ou individual):', err && err.message ? err.message : err);
-                    }
-
-                    // Update local rotaOtimizada objects with ordem for UI only
-                    for (let i = 0; i < rotaOtimizada.length; i++) {
-                        const pedido = rotaOtimizada[i];
-                        const pid = pedido.id;
-                        rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_logistica: i + 1, motorista_id: motoristaIdVal, id: pid };
-                    }
-
-                    // Update estimated distance (after assignment)
-                    try {
-                        const originForCalc = mapCenterState || pontoPartida || DEFAULT_MAP_CENTER;
-                        const dist = computeRouteDistanceKm(originForCalc, rotaOtimizada, originForCalc);
-                        setEstimatedDistanceKm(Number(dist.toFixed(1)));
-                    } catch (e) { /* ignore */ }
-
-                    // Only close modal and clear selection if update succeeded
-                    if (!updErr) {
-                        setShowDriverSelect(false);
-                        setSelectedMotorista(null);
-                    }
-                }
-                // Persist ordem_logistica per entrega (cada pedido precisa da sua ordem específica)
-                try {
-                    for (let i = 0; i < rotaOtimizada.length; i++) {
-                        const pid = rotaOtimizada[i].id;
-                        if (pid === undefined || pid === null) continue;
-                        try {
-                            const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                            if (ordErr) console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
-                        } catch (e) {
-                            console.error('Erro na requisição ordem_logistica:', e && e.message);
-                        }
-                    }
-                } catch (e) { /* non-blocking */ }
-                setRotaAtiva(rotaOtimizada);
-                setMotoristaDaRota(driver);
-                setAbaAtiva('Visão Geral');
-                await carregarDados();
-                alert('Rota enviada para ' + (driver.nome || 'motorista') + ' com sucesso.');
-                // Recalcular e desenhar rota otimizada para o motorista designado
-                try { await recalcRotaForMotorista(String(motoristaIdVal)); } catch (e) { console.warn('Falha ao recalcular rota após assignDriver:', e); }
-            } catch (e) {
-                console.warn('Erro em assignDriver:', e);
-            } finally {
-                // Limpeza de estados residuais
-                setShowDriverSelect(false);
-                setSelectedMotorista(null);
-                setDispatchLoading(false);
-            }
-        };
-
-        // --- NOVA INTERFACE (AQUI ESTÁ A MUDANÇA VISUAL) ---
-        const motoristas = frota || [];
-        const APIProviderComp = mapsLib && mapsLib.APIProvider ? mapsLib.APIProvider : null;
-        // Use explicit aprovado boolean to split lists
-        const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
-        const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
-
-        // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
-        async function handleDriverSelect(m) {
-            if (!m || !m.id) return;
-            if (driverSelectMode === 'dispatch') {
-                return assignDriver(m);
-            }
-            // reoptimize path for selected driver (no send)
-            setDispatchLoading(true);
-            try {
-                // clear cached route UI and indicators
-                try { if (routePolylineRef.current) { routePolylineRef.current.setMap(null); routePolylineRef.current = null; } } catch (e) { }
-                try { setDraftPreview([]); setEstimatedDistanceKm(null); setEstimatedTimeSec(null); setEstimatedTimeText(null); } catch (e) { }
-
-                await recalcRotaForMotorista(String(m.id));
-                try { pendingRecalcRef.current.delete(String(m.id)); setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
-                // close modal and show success feedback after persistence
-                try { setShowDriverSelect(false); } catch (e) { }
-                try { alert('✅ Rota re-otimizada e gravada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
-            } catch (e) {
-                console.warn('handleDriverSelect (reopt) failed:', e);
-                try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
-            } finally {
-                setDispatchLoading(false);
-            }
+        // Preferir coordenadas obtidas via Google Places Autocomplete. Se não houver coords, usar fallback randômico baseado no centro do mapa.
+        let lat = null;
+        let lng = null;
+        if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
+            lat = Number(enderecoCoords.lat);
+            lng = Number(enderecoCoords.lng);
+        } else {
+            const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
+            const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
+            lat = baseLat + (Math.random() - 0.5) * 0.04;
+            lng = baseLng + (Math.random() - 0.5) * 0.04;
         }
+        // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
+        const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
+        const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
+        const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
+        if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
+        const { error } = await supabase.from('entregas').insert([{
+            cliente: clienteVal,
+            endereco: enderecoVal,
+            tipo: String(tipoEncomenda || '').trim(),
+            lat: lat,
+            lng: lng,
+            status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
+            observacoes: obsValue
+        }]);
+        if (!error) {
+            alert("✅ Salvo com sucesso!");
+            setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); setEnderecoFromHistory(false);
+            // clear draft preview point after persisting
+            setDraftPoint(null);
+            try { carregarDados(); } catch (e) { }
+        }
+    };
 
-        // Se estivermos na página de aprovação (/aprovar), renderiza a tela exclusiva
+    const excluirPedido = async (id) => {
+        const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
+        if (!parsedId || isNaN(parsedId)) {
+            console.warn('excluirPedido: id inválido', id);
+            return () => {
+                try { supabase.removeChannel && supabase.removeChannel(channel); } catch (e) { /* ignore */ }
+            };
+        }
+        const { error } = await supabase.from('entregas').delete().eq('id', parsedId);
+        if (!error) carregarDados();
+    };
+
+    const dispararRota = async () => {
+        if (entregasEmEspera.length === 0) return alert("⚠️ Fila vazia.");
+        // Open driver selector modal to choose which driver will receive the route
+        setShowDriverSelect(true);
+    };
+
+    // Assign a selected driver: optimize route and update each entrega to 'em_rota' with motorista_id e ordem
+    const assignDriver = async (driver) => {
+        // allow caller to omit driver and use selectedMotorista from state
+        if ((!driver || !driver.id) && selectedMotorista) driver = selectedMotorista;
+        const selectedDriver = driver || selectedMotorista || null;
+        if (!selectedDriver?.id) {
+            console.error('Erro: Nenhum motorista selecionado');
+            return;
+        }
+        // Garantir que usamos UUID como string (nunca converter para Number)
+        const motoristaIdVal = String(selectedDriver.id);
+        setDispatchLoading(true);
         try {
-            if (typeof window !== 'undefined' && window.location.pathname === '/aprovar') {
-                return <TelaAprovacaoMotorista />;
+            try { audioRef.current.play().catch(() => { }); } catch (e) { }
+            let rotaOtimizada = [];
+            try {
+                try { setDistanceCalculating(true); } catch (e) { }
+                rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, entregasEmEspera, motoristaIdVal);
+                try { setDistanceCalculating(false); } catch (e) { }
+                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
+            } catch (e) {
+                // fallback para algoritmo local em caso de erro com Google API
+                rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
             }
-        } catch (e) { /* ignore */ }
+            // Validate motorista exists in local `frota` to avoid sending wrong id
+            const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
+            if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
+            // status para despacho: seguir regra solicitada ('pendente')
+            const statusValue = String('pendente').trim().toLowerCase();
 
-        const appContent = (
-            <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+            // Determine entregas to dispatch and collect their IDs (preserve original type)
+            const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
+            const assignedIds = (entregasParaDespachar?.map(p => p.id) || []).filter(id => id !== undefined && id !== null);
+            const assignedIdsStr = (assignedIds || []).map(id => String(id));
 
-                {/* 1. HEADER SUPERIOR (NAVBAR) */}
-                <header style={{
-                    backgroundColor: theme.headerBg,
-                    color: theme.headerText,
-                    padding: '0 40px',
-                    height: '70px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    zIndex: 1300
-                }}>
+            if (assignedIds.length === 0) {
+                console.warn('assignDriver: nenhum pedido válido para atualizar');
+            } else {
+                let updErr = null;
+                try {
+                    // Try bulk update; if .in is not available (mock), fallback to per-item updates
+                    let q = supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
+                    if (q && typeof q.in === 'function') {
+                        const { data: updData, error } = await q.in('id', assignedIds);
+                        updErr = error;
+                        if (!updErr) {
+                            setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
+                        }
+                    } else {
+                        // Fallback: update one by one
+                        for (const id of assignedIds) {
+                            try {
+                                const { error } = await supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
+                                if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
+                            } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
+                        }
+                        if (!updErr) setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
+                    }
+                } catch (err) {
+                    updErr = err;
+                    console.error('Erro ao tentar atualizar entregas (bulk ou individual):', err && err.message ? err.message : err);
+                }
+
+                // Update local rotaOtimizada objects with ordem for UI only
+                for (let i = 0; i < rotaOtimizada.length; i++) {
+                    const pedido = rotaOtimizada[i];
+                    const pid = pedido.id;
+                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_logistica: i + 1, motorista_id: motoristaIdVal, id: pid };
+                }
+
+                // Update estimated distance (after assignment)
+                try {
+                    const originForCalc = mapCenterState || pontoPartida || DEFAULT_MAP_CENTER;
+                    const dist = computeRouteDistanceKm(originForCalc, rotaOtimizada, originForCalc);
+                    setEstimatedDistanceKm(Number(dist.toFixed(1)));
+                } catch (e) { /* ignore */ }
+
+                // Only close modal and clear selection if update succeeded
+                if (!updErr) {
+                    setShowDriverSelect(false);
+                    setSelectedMotorista(null);
+                }
+            }
+            // Persist ordem_logistica per entrega (cada pedido precisa da sua ordem específica)
+            try {
+                for (let i = 0; i < rotaOtimizada.length; i++) {
+                    const pid = rotaOtimizada[i].id;
+                    if (pid === undefined || pid === null) continue;
+                    try {
+                        const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
+                        if (ordErr) console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
+                    } catch (e) {
+                        console.error('Erro na requisição ordem_logistica:', e && e.message);
+                    }
+                }
+            } catch (e) { /* non-blocking */ }
+            setRotaAtiva(rotaOtimizada);
+            setMotoristaDaRota(driver);
+            setAbaAtiva('Visão Geral');
+            await carregarDados();
+            alert('Rota enviada para ' + (driver.nome || 'motorista') + ' com sucesso.');
+            // Recalcular e desenhar rota otimizada para o motorista designado
+            try { await recalcRotaForMotorista(String(motoristaIdVal)); } catch (e) { console.warn('Falha ao recalcular rota após assignDriver:', e); }
+        } catch (e) {
+            console.warn('Erro em assignDriver:', e);
+        } finally {
+            // Limpeza de estados residuais
+            setShowDriverSelect(false);
+            setSelectedMotorista(null);
+            setDispatchLoading(false);
+        }
+    };
+
+    // --- NOVA INTERFACE (AQUI ESTÁ A MUDANÇA VISUAL) ---
+    const motoristas = frota || [];
+    // Use explicit aprovado boolean to split lists
+    const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
+    const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
+
+    // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
+    async function handleDriverSelect(m) {
+        if (!m || !m.id) return;
+        if (driverSelectMode === 'dispatch') {
+            return assignDriver(m);
+        }
+        // reoptimize path for selected driver (no send)
+        setDispatchLoading(true);
+        try {
+            // clear cached route UI and indicators
+            try { if (routePolylineRef.current) { routePolylineRef.current.setMap(null); routePolylineRef.current = null; } } catch (e) { }
+            try { setDraftPreview([]); setEstimatedDistanceKm(null); setEstimatedTimeSec(null); setEstimatedTimeText(null); } catch (e) { }
+
+            await recalcRotaForMotorista(String(m.id));
+            try { pendingRecalcRef.current.delete(String(m.id)); setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
+            // close modal and show success feedback after persistence
+            try { setShowDriverSelect(false); } catch (e) { }
+            try { alert('✅ Rota re-otimizada e gravada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
+        } catch (e) {
+            console.warn('handleDriverSelect (reopt) failed:', e);
+            try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+        } finally {
+            setDispatchLoading(false);
+        }
+    }
+
+    // Se estivermos na página de aprovação (/aprovar), renderiza a tela exclusiva
+    try {
+        if (typeof window !== 'undefined' && window.location.pathname === '/aprovar') {
+            return <TelaAprovacaoMotorista />;
+        }
+    } catch (e) { /* ignore */ }
+
+    // Debug visual removido para evitar logs repetitivos
+
+    // Fallback de render: se supabase não estiver inicializado, não tente renderizar o dashboard completo
+    try {
+        if (!supabase) {
+            return <div style={{ padding: 18 }}>Carregando...</div>;
+        }
+    } catch (e) { /* ignore */ }
+
+    const appContent = (
+        <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>
+
+            {/* 1. HEADER SUPERIOR (NAVBAR) */}
+            <header style={{
+                backgroundColor: theme.headerBg,
+                color: theme.headerText,
+                padding: '0 40px',
+                height: '70px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                zIndex: 1300
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1E3A8A,#3B82F6)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
-                            <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
-                        </div>
-
-                        <nav style={{ display: 'flex', gap: '8px' }}>
-                            {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
-                                <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
-                                    padding: '10px 18px',
-                                    background: abaAtiva === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
-                                    border: abaAtiva === tab ? `1px solid ${theme.primary}` : '1px solid transparent',
-                                    color: abaAtiva === tab ? theme.primary : '#94a3b8', // Texto colorido quando ativo
-                                    borderRadius: '20px',
-                                    cursor: 'pointer',
-                                    fontWeight: '600',
-                                    fontSize: '14px',
-                                    transition: '0.18s'
-                                }}>
-                                    {tab.toUpperCase()}
-                                </button>
-                            ))}
-                        </nav>
+                        <div style={{ width: '56px', height: '56px', background: 'linear-gradient(135deg,#1E3A8A,#3B82F6)', borderRadius: '10px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: '#ffffff', fontWeight: 800, fontSize: '18px', boxShadow: '0 4px 12px rgba(0,0,0,0.25)' }}>V10</div>
+                        <h2 className="dashboard-title" style={{ margin: 0, fontSize: '20px', fontFamily: "Inter, Roboto, sans-serif", background: 'linear-gradient(to right, #3B82F6, #FFFFFF)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DASHBOARD</h2>
                     </div>
 
-                    <div style={{ flex: 1 }} />
+                    <nav style={{ display: 'flex', gap: '8px' }}>
+                        {['Visão Geral', 'Nova Carga', 'Central de Despacho', 'Equipe', 'Gestão de Motoristas'].map(tab => (
+                            <button key={tab} onClick={() => setAbaAtiva(tab)} style={{
+                                padding: '10px 18px',
+                                background: abaAtiva === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
+                                border: abaAtiva === tab ? `1px solid ${theme.primary}` : '1px solid transparent',
+                                color: abaAtiva === tab ? theme.primary : '#94a3b8', // Texto colorido quando ativo
+                                borderRadius: '20px',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                fontSize: '14px',
+                                transition: '0.18s'
+                            }}>
+                                {tab.toUpperCase()}
+                            </button>
+                        ))}
+                    </nav>
+                </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                            <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
-                            <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
-                            <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
-                        </div>
+                <div style={{ flex: 1 }} />
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
+                        <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
                     </div>
-                </header>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
+                        <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
+                    </div>
+                </div>
+            </header>
 
-                {googleQuotaExceeded && (
-                    <div style={{ position: 'fixed', top: 70, left: 0, right: 0, zIndex: 1299, background: '#fbbf24', color: '#0f172a', display: 'flex', justifyContent: 'center', padding: '10px 0', fontWeight: 700 }}>
-                        <div style={{ width: '100%', maxWidth: '1450px', padding: '0 20px', boxSizing: 'border-box' }}>{quotaBannerMessage}</div>
+            {googleQuotaExceeded && (
+                <div style={{ position: 'fixed', top: 70, left: 0, right: 0, zIndex: 1299, background: '#fbbf24', color: '#0f172a', display: 'flex', justifyContent: 'center', padding: '10px 0', fontWeight: 700 }}>
+                    <div style={{ width: '100%', maxWidth: '1450px', padding: '0 20px', boxSizing: 'border-box' }}>{quotaBannerMessage}</div>
+                </div>
+            )}
+
+            {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
+
+            {/* 2. ÁREA DE CONTEÚDO */}
+
+
+            <main style={{ maxWidth: '1450px', width: '95%', margin: googleQuotaExceeded ? '190px auto 0' : '140px auto 0', padding: '0 20px' }}>
+
+
+                {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
+                    <CardKPI titulo="TOTAL DE ENTREGAS" valor={totalEntregas} cor={theme.accent} />
+                    <CardKPI titulo="MOTORISTAS ONLINE" valor={frota.filter(m => m.esta_online === true).length} cor={theme.success} />
+                    <CardKPI titulo="ROTA ATIVA" valor={rotaAtiva.length > 0 ? 'EM ANDAMENTO' : 'AGUARDANDO'} cor={theme.primary} />
+                </div>
+
+                {/* VISÃO GERAL (DASHBOARD) */}
+                {abaAtiva === 'Visão Geral' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
+
+                        {/* MAPA EM CARD (DIMINUÍDO, REDIMENSIONÁVEL E ELEGANTE) */}
+                        <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'hidden', minHeight: '450px', maxHeight: '800px', position: 'relative' }}>
+                            <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
+                                {
+                                    // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
+                                    (
+                                        <ErrorBoundary>
+                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} />
+                                        </ErrorBoundary>
+                                    )
+                                }
+
+                                {/* Map controls consolidated: single `BotoesMapa` is rendered INSIDE the <Map> */}
+
+                                {/* Floating refresh button removed; use single `BotoesMapa` inside the <Map> */}
+
+                                {/* Resize handle indicator */}
+                                <div style={{ position: 'absolute', bottom: 8, right: 12, width: 36, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 6, cursor: 'ns-resize', display: 'inline-block', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }} title="Arraste para redimensionar a altura do mapa" />
+
+                            </div>
+                        </div>
+
+                        {/* INFO LATERAL */}
+                        <div style={{ background: theme.card, borderRadius: '16px', padding: '25px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column' }}>
+                            <h3 style={{ marginTop: 0, color: theme.textMain }}>Status da Operação</h3>
+                            {motoristaDaRota ? (
+                                <div>
+                                    <div style={{ padding: '15px', background: '#e0e7ff', borderRadius: '12px', marginBottom: '20px', color: theme.primary }}>
+                                        <strong>🚛 Motorista:</strong> {motoristaDaRota.nome}<br />
+                                        <strong>🔌 Status:</strong> {motoristaDaRota.esta_online === true ? 'Online' : 'Offline'}
+                                        {motoristaDaRota.lat && motoristaDaRota.lng && (<div><strong>📍</strong> {motoristaDaRota.lat.toFixed ? `${motoristaDaRota.lat.toFixed(4)}, ${motoristaDaRota.lng.toFixed(4)}` : `${motoristaDaRota.lat}, ${motoristaDaRota.lng}`}</div>)}
+                                    </div>
+                                    <h4 style={{ margin: '10px 0' }}>Próximas Entregas:</h4>
+                                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                                        <ul style={{ paddingLeft: '20px', fontSize: '14px', color: theme.textMain, margin: 0 }}>
+                                            {rotaAtiva?.map((p, i) => {
+                                                const tipo = String(p.tipo || '').trim().toLowerCase();
+                                                const color = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#60a5fa');
+                                                return (
+                                                    <li key={p.id} style={{ marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                                                        <strong style={{ marginRight: '6px', color: theme.textLight }}>{(p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (i + 1)}.</strong>
+                                                        <span style={{ color, fontWeight: 600 }}>{p.cliente}</span>
+                                                    </li>
+                                                );
+                                            })}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p style={{ color: theme.textLight }}>Nenhuma rota despachada no momento.</p>
+                            )}
+                            {/* Avisos removidos da Visão Geral — comunicação centralizada em 'Equipe' */}
+                        </div>
                     </div>
                 )}
 
-                {/* Badge fixo removido — manter apenas o cabeçalho superior direito */}
+                {/* NOVA CARGA */}
+                {abaAtiva === 'Nova Carga' && (
+                    <div style={{ display: 'flex', gap: '24px', background: 'transparent' }}>
+                        {/* Coluna Esquerda: Formulário */}
+                        <div style={{ flex: '0 0 48%', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow }}>
+                            <h2 style={{ marginTop: 0, color: theme.primary }}>Registrar Encomenda</h2>
+                            <form autoComplete="off" onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                    <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
+                                    <select name="tipo" value={tipoEncomenda} onChange={(e) => setTipoEncomenda(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                                        <option>Entrega</option>
+                                        <option>Recolha</option>
+                                        <option>Outros</option>
+                                    </select>
+                                </label>
+                                <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
+                                <div style={{ position: 'relative' }}>
+                                    <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
+                                        try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
+                                        try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
+                                    }} />
 
-                {/* 2. ÁREA DE CONTEÚDO */}
+                                    {/* Suggestions dropdown: history first, then Google predictions */}
+                                    {((historySuggestions && historySuggestions.length > 0) || (predictions && predictions.length > 0)) && (
+                                        <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
+                                            {historySuggestions?.map((h, idx) => (
+                                                <div key={'h-' + idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
+                                                    <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
+                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
+                                                </div>
+                                            ))}
+                                            {predictions?.map((p, idx) => (
+                                                <div key={'p-' + idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
+                                                    <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
+                                                    <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
 
-
-                <main style={{ maxWidth: '1450px', width: '95%', margin: googleQuotaExceeded ? '190px auto 0' : '140px auto 0', padding: '0 20px' }}>
-
-
-                    {/* 3. KPIS (ESTATÍSTICAS RÁPIDAS) - Aparecem em todas as telas */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' }}>
-                        <CardKPI titulo="TOTAL DE ENTREGAS" valor={totalEntregas} cor={theme.accent} />
-                        <CardKPI titulo="MOTORISTAS ONLINE" valor={frota.filter(m => m.esta_online === true).length} cor={theme.success} />
-                        <CardKPI titulo="ROTA ATIVA" valor={rotaAtiva.length > 0 ? 'EM ANDAMENTO' : 'AGUARDANDO'} cor={theme.primary} />
-                    </div>
-
-                    {/* VISÃO GERAL (DASHBOARD) */}
-                    {abaAtiva === 'Visão Geral' && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
-
-                            {/* MAPA EM CARD (DIMINUÍDO, REDIMENSIONÁVEL E ELEGANTE) */}
-                            <div ref={mapContainerRef} style={{ background: theme.card, borderRadius: '16px', padding: '10px', boxShadow: theme.shadow, height: '500px', resize: 'vertical', overflow: 'hidden', minHeight: '450px', maxHeight: '800px', position: 'relative' }}>
-                                <div style={{ height: '100%', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
-                                    {
-                                        // Se a lib do maps foi carregada com sucesso, renderiza o mapa dentro de ErrorBoundary
-                                        (mapsLib && mapsLib.APIProvider && mapsLib.Map) ? (
-                                            (() => {
-                                                const MapComp = mapsLib.Map;
-                                                // Memoize the map view to avoid remounting the Map component on unrelated state updates
-                                                const mapView = React.useMemo(() => (
-                                                    <ErrorBoundary>
-                                                        <MapComp
-                                                            defaultCenter={mapCenterState}
-                                                            defaultZoom={zoomLevel}
-                                                            mapId="546bd17ef4a30773714756d8"
-                                                            style={{ width: '100%', height: '100%' }}
-                                                            onZoomChanged={(ev) => setZoomLevel(ev?.detail?.zoom)}
-                                                            onLoad={(m) => {
-                                                                try {
-                                                                    const inst = (m && (m.map || m.__map || m)) || m;
-                                                                    // Preserve first instance to avoid re-instantiation (singleton-like behavior)
-                                                                    if (!mapRef.current) mapRef.current = inst;
-                                                                } catch (e) { /* ignore */ }
-                                                            }}
-                                                        >
-                                                            <BotoesMapa />
-                                                            <MarkerList frota={frota} mapsLib={mapsLib} zoomLevel={zoomLevel} onSelect={setSelectedMotorista} />
-                                                            {/* Pending markers (pre-dispatch) */}
-                                                            <DeliveryMarkers list={entregasEmEspera} mapsLib={mapsLib} />
-                                                            {/* Draft preview markers (includes draftPoint) */}
-                                                            <DeliveryMarkers list={draftPreview} mapsLib={mapsLib} isPreview={true} />
-                                                            <DeliveryMarkers list={orderedRota} mapsLib={mapsLib} />
-                                                        </MapComp>
-                                                    </ErrorBoundary>
-                                                ), [mapsLib, mapCenterState, zoomLevel, entregasEmEspera && entregasEmEspera.length]);
-
-                                                return mapView;
-                                            })()
-                                        ) : (
-                                            // fallback seguro: evita piscar enquanto frota não carregou
-                                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b1220' }}>
-                                                {loadingFrota ? <div style={{ color: '#9ca3af' }}>Carregando posições...</div> : <div style={{ color: '#9ca3af' }}>{mapsLoadError ? 'Mapa indisponível — visualização desativada' : ''}</div>}
-                                            </div>
-                                        )
-                                    }
-
-                                    {/* Map controls consolidated: single `BotoesMapa` is rendered INSIDE the <Map> */}
-
-                                    {/* Floating refresh button removed; use single `BotoesMapa` inside the <Map> */}
-
-                                    {/* Resize handle indicator */}
-                                    <div style={{ position: 'absolute', bottom: 8, right: 12, width: 36, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 6, cursor: 'ns-resize', display: 'inline-block', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.02)' }} title="Arraste para redimensionar a altura do mapa" />
-
+                                    {/* If Places is unavailable, show a small hint and keep the input usable for manual paste */}
+                                    {(googleQuotaExceeded || !predictionServiceRef.current) && (
+                                        <div style={{ marginTop: '8px', color: '#f8e9c2', fontSize: '12px' }}>
+                                            {googleQuotaExceeded ? 'Busca de endereços via Google indisponível hoje — cole o endereço manualmente ou escolha do Histórico.' : 'Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.'}
+                                        </div>
+                                    )}
                                 </div>
-                            </div>
-
-                            {/* INFO LATERAL */}
-                            <div style={{ background: theme.card, borderRadius: '16px', padding: '25px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column' }}>
-                                <h3 style={{ marginTop: 0, color: theme.textMain }}>Status da Operação</h3>
-                                {motoristaDaRota ? (
-                                    <div>
-                                        <div style={{ padding: '15px', background: '#e0e7ff', borderRadius: '12px', marginBottom: '20px', color: theme.primary }}>
-                                            <strong>🚛 Motorista:</strong> {motoristaDaRota.nome}<br />
-                                            <strong>🔌 Status:</strong> {motoristaDaRota.esta_online === true ? 'Online' : 'Offline'}
-                                            {motoristaDaRota.lat && motoristaDaRota.lng && (<div><strong>📍</strong> {motoristaDaRota.lat.toFixed ? `${motoristaDaRota.lat.toFixed(4)}, ${motoristaDaRota.lng.toFixed(4)}` : `${motoristaDaRota.lat}, ${motoristaDaRota.lng}`}</div>)}
-                                        </div>
-                                        <h4 style={{ margin: '10px 0' }}>Próximas Entregas:</h4>
-                                        <div style={{ flex: 1, overflowY: 'auto' }}>
-                                            <ul style={{ paddingLeft: '20px', fontSize: '14px', color: theme.textMain, margin: 0 }}>
-                                                {rotaAtiva?.map((p, i) => {
-                                                    const tipo = String(p.tipo || '').trim().toLowerCase();
-                                                    const color = tipo === 'recolha' ? '#fb923c' : (tipo === 'outros' || tipo === 'outro' ? '#c084fc' : '#60a5fa');
-                                                    return (
-                                                        <li key={p.id} style={{ marginBottom: '8px', display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                                                            <strong style={{ marginRight: '6px', color: theme.textLight }}>{(p.ordem_logistica != null && Number.isFinite(Number(p.ordem_logistica)) && Number(p.ordem_logistica) > 0) ? Number(p.ordem_logistica) : (i + 1)}.</strong>
-                                                            <span style={{ color, fontWeight: 600 }}>{p.cliente}</span>
-                                                        </li>
-                                                    );
-                                                })}
-                                            </ul>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <p style={{ color: theme.textLight }}>Nenhuma rota despachada no momento.</p>
-                                )}
-                                {/* Avisos removidos da Visão Geral — comunicação centralizada em 'Equipe' */}
-                            </div>
+                                <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
+                                <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
+                            </form>
                         </div>
-                    )}
 
-                    {/* NOVA CARGA */}
-                    {abaAtiva === 'Nova Carga' && (
-                        <div style={{ display: 'flex', gap: '24px', background: 'transparent' }}>
-                            {/* Coluna Esquerda: Formulário */}
-                            <div style={{ flex: '0 0 48%', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow }}>
-                                <h2 style={{ marginTop: 0, color: theme.primary }}>Registrar Encomenda</h2>
-                                <form autoComplete="off" onSubmit={adicionarAosPendentes} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                                    <label style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                                        <span style={{ fontSize: '13px', color: theme.textLight }}>Tipo:</span>
-                                        <select name="tipo" value={tipoEncomenda} onChange={(e) => setTipoEncomenda(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                                            <option>Entrega</option>
-                                            <option>Recolha</option>
-                                            <option>Outros</option>
-                                        </select>
-                                    </label>
-                                    <input name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
-                                    <div style={{ position: 'relative' }}>
-                                        <input ref={enderecoRef} name="endereco" placeholder="Endereço de Entrega" autoComplete="new-password" spellCheck="false" autoCorrect="off" style={inputStyle} required value={enderecoEntrega} onChange={(e) => {
-                                            try { setEnderecoEntrega(e.target.value); setEnderecoCoords(null); setEnderecoFromHistory(false); } catch (err) { }
-                                            try { clearTimeout(predictionTimerRef.current); const q = String(e.target.value || '').trim(); if (q.length >= 3) { predictionTimerRef.current = setTimeout(async () => { try { await fetchHistoryMatches(q); await fetchPredictions(q); } catch (err) { /* ignore */ } }, 500); } else { setPredictions([]); setHistorySuggestions([]); } } catch (e) { }
-                                        }} />
-
-                                        {/* Suggestions dropdown: history first, then Google predictions */}
-                                        {((historySuggestions && historySuggestions.length > 0) || (predictions && predictions.length > 0)) && (
-                                            <div style={{ position: 'absolute', left: 0, right: 0, top: '46px', background: '#041028', zIndex: 1200, borderRadius: '8px', boxShadow: '0 8px 24px rgba(2,6,23,0.6)', maxHeight: '260px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.04)' }}>
-                                                {historySuggestions && historySuggestions.map((h, idx) => (
-                                                    <div key={'h-' + idx} onClick={async () => { try { setNomeCliente(h.cliente || ''); setEnderecoEntrega(h.endereco || ''); setEnderecoFromHistory(true); if (h.lat != null && h.lng != null) setEnderecoCoords({ lat: Number(h.lat), lng: Number(h.lng) }); else setEnderecoCoords(null); setPredictions([]); setHistorySuggestions([]); } catch (e) { } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                        <div style={{ fontWeight: 700 }}>{h.cliente || 'Histórico'}</div>
-                                                        <div style={{ fontSize: '13px', opacity: 0.85 }}>{h.endereco}</div>
-                                                    </div>
-                                                ))}
-                                                {predictions && predictions.map((p, idx) => (
-                                                    <div key={'p-' + idx} onClick={async () => { try { await handlePredictionClick(p); } catch (e) { /* ignore */ } }} style={{ padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.02)', cursor: 'pointer', color: theme.textMain }}>
-                                                        <div style={{ fontWeight: 700 }}>{p.structured_formatting && p.structured_formatting.main_text ? p.structured_formatting.main_text : p.description}</div>
-                                                        <div style={{ fontSize: '13px', opacity: 0.85 }}>{p.description}</div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-
-                                        {/* If Places is unavailable, show a small hint and keep the input usable for manual paste */}
-                                        {(googleQuotaExceeded || !predictionServiceRef.current) && (
-                                            <div style={{ marginTop: '8px', color: '#f8e9c2', fontSize: '12px' }}>
-                                                {googleQuotaExceeded ? 'Busca de endereços via Google indisponível hoje — cole o endereço manualmente ou escolha do Histórico.' : 'Sugestões de endereço temporariamente indisponíveis — cole o endereço manualmente ou escolha do Histórico.'}
-                                            </div>
-                                        )}
-                                    </div>
-                                    <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical' }} />
-                                    <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
-                                </form>
-                            </div>
-
-                            {/* Coluna Direita: Histórico (scroll) */}
-                            <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
-                                <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
-                                <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
-                                <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
-                                    {(!recentList || recentList.length === 0) ? (
-                                        <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
-                                    ) : (
-                                        recentList?.map((it, idx) => (
-                                            <div key={idx} onClick={async () => {
-                                                try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
-                                                try {
-                                                    if (it && (it.lat != null && it.lng != null)) {
-                                                        setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
-                                                    } else {
-                                                        // If history entry lacks coords, prefer not to call Google when quota blocked
-                                                        if (it && (it.lat == null || it.lng == null)) {
-                                                            if (googleQuotaExceededRef.current) {
-                                                                // Keep history accepted but without coords
-                                                                setEnderecoCoords(null);
-                                                                try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
-                                                            } else if (gmapsLoaded && window.google && window.google.maps && window.google.maps.Geocoder) {
-                                                                try {
-                                                                    const geocoder = new window.google.maps.Geocoder();
-                                                                    const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
-                                                                    if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
-                                                                        const loc = geo.results[0].geometry.location;
-                                                                        setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                                                                    } else {
-                                                                        setEnderecoCoords(null);
-                                                                    }
-                                                                } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
-                                                            } else {
-                                                                setEnderecoCoords(null);
-                                                            }
+                        {/* Coluna Direita: Histórico (scroll) */}
+                        <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
+                            <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
+                            <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
+                            <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
+                                {(!recentList || recentList.length === 0) ? (
+                                    <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
+                                ) : (
+                                    recentList?.map((it, idx) => (
+                                        <div key={idx} onClick={async () => {
+                                            try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
+                                            try {
+                                                if (it && (it.lat != null && it.lng != null)) {
+                                                    setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
+                                                } else {
+                                                    // If history entry lacks coords, prefer not to call Google when quota blocked
+                                                    if (it && (it.lat == null || it.lng == null)) {
+                                                        if (googleQuotaExceededRef.current) {
+                                                            // Keep history accepted but without coords
+                                                            setEnderecoCoords(null);
+                                                            try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
+                                                        } else if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.Geocoder) {
+                                                            try {
+                                                                const geocoder = new window.google.maps.Geocoder();
+                                                                const geo = await new Promise((resolve) => geocoder.geocode({ address: it.endereco }, (results, status) => resolve({ results, status })));
+                                                                if (geo && geo.status === 'OK' && geo.results && geo.results[0] && geo.results[0].geometry && geo.results[0].geometry.location) {
+                                                                    const loc = geo.results[0].geometry.location;
+                                                                    setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
+                                                                } else {
+                                                                    setEnderecoCoords(null);
+                                                                }
+                                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
                                                         } else {
                                                             setEnderecoCoords(null);
                                                         }
+                                                    } else {
+                                                        setEnderecoCoords(null);
                                                     }
-                                                } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
-                                            }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
-                                                <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
-                                                <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
-                                            </div>
-                                        ))
+                                                }
+                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
+                                        }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
+                                            <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
+                                            <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* CENTRAL DE DESPACHO */}
+                {abaAtiva === 'Central de Despacho' && (
+                    <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
+                            <h2>Fila de Preparação</h2>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div>Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null && estimatedTimeText != null) ? `${estimatedDistanceKm} KM | ${estimatedTimeText}` : (distanceCalculating ? 'Calculando...' : 'Calculando...')}</span></div>
+                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px' }}>📜</button>
+                                    {showLogsPopover && (
+                                        <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
+                                            <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
+                                            {logsHistory?.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
+                                                logsHistory?.map((l, i) => (
+                                                    <div key={i} style={{ padding: '6px 0', borderBottom: i < (logsHistory?.length || 0) - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                                        <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
+                                                        <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
                                     )}
                                 </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* CENTRAL DE DESPACHO */}
-                    {abaAtiva === 'Central de Despacho' && (
-                        <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-                                <h2>Fila de Preparação</h2>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <div>Distância Estimada: <span style={{ color: theme.primary }}>{(estimatedDistanceKm != null && estimatedTimeText != null) ? `${estimatedDistanceKm} KM | ${estimatedTimeText}` : (distanceCalculating ? 'Calculando...' : 'Calculando...')}</span></div>
-                                        <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px' }}>📜</button>
-                                        {showLogsPopover && (
-                                            <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
-                                                <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
-                                                {logsHistory.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
-                                                    logsHistory.map((l, i) => (
-                                                        <div key={i} style={{ padding: '6px 0', borderBottom: i < logsHistory.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                                                            <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
-                                                            <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
-                                                        </div>
-                                                    ))
-                                                )}
-                                            </div>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>
+                                        🔄 REORGANIZAR ROTA
+                                        {pendingRecalcCount > 0 && (
+                                            <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
                                         )}
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        <button onClick={() => { setDriverSelectMode('reopt'); setShowDriverSelect(true); }} style={{ ...btnStyle('#fbbf24'), width: 'auto' }}>
-                                            🔄 REORGANIZAR ROTA
-                                            {pendingRecalcCount > 0 && (
-                                                <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
-                                            )}
-                                        </button>
-                                        <button onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} style={{ ...btnStyle(theme.success), width: 'auto' }}>ENVIAR ROTA</button>
-                                    </div>
-                                </div>
-                            </div>
-                            {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-                                    {entregasEmEspera?.map(p => (
-                                        <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
-                                                <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: '#f1f5f9', color: '#374151' }}>{p.tipo || 'Entrega'}</span>
-                                            </div>
-                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco}</p>
-                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
-                                            <button onClick={() => excluirPedido(p.id)} style={{ marginTop: '10px', background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* EQUIPE (FROTA) */}
-                    {abaAtiva === 'Equipe' && (
-                        <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                            <h2 style={{ marginTop: 0 }}>Motoristas Cadastrados</h2>
-
-                            {/* Central de Comunicados (seletivo) */}
-                            <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
-                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
-                                        <option value="all">📢 Enviar para Todos</option>
-                                        {motoristasAtivos.map(m => (
-                                            <option key={m.id} value={String(m.id)}>{m.nome}</option>
-                                        ))}
-                                    </select>
-                                    <div style={{ flex: 1 }}>
-                                        <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
-                                    </div>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                                    <button
-                                        onMouseDown={() => setBtnPressed(true)}
-                                        onMouseUp={() => setBtnPressed(false)}
-                                        onMouseLeave={() => setBtnPressed(false)}
-                                        onClick={async () => {
-                                            const texto = String(mensagemGeral || '').trim();
-                                            if (!texto) return alert('Digite a mensagem antes de enviar.');
-                                            if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível enviar.');
-                                            let motorista_id = null;
-                                            if (destinatario !== 'all') {
-                                                const mid = Number(destinatario);
-                                                if (!Number.isFinite(mid)) return alert('Seleção de motorista inválida.');
-                                                motorista_id = mid;
-                                            }
-                                            try {
-                                                setEnviandoGeral(true);
-                                                const payload = { titulo: 'Comunicado', mensagem: texto, lida: false, motorista_id };
-                                                const { data, error } = await supabase.from('avisos_gestor').insert([payload]);
-                                                if (error) throw error;
-                                                setMensagemGeral('');
-                                                setDestinatario('all');
-                                                try { alert('Mensagem enviada com sucesso.'); } catch (e) { }
-                                                try { carregarDados(); } catch (e) { }
-                                            } catch (e) {
-                                                console.error('Erro enviando comunicado:', e);
-                                                try { alert('Falha ao enviar mensagem: ' + (e && e.message ? e.message : String(e))); } catch (e2) { }
-                                            } finally { setEnviandoGeral(false); setBtnPressed(false); }
-                                        }}
-                                        style={{ padding: '10px 16px', background: '#0ea5e9', border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', opacity: btnPressed ? 0.7 : 1, transition: 'opacity 120ms ease-in-out', boxShadow: '0 6px 14px rgba(14,165,233,0.18)' }}
-                                    >
-                                        {enviandoGeral ? 'ENVIANDO...' : 'ENVIAR MENSAGEM'}
                                     </button>
+                                    <button onClick={() => { setDriverSelectMode('dispatch'); setShowDriverSelect(true); }} style={{ ...btnStyle(theme.success), width: 'auto' }}>ENVIAR ROTA</button>
                                 </div>
                             </div>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        </div>
+                        {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
+                                {entregasEmEspera?.map(p => (
+                                    <div key={p.id} style={{ border: `1px solid #e2e8f0`, padding: '20px', borderRadius: '12px', borderLeft: `4px solid ${theme.accent}` }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
+                                            <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: '#f1f5f9', color: '#374151' }}>{p.tipo || 'Entrega'}</span>
+                                        </div>
+                                        <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco}</p>
+                                        <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
+                                        <button onClick={() => excluirPedido(p.id)} style={{ marginTop: '10px', background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* EQUIPE (FROTA) */}
+                {abaAtiva === 'Equipe' && (
+                    <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
+                        <h2 style={{ marginTop: 0 }}>Motoristas Cadastrados</h2>
+
+                        {/* Central de Comunicados (seletivo) */}
+                        <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
+                                    <option value="all">📢 Enviar para Todos</option>
+                                    {motoristasAtivos?.map(m => (
+                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                    ))}
+                                </select>
+                                <div style={{ flex: 1 }}>
+                                    <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <button
+                                    onMouseDown={() => setBtnPressed(true)}
+                                    onMouseUp={() => setBtnPressed(false)}
+                                    onMouseLeave={() => setBtnPressed(false)}
+                                    onClick={async () => {
+                                        const texto = String(mensagemGeral || '').trim();
+                                        if (!texto) return alert('Digite a mensagem antes de enviar.');
+                                        if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível enviar.');
+                                        let motorista_id = null;
+                                        if (destinatario !== 'all') {
+                                            const mid = Number(destinatario);
+                                            if (!Number.isFinite(mid)) return alert('Seleção de motorista inválida.');
+                                            motorista_id = mid;
+                                        }
+                                        try {
+                                            setEnviandoGeral(true);
+                                            const payload = { titulo: 'Comunicado', mensagem: texto, lida: false, motorista_id };
+                                            const { data, error } = await supabase.from('avisos_gestor').insert([payload]);
+                                            if (error) throw error;
+                                            setMensagemGeral('');
+                                            setDestinatario('all');
+                                            try { alert('Mensagem enviada com sucesso.'); } catch (e) { }
+                                            try { carregarDados(); } catch (e) { }
+                                        } catch (e) {
+                                            console.error('Erro enviando comunicado:', e);
+                                            try { alert('Falha ao enviar mensagem: ' + (e && e.message ? e.message : String(e))); } catch (e2) { }
+                                        } finally { setEnviandoGeral(false); setBtnPressed(false); }
+                                    }}
+                                    style={{ padding: '10px 16px', background: '#0ea5e9', border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', opacity: btnPressed ? 0.7 : 1, transition: 'opacity 120ms ease-in-out', boxShadow: '0 6px 14px rgba(14,165,233,0.18)' }}
+                                >
+                                    {enviandoGeral ? 'ENVIANDO...' : 'ENVIAR MENSAGEM'}
+                                </button>
+                            </div>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead>
+                                <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
+                                    <th style={{ padding: '10px' }}>NOME</th>
+                                    <th>STATUS</th>
+                                    <th>VEÍCULO</th>
+                                    <th>PLACA</th>
+                                    <th>PROGRESSO</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {motoristasAtivos?.map(m => {
+                                    const isOnline = m.esta_online === true;
+                                    const dotColor = isOnline ? '#10b981' : '#ef4444';
+                                    const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
+                                    const nameStyle = isOnline ? { color: '#10b981', fontWeight: 700, textShadow: '0 1px 6px rgba(16,185,129,0.25)' } : { color: '#9ca3af', fontWeight: 400, opacity: 0.9 };
+                                    const statusText = isOnline ? 'Disponível' : 'Offline';
+                                    const statusColor = isOnline ? '#10b981' : 'rgba(239,68,68,0.6)';
+
+                                    // Progresso de carga: contar entregas vinculadas ao motorista a partir de entregasAtivos
+                                    const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
+                                    const total = entregasMot.length;
+                                    const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
+                                    // Tipo principal (para rótulo dinâmico) — preferir o primeiro tipo conhecido
+                                    const tipoPrincipal = (entregasMot.find(e => e.tipo && String(e.tipo).trim().length > 0) || {}).tipo || null;
+                                    const tipoColor = tipoPrincipal ? getColorForType(tipoPrincipal) : null;
+                                    const verbByTipo = (t) => {
+                                        const tt = String(t || '').trim().toLowerCase();
+                                        if (tt === 'entrega') return 'Entregando';
+                                        if (tt === 'recolha') return 'Recolhendo';
+                                        if (tt === 'outros' || tt === 'outro') return 'Ativo';
+                                        return 'Em serviço';
+                                    };
+
+                                    return (
+                                        <tr key={m.id} onClick={() => setSelectedMotorista(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
+                                            <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
+                                                <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
+                                            </td>
+                                            <td>
+                                                {/* Texto dinâmico: se tiver carga, mostrar verbo + contador; senão Disponível/Offline */}
+                                                <span style={{ padding: '6px 10px', borderRadius: '12px', background: 'transparent', color: (total > 0 ? (tipoColor || statusColor) : statusColor), fontSize: '12px', fontWeight: 700, textShadow: isOnline ? '0 1px 6px rgba(16,185,129,0.35)' : 'none', opacity: isOnline ? 1 : 0.6 }}>
+                                                    {total > 0 ? `${verbByTipo(tipoPrincipal)} ${feitas}/${total}` : statusText}
+                                                </span>
+                                            </td>
+                                            <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
+                                            <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
+                                            <td style={{ padding: '10px' }}>
+                                                {/* Mostrar contador sempre (0/0 quando vazio) */}
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0f172a', color: '#fff', padding: '6px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: 700 }}>
+                                                    <span style={{ color: '#10b981' }}>{feitas}</span>
+                                                    <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
+                                                    <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                {/* GESTÃO DE MOTORISTAS */}
+                {abaAtiva === 'Gestão de Motoristas' && (
+                    <div style={{ background: 'transparent', padding: '30px', borderRadius: '16px', boxShadow: theme.shadow, width: '100%' }}>
+                        <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
+                        <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
+
+                        <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
                                 <thead>
                                     <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
                                         <th style={{ padding: '10px' }}>NOME</th>
-                                        <th>STATUS</th>
-                                        <th>VEÍCULO</th>
-                                        <th>PLACA</th>
-                                        <th>PROGRESSO</th>
+                                        <th style={{ padding: '10px' }}>EMAIL</th>
+                                        <th style={{ padding: '10px' }}>TELEFONE</th>
+                                        <th style={{ padding: '10px', textAlign: 'right' }}>AÇÕES</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {motoristasAtivos.map(m => {
-                                        const isOnline = m.esta_online === true;
-                                        const dotColor = isOnline ? '#10b981' : '#ef4444';
-                                        const dotShadow = isOnline ? '0 0 10px rgba(16,185,129,0.45)' : '0 0 6px rgba(239,68,68,0.18)';
-                                        const nameStyle = isOnline ? { color: '#10b981', fontWeight: 700, textShadow: '0 1px 6px rgba(16,185,129,0.25)' } : { color: '#9ca3af', fontWeight: 400, opacity: 0.9 };
-                                        const statusText = isOnline ? 'Disponível' : 'Offline';
-                                        const statusColor = isOnline ? '#10b981' : 'rgba(239,68,68,0.6)';
-
-                                        // Progresso de carga: contar entregas vinculadas ao motorista a partir de entregasAtivos
-                                        const entregasMot = (entregasAtivos || []).filter(e => String(e.motorista_id) === String(m.id));
-                                        const total = entregasMot.length;
-                                        const feitas = entregasMot.filter(e => String(e.status || '').trim().toLowerCase() === 'concluido').length;
-                                        // Tipo principal (para rótulo dinâmico) — preferir o primeiro tipo conhecido
-                                        const tipoPrincipal = (entregasMot.find(e => e.tipo && String(e.tipo).trim().length > 0) || {}).tipo || null;
-                                        const tipoColor = tipoPrincipal ? getColorForType(tipoPrincipal) : null;
-                                        const verbByTipo = (t) => {
-                                            const tt = String(t || '').trim().toLowerCase();
-                                            if (tt === 'entrega') return 'Entregando';
-                                            if (tt === 'recolha') return 'Recolhendo';
-                                            if (tt === 'outros' || tt === 'outro') return 'Ativo';
-                                            return 'Em serviço';
-                                        };
-
-                                        return (
-                                            <tr key={m.id} onClick={() => setSelectedMotorista(m)} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}>
-                                                <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                    <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
-                                                    <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
-                                                </td>
-                                                <td>
-                                                    {/* Texto dinâmico: se tiver carga, mostrar verbo + contador; senão Disponível/Offline */}
-                                                    <span style={{ padding: '6px 10px', borderRadius: '12px', background: 'transparent', color: (total > 0 ? (tipoColor || statusColor) : statusColor), fontSize: '12px', fontWeight: 700, textShadow: isOnline ? '0 1px 6px rgba(16,185,129,0.35)' : 'none', opacity: isOnline ? 1 : 0.6 }}>
-                                                        {total > 0 ? `${verbByTipo(tipoPrincipal)} ${feitas}/${total}` : statusText}
-                                                    </span>
-                                                </td>
-                                                <td style={{ color: isOnline ? undefined : '#9ca3af' }}>{m.veiculo}</td>
-                                                <td style={{ fontFamily: 'monospace', color: isOnline ? undefined : '#9ca3af' }}>{m.placa}</td>
-                                                <td style={{ padding: '10px' }}>
-                                                    {/* Mostrar contador sempre (0/0 quando vazio) */}
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#0f172a', color: '#fff', padding: '6px 10px', borderRadius: '999px', fontSize: '13px', fontWeight: 700 }}>
-                                                        <span style={{ color: '#10b981' }}>{feitas}</span>
-                                                        <span style={{ color: '#9ca3af', fontWeight: 600 }}>/</span>
-                                                        <span style={{ color: '#ef4444', opacity: 0.9 }}>{total}</span>
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
+                                    {motoristasPendentes?.map(m => (
+                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
+                                    ))}
                                 </tbody>
                             </table>
                         </div>
-                    )}
-
-                    {/* GESTÃO DE MOTORISTAS */}
-                    {abaAtiva === 'Gestão de Motoristas' && (
-                        <div style={{ background: 'transparent', padding: '30px', borderRadius: '16px', boxShadow: theme.shadow, width: '100%' }}>
-                            <h2 style={{ marginTop: 0 }}>Gestão de Motoristas</h2>
-                            <p style={{ color: theme.textLight, marginTop: 0 }}>Lista de motoristas cadastrados. Aprove ou revogue acessos.</p>
-
-                            <div style={{ width: '100%', maxWidth: '1450px', margin: '0 auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', background: 'transparent' }}>
-                                    <thead>
-                                        <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)', color: theme.textLight }}>
-                                            <th style={{ padding: '10px' }}>NOME</th>
-                                            <th style={{ padding: '10px' }}>EMAIL</th>
-                                            <th style={{ padding: '10px' }}>TELEFONE</th>
-                                            <th style={{ padding: '10px', textAlign: 'right' }}>AÇÕES</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {motoristasPendentes.map(m => (
-                                            <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    )}
-
-                </main>
-
-                {/* Driver selection modal (componente minimalista) */}
-
-
-                <DriverSelectModal
-                    visible={showDriverSelect}
-                    onClose={() => { setShowDriverSelect(false); setSelectedMotorista(null); }}
-                    frota={frota}
-                    onSelect={handleDriverSelect}
-                    driverSelectMode={driverSelectMode}
-                    setSelectedMotorista={setSelectedMotorista}
-                    theme={theme}
-                    loading={dispatchLoading}
-                />
-            </div>
-        );
-
-        return APIProviderComp ? (
-            <APIProviderComp apiKey={GOOGLE_MAPS_API_KEY}>{appContent}</APIProviderComp>
-        ) : appContent;
-    }
-
-    // Componentes Pequenos
-    function CardKPI({ titulo, valor, cor }) {
-        return (
-            <div style={{ background: '#fff', padding: '20px', borderRadius: '16px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', borderLeft: `5px solid ${cor}` }}>
-                <h4 style={{ margin: 0, color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>{titulo}</h4>
-                <div style={{ fontSize: '28px', fontWeight: '800', color: '#1e293b' }}>{valor}</div>
-            </div>
-        );
-    }
-
-    const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', outline: 'none', fontSize: '14px' };
-    const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
-
-    // Modal minimalista para seleção de motorista online
-    function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null, driverSelectMode = 'dispatch' }) {
-        const [localSelected, setLocalSelected] = useState(null);
-        useEffect(() => { if (!visible) setLocalSelected(null); }, [visible]);
-        if (!visible) return null;
-        const online = (frota || []).filter(m => m.esta_online === true);
-
-        const handleSelect = async (m) => {
-            if (loading) return; // bloqueia se já estiver enviando
-            setLocalSelected(m.id);
-            try { if (setSelectedMotorista) setSelectedMotorista(m); } catch (e) { }
-            try {
-                await onSelect(m);
-            } catch (err) {
-                try { alert('Falha ao executar ação: ' + (err && err.message ? err.message : String(err))); } catch (e) { /* ignore */ }
-            } finally {
-                // garante limpeza do estado local e fecha modal sem travar a UI
-                try { setLocalSelected(null); } catch (e) { }
-                try { onClose(); } catch (e) { }
-            }
-        };
-
-        const actionLabel = driverSelectMode === 'reopt' ? 'REORGANIZAR ROTA' : 'ENVIAR ROTA';
-
-        return (
-            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-                <div style={{ width: '480px', maxWidth: '94%', background: theme.card, color: theme.textMain, borderRadius: '10px', padding: '16px', boxShadow: theme.shadow }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                        <h3 style={{ margin: 0 }}>Escolha um motorista</h3>
-                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#ffffff', opacity: 1 }}>✕</button>
                     </div>
-                    <div style={{ maxHeight: '58vh', overflow: 'auto' }}>
-                        {online.length === 0 ? (
-                            <div style={{ padding: '12px', color: theme.textLight }}>Nenhum motorista online no momento.</div>
-                        ) : (
-                            online.map(m => (
-                                <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 8px', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                                    <div style={{ flex: 1 }}>
-                                        <button disabled={loading} onClick={() => handleSelect(m)} style={{ background: 'transparent', border: 'none', textAlign: 'left', cursor: loading ? 'wait' : 'pointer', padding: 0 }}>
-                                            <div style={{ fontWeight: 700, color: '#ffffff' }}>{m.nome}</div>
-                                            <div style={{ fontSize: '12px', color: theme.textLight }}>{m.veiculo || ''}</div>
-                                        </button>
-                                    </div>
-                                    <div>
-                                        <button disabled={loading} onClick={() => handleSelect(m)} style={{ ...btnStyle(theme.primary), width: '140px' }}>{loading ? (driverSelectMode === 'reopt' ? 'Processando...' : 'Enviando...') : actionLabel}</button>
-                                    </div>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    }
+                )}
 
+            </main>
+
+            {/* Driver selection modal (componente minimalista) */}
+
+
+            <DriverSelectModal
+                visible={showDriverSelect}
+                onClose={() => { setShowDriverSelect(false); setSelectedMotorista(null); }}
+                frota={frota}
+                onSelect={handleDriverSelect}
+                driverSelectMode={driverSelectMode}
+                setSelectedMotorista={setSelectedMotorista}
+                theme={theme}
+                loading={dispatchLoading}
+            />
+        </div>
+    );
+
+    return appContent;
 }
 
+// Componentes Pequenos
+function CardKPI({ titulo, valor, cor }) {
+    return (
+        <div style={{ background: '#fff', padding: '20px', borderRadius: '16px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', borderLeft: `5px solid ${cor}` }}>
+            <h4 style={{ margin: 0, color: '#94a3b8', fontSize: '12px', textTransform: 'uppercase' }}>{titulo}</h4>
+            <div style={{ fontSize: '28px', fontWeight: '800', color: '#1e293b' }}>{valor}</div>
+        </div>
+    );
+}
 
+const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', outline: 'none', fontSize: '14px' };
+const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
+
+// Modal minimalista para seleção de motorista online
+function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null, driverSelectMode = 'dispatch' }) {
+    const [localSelected, setLocalSelected] = useState(null);
+    useEffect(() => { if (!visible) setLocalSelected(null); }, [visible]);
+    if (!visible) return null;
+    const online = (frota || []).filter(m => m.esta_online === true);
+
+    const handleSelect = async (m) => {
+        if (loading) return; // bloqueia se já estiver enviando
+        setLocalSelected(m.id);
+        try { if (setSelectedMotorista) setSelectedMotorista(m); } catch (e) { }
+        try {
+            await onSelect(m);
+        } catch (err) {
+            try { alert('Falha ao executar ação: ' + (err && err.message ? err.message : String(err))); } catch (e) { /* ignore */ }
+        } finally {
+            // garante limpeza do estado local e fecha modal sem travar a UI
+            try { setLocalSelected(null); } catch (e) { }
+            try { onClose(); } catch (e) { }
+        }
+    };
+
+    const actionLabel = driverSelectMode === 'reopt' ? 'REORGANIZAR ROTA' : 'ENVIAR ROTA';
+
+    return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+            <div style={{ width: '480px', maxWidth: '94%', background: theme.card, color: theme.textMain, borderRadius: '10px', padding: '16px', boxShadow: theme.shadow }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <h3 style={{ margin: 0 }}>Escolha um motorista</h3>
+                    <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#ffffff', opacity: 1 }}>✕</button>
+                </div>
+                <div style={{ maxHeight: '58vh', overflow: 'auto' }}>
+                    {online.length === 0 ? (
+                        <div style={{ padding: '12px', color: theme.textLight }}>Nenhum motorista online no momento.</div>
+                    ) : (
+                        online?.map(m => (
+                            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 8px', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                                <div style={{ flex: 1 }}>
+                                    <button disabled={loading} onClick={() => handleSelect(m)} style={{ background: 'transparent', border: 'none', textAlign: 'left', cursor: loading ? 'wait' : 'pointer', padding: 0 }}>
+                                        <div style={{ fontWeight: 700, color: '#ffffff' }}>{m.nome}</div>
+                                        <div style={{ fontSize: '12px', color: theme.textLight }}>{m.veiculo || ''}</div>
+                                    </button>
+                                </div>
+                                <div>
+                                    <button disabled={loading} onClick={() => handleSelect(m)} style={{ ...btnStyle(theme.primary), width: '140px' }}>{loading ? (driverSelectMode === 'reopt' ? 'Processando...' : 'Enviando...') : actionLabel}</button>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
 
 export default App;
