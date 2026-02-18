@@ -191,12 +191,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
     };
 
-    // Gera o ícone da moto limpo: somente a imagem, sem sombras/bordas
-    function getV10MotoIcon(online, angulo = 0) {
-        // Use L.divIcon com html mínimo. Classe pedida: 'moto-icon-limpo'
-        const html = `<div class="moto-icon-limpo" style="width:60px;height:60px;display:flex;align-items:center;justify-content:center;padding:0;margin:0;">` +
-            `<img src="/moto.png" alt="moto" style="width:56px;height:56px;object-fit:contain;transform: rotate(${angulo}deg);transition: transform 0.3s ease-in-out;background:none;border:none;box-shadow:none;pointer-events:none;"/>` +
-            `</div>`;
+    // Gera o ícone da moto limpo: usa estrutura específica com aura, imagem e nome do motorista
+    function getV10MotoIcon(online, angulo = 0, nome = '') {
+        const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const safeName = esc(nome);
+        const html = `
+<div style="position: relative; width: 60px; height: 60px; display: flex; justify-content: center; align-items: center;">
+  <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1;"></div>
+  <img src="/moto.png" style="position: absolute; width: 50px; height: 50px; transform: rotate(${angulo}deg); z-index: 2; opacity: 1;" />
+  <div style="position: absolute; top: -20px; background: rgba(0,0,0,0.8); color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; z-index: 3;">${safeName}</div>
+</div>`;
         return L.divIcon({
             html,
             className: 'moto-icon-limpo',
@@ -404,7 +408,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                                 <Marker
                                     key={'v10-marker-' + m.id}
                                     position={[Number(pos.lat), Number(pos.lng)]}
-                                    icon={getV10MotoIcon(m.online, angulo)}
+                                    icon={getV10MotoIcon(m.online, angulo, m.title)}
                                 />
                             );
                     })}

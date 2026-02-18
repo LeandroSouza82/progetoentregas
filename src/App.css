@@ -2,7 +2,7 @@
    ÍCONE DA MOTO - CLASSE 'moto-icon-limpo'
    - imagem somente, sem fundo, sem borda, sem sombra
    - rotação aplicada na imagem com transição suave
-   - (pulso opcional e discreto implementado abaixo)
+   - aura vermelho suave e label com nome do motorista
    ======================================== */
 .moto-icon-limpo {
   background: none !important;
@@ -10,36 +10,24 @@
   box-shadow: none !important;
   padding: 0 !important;
   margin: 0 !important;
-  width: 40px;
-  height: 40px;
+  width: 70px;
+  height: 70px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  pointer-events: none;
 }
-
-.moto-icon-limpo img {
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-  width: 36px;
-  height: 36px;
-  display: block;
-  transition: transform 0.3s ease-in-out;
-  will-change: transform;
-}
-
-/* pulso discreto e opcional (subtle ping under the bike) */
-.moto-icon-limpo {
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  width: 60px;
-  height: 60px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.moto-icon-limpo .moto-aura {
+  position: absolute;
+  width: 70px;
+  height: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -6px;
+  border-radius: 50%;
+  background: rgba(255, 0, 0, 0.18);
+  filter: blur(6px);
   pointer-events: none;
 }
 .moto-icon-limpo img {
@@ -51,15 +39,22 @@
   display: block;
   transition: transform 0.3s ease-in-out;
   will-change: transform;
+  opacity: 1 !important;
   pointer-events: none;
 }
-    opacity: 0;
-  }
-
-  100% {
-    transform: translateX(-50%) scale(1.6);
-    opacity: 0;
-  }
+.moto-icon-limpo .moto-name {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* Ícone de motorista limpo - sem fundo, sem borda, sem círculo */
