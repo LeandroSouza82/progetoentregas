@@ -2201,6 +2201,7 @@ function App() {
                                             accessToken={import.meta.env.VITE_MAPBOX_TOKEN || ''}
                                             options={{ language: 'pt', country: 'BR' }}
                                             onRetrieve={handleAddressRetrieve}
+                                            value={enderecoEntrega}
                                             placeholder="Endereço de Entrega"
                                             inputProps={{ className: 'v10-mapbox-search-input' }}
                                         />
@@ -2221,7 +2222,11 @@ function App() {
                                 ) : (
                                     recentList?.map((it, idx) => (
                                         <div key={idx} onClick={async () => {
-                                            try { setNomeCliente(it.cliente || ''); setEnderecoEntrega(it.endereco || ''); setEnderecoFromHistory(true); } catch (e) { }
+                                            try {
+                                                setNomeCliente(it.cliente || '');
+                                                setEnderecoEntrega(it.endereco || '');
+                                                setEnderecoFromHistory(true);
+                                            } catch (e) { }
                                             try {
                                                 if (it && (it.lat != null && it.lng != null)) {
                                                     setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
