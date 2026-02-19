@@ -2397,6 +2397,40 @@ function App() {
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
                         <h2 style={{ marginTop: 0 }}>Motoristas Cadastrados</h2>
 
+                        {/* Configurações da Central (v146) */}
+                        <div style={{ marginBottom: '18px', display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                                <label style={{ fontWeight: 700, color: theme.textMain, marginRight: 8 }}>Configurações da Central</label>
+                                <input
+                                    value={gestorPhone || ''}
+                                    onChange={(e) => setGestorPhone(String(e.target.value))}
+                                    placeholder="Telefone da central"
+                                    style={{ padding: '10px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', minWidth: 220, flex: 1, boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.2)', background: theme.input || '#071226', color: theme.textMain }}
+                                />
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            const phone = String(gestorPhone || '').trim();
+                                            if (!phone) return alert('Informe um telefone válido.');
+                                            if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes.');
+                                            // Try update existing key
+                                            const { data: updated, error: updErr } = await supabase.from('configuracoes').update({ valor: phone }).eq('chave', 'gestor_phone');
+                                            if (updErr) console.warn('saveGestorPhone: update error', updErr);
+                                            if (!updated || (Array.isArray(updated) && updated.length === 0)) {
+                                                // insert if not present
+                                                try {
+                                                    const { data: ins, error: insErr } = await supabase.from('configuracoes').insert([{ chave: 'gestor_phone', valor: phone }]);
+                                                    if (insErr) console.warn('saveGestorPhone: insert error', insErr);
+                                                } catch (e) { console.warn('saveGestorPhone insert exception', e); }
+                                            }
+                                            try { alert('✅ Central de notificações atualizada!'); } catch (e) { }
+                                        } catch (e) { console.warn('saveGestorPhone exception', e); alert('Falha ao salvar.'); }
+                                    }}
+                                    style={{ padding: '10px 12px', borderRadius: 10, background: '#06b6d4', border: 'none', color: '#022c43', fontWeight: 700, cursor: 'pointer', boxShadow: theme.shadow, marginLeft: 8 }}
+                                >Salvar Contato</button>
+                            </div>
+                        </div>
+
                         {/* Central de Comunicados (seletivo) */}
                         <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label style={{ fontWeight: 700, color: theme.textMain }}>Central de Comunicados</label>
