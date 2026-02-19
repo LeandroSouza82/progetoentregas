@@ -49,14 +49,7 @@ function motorcycleIconWithName(name = '') {
         <text x='48' y='22'>${label}</text>
     </svg>`;
     const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
-    if (typeof window !== 'undefined' && window.google && window.google.maps) {
-        return {
-            url,
-            scaledSize: new window.google.maps.Size(50, 50),
-            anchor: new window.google.maps.Point(25, 25)
-        };
-    }
-    return { url };
+    return url;
 }
 
 // AdvancedMarker removed: using legacy Marker for stability
@@ -330,6 +323,20 @@ function App() {
     const [nomeGestor, setNomeGestor] = useState(null);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
+    const [mapCleared, setMapCleared] = useState(false);
+
+    function limparMarcadores() {
+        try {
+            const ok = window.confirm('Deseja limpar todos os pins do mapa visual? Isso não apagará os dados do banco.');
+            if (!ok) return;
+            // Clear only frontend state: entregas list and pending list
+            try { setEntregas([]); } catch (e) { }
+            try { setPedidosPendentes([]); } catch (e) { }
+            // Ensure map receives the clear flag so it recenters and hides pins
+            setMapCleared(true);
+        } catch (e) { }
+    }
+    const [mapFocusCoords, setMapFocusCoords] = useState(null);
 
     // Draft preview state: optimized preview order (no draft point)
     const [draftPreview, setDraftPreview] = useState([]);
@@ -1752,6 +1759,9 @@ function App() {
             setEnderecoGeocodeNotFound(!coords);
             try { clienteInputRef && clienteInputRef.current && typeof clienteInputRef.current.focus === 'function' && clienteInputRef.current.focus(); } catch (e) { /* ignore */ }
 
+            // center map on newly added carga when coords available
+            try { if (coords && Number.isFinite(Number(coords.lat)) && Number.isFinite(Number(coords.lng))) setMapFocusCoords({ lat: Number(coords.lat), lng: Number(coords.lng) }); } catch (e) { }
+
             try { await carregarDados(); } catch (e) { /* ignore */ }
 
             if (!coords) {
@@ -2045,8 +2055,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            {/* <MapaLogistica ... /> desativado (modo emergência) */}
-                                            <div style={{ padding: 18, color: theme.textLight, textAlign: 'center' }}>Mapa desativado — modo emergência</div>
+                                            <MapaLogistica clearMap={mapCleared} entregas={mapCleared ? [] : pedidosPendentes.concat(entregas || [])} frota={frota} height={500} mobile={false} focusCoords={mapFocusCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2062,8 +2071,11 @@ function App() {
                         </div>
 
                         {/* INFO LATERAL */}
-                        <div style={{ background: theme.card, borderRadius: '16px', padding: '25px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column' }}>
-                            <h3 style={{ marginTop: 0, color: theme.textMain }}>Status da Operação</h3>
+                        <div style={{ background: theme.card, borderRadius: '16px', padding: '18px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', marginBottom: 8 }}>
+                                <button onClick={() => limparMarcadores()} style={{ padding: '10px', background: 'rgba(15,23,42,0.85)', color: '#fff', borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontWeight: 800 }} title="Limpar Mapa">🧹 Limpar Mapa</button>
+                            </div>
+                            <h3 style={{ marginTop: 20, color: theme.textMain }}>Status da Operação</h3>
                             {motoristaDaRota ? (
                                 <div>
                                     <div style={{ padding: '15px', background: '#e0e7ff', borderRadius: '12px', marginBottom: '20px', color: theme.primary }}>

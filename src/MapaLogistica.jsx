@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersContro
 import L from 'leaflet';
 import polyline from 'polyline';
 import { supabase } from './supabaseClient';
+import createCustomPinIcon from './CustomPin.jsx';
 
 const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
 
@@ -16,7 +17,7 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {} }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, clearMap = false }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -26,11 +27,68 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     const [gestorPos, setGestorPos] = useState(null);
     const [focusMarker, setFocusMarker] = useState(null);
 
+    // Local copy of entregas so the map can react to realtime updates
+    const [localEntregas, setLocalEntregas] = useState(entregas || []);
+    useEffect(() => setLocalEntregas(entregas || []), [entregas]);
+
+    // control visual clearing of pins (does not delete from DB)
+    const [showPins, setShowPins] = useState(true);
+    useEffect(() => setShowPins(!clearMap), [clearMap]);
+
+    // subscribe to Supabase realtime updates for `entregas` to reflect status changes immediately
+    useEffect(() => {
+        try {
+            const channel = supabase.channel('public:entregas')
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
+                    try {
+                        // support payload.new (insert/update), payload.old (delete) and payload.record
+                        const rec = payload.new || payload.record || payload.old || null;
+                        if (!rec) return;
+                        setLocalEntregas(prev => {
+                            const i = prev.findIndex(p => p && p.id === rec.id);
+                            // if deleted (no new), remove from list when necessary
+                            if (payload.event === 'DELETE' || (payload.old && !payload.new)) {
+                                if (i === -1) return prev;
+                                const cp = [...prev]; cp.splice(i, 1); return cp;
+                            }
+                            if (i === -1) {
+                                // not found: append (new insert) or just return prev
+                                return [...prev, rec];
+                            }
+                            const copy = [...prev];
+                            copy[i] = { ...copy[i], ...rec };
+                            return copy;
+                        });
+                    } catch (e) { /* ignore */ }
+                });
+            // subscribe
+            channel.subscribe?.();
+            return () => {
+                try { channel.unsubscribe?.(); supabase.removeChannel?.(channel); } catch (e) { }
+            };
+        } catch (e) { /* ignore */ }
+    }, []);
+
     // build marker lists
     // Memoize markers to avoid re-computation each render
     // ❌ TRAVA FÍSICA: Filtrar coordenadas inválidas (0,0) ou nulas
-    // Delivery markers disabled in emergency mode — map will not render delivery pins
-    const entregaMarkers = React.useMemo(() => [], []);
+    const entregaMarkers = React.useMemo(() => {
+        try {
+            // include 'falha' explicitly so failures render on the map
+            const list = (localEntregas || []).filter(e => e && ['pendente', 'em_rota', 'concluido', 'entregue', 'falha'].includes(String(e.status || '').toLowerCase()));
+            return list.map(e => ({
+                id: e.id,
+                lat: Number(e.lat),
+                lng: Number(e.lng),
+                cliente: e.cliente,
+                tipo: e.tipo,
+                status: e.status,
+                obs: e.obs || e.observacoes || '',
+                ordem_logistica: e.ordem_logistica,
+                tipo_recebedor: e.tipo_recebedor
+            })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0));
+        } catch (e) { return []; }
+    }, [localEntregas]);
 
     // Show any passed fleet items that have valid SC coords and are online & recent
     // Nota: atualização síncrona do cache será feita dentro do useMemo de frotaMarkers
@@ -114,6 +172,17 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return { lat, lng };
     }, [frotaMarkers]);
 
+    // When clearMap toggled on, reset view to fleet bounds or default
+    useEffect(() => {
+        try {
+            if (!mapRef.current) return;
+            if (clearMap) {
+                // Force a clean view centered on Santa Catarina default (frontend-only cleanup)
+                try { mapRef.current.setView([defaultCenter.lat, defaultCenter.lng], 12); } catch (e) { }
+            }
+        } catch (e) { /* ignore */ }
+    }, [clearMap, frotaMarkers]);
+
     // Track last known markers to avoid refitting on every render
     const lastPointsKeyRef = useRef('');
     const hasInitializedBoundsRef = useRef(false);
@@ -152,15 +221,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     }, [frotaMarkers]);
 
     // Helper: create pin icon for entregas (blue circle with white number)
-    function createPinIcon(tipo, status, num = null) {
-        const bg = '#2563eb'; // blue
-        const html = `
-            <div style="width:38px;height:38px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:14px;box-shadow:0 2px 4px rgba(0,0,0,0.4);">
-                ${num || ''}
-            </div>
-        `;
-        return L.divIcon({ html, className: 'custom-pin-point', iconSize: [38, 38], iconAnchor: [19, 38], popupAnchor: [0, -38] });
-    }
+    // use createCustomPinIcon from src/CustomPin.jsx
 
     // Função para calcular o ângulo (bearing) entre dois pontos
     const calcularAngulo = (lat1, lon1, lat2, lon2) => {
@@ -310,7 +371,50 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         <TileLayer url={mapboxUrl} attribution={'© OpenStreetMap contributors'} tileSize={256} zoomOffset={0} />
                     )}
 
-                    {/* Frota (drivers) markers only — delivery pins and polylines disabled in emergency mode */}
+                    {/* Delivery markers: show pendente and em_rota */}
+                    {showPins && entregaMarkers.map((p, idx) => {
+                        const tipoRaw = String(p.tipo || '');
+                        const tipo = tipoRaw.trim().toLowerCase();
+                        const statusRaw = String(p.status || '');
+                        const status = statusRaw.trim().toLowerCase();
+                        // Order of checks: FAIL first, then exact delivered/concluded, then pending/em_rota color by type
+                        let color = '#a855f7'; // default lilás (Outros)
+                        if (status === 'falha') {
+                            // Always red on failure, regardless of type
+                            color = '#ef4444';
+                        } else if (status === 'entregue' || status === 'concluido') {
+                            // Only green for explicit delivered/concluded
+                            color = '#22c55e';
+                        } else if (status === 'pendente' || status === 'em_rota') {
+                            // Pending/in-route: color by tipo
+                            if (tipo === 'entrega') color = '#2563eb';
+                            else if (tipo === 'recolha') color = '#f97316';
+                            else color = '#a855f7';
+                        } else {
+                            // any other status: keep neutral lilac
+                            color = '#a855f7';
+                        }
+                        const numero = (p.ordem_logistica != null && p.ordem_logistica !== '') ? p.ordem_logistica : (idx + 1);
+                        return (
+                            <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
+                                <Popup>
+                                    <div style={{ fontWeight: 800 }}>{p.cliente || 'Sem cliente'}</div>
+                                    <div style={{ marginTop: 6 }}><strong>Status:</strong> {
+                                        (status === 'pendente' || status === 'em_rota') ? '🕒 Em progresso' :
+                                            (status === 'entregue' || status === 'concluido') ? '✅ Concluído com êxito' :
+                                                (status === 'falha') ? '❌ Falha na operação' : status
+                                    }</div>
+                                    {status === 'falha' && (
+                                        <div style={{ marginTop: 6 }}><strong>Motivo:</strong> {p.motivo_nao_entrega || p.motivo || 'Não informado'}</div>
+                                    )}
+                                    <div style={{ marginTop: 6 }}><strong>Tipo:</strong> {p.tipo || 'Entrega'}</div>
+                                    <div style={{ marginTop: 6 }}><strong>Obs:</strong> {p.obs || ''}</div>
+                                </Popup>
+                            </Marker>
+                        );
+                    })}
+
+                    {/* Frota (drivers) markers */}
                     {frotaMarkers.map(m => {
                         const pos = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
                         return (
