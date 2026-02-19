@@ -16,7 +16,7 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {} }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -47,7 +47,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             title: e.cliente || e.endereco,
             cliente: e.cliente || null,
             endereco: e.endereco || null,
-            status: e.status || 'pendente'
+            status: e.status || 'pendente',
+            motorista_id: e.motorista_id != null ? String(e.motorista_id) : null
         })), [entregas]);
 
     // Show any passed fleet items that have valid SC coords and are online & recent
@@ -463,34 +464,82 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     {/* Entrega markers */}
                     {entregaMarkers.map((p, i) => {
                         const status = String(p.status || '').toLowerCase().trim();
+                        const normalize = (str) => String(str || '').toLowerCase().trim();
                         const statusColor = (s) => {
                             if (!s) return '#374151';
-                            if (s === 'concluido' || s === 'entregue' || s === 'concluído') return '#16a34a';
-                            if (s === 'em_rota' || s === 'em rota' || s === 'em-rota') return '#2563eb';
-                            if (s === 'falha' || s === 'failed') return '#ef4444';
-                            if (s === 'pendente' || s === 'pending') return '#f97316';
+                            const n = normalize(s);
+                            if (n === 'concluido' || n === 'entregue' || n === 'concluído') return '#16a34a';
+                            if (n === 'em_rota' || n === 'em rota' || n === 'em-rota' || n === 'em andamento' || n === 'em_andamento') return '#10b981';
+                            if (n === 'falha' || n === 'failed') return '#ef4444';
+                            if (n === 'pendente' || n === 'pending') return '#f97316';
                             return '#374151';
                         };
+
+                        const haversineKmLocal = (lat1, lon1, lat2, lon2) => {
+                            const R = 6371;
+                            const toRad = (d) => d * Math.PI / 180;
+                            const dLat = toRad(lat2 - lat1);
+                            const dLon = toRad(lon2 - lon1);
+                            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                            return R * c;
+                        };
+
+                        const pointNearPolyline = (ptLat, ptLng, coords = [], thresholdMeters = 50) => {
+                            if (!Array.isArray(coords) || coords.length === 0) return false;
+                            try {
+                                for (const c of coords) {
+                                    if (!Array.isArray(c) || c.length < 2) continue;
+                                    const lat = Number(c[0]); const lng = Number(c[1]);
+                                    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+                                    const dkm = haversineKmLocal(ptLat, ptLng, lat, lng);
+                                    if ((dkm * 1000) <= thresholdMeters) return true;
+                                }
+                            } catch (e) { /* ignore */ }
+                            return false;
+                        };
+
+                        const displayStatusText = (rawStatus, marker) => {
+                            const n = normalize(rawStatus);
+                            try {
+                                // 1) If DB explicitly indicates em_rota-like states, show Em Andamento
+                                if (n === 'em_rota' || n === 'em rota' || n === 'em-rota' || n === 'em andamento' || n === 'em_andamento') return 'Em Andamento';
+                                // 2) If runtimePolylines has an entry for this motorista, treat as in progress
+                                if (marker && marker.motorista_id && runtimePolylines && runtimePolylines[String(marker.motorista_id)]) return 'Em Andamento';
+                                // 3) If any runtime polyline passes near this marker coordinates, assume it's on route
+                                if (marker && Number(marker.lat) && Number(marker.lng) && runtimePolylines) {
+                                    for (const coords of Object.values(runtimePolylines)) {
+                                        if (pointNearPolyline(Number(marker.lat), Number(marker.lng), coords, 60)) return 'Em Andamento';
+                                    }
+                                }
+                            } catch (e) { /* ignore */ }
+                            if (n === 'concluido' || n === 'entregue' || n === 'concluído') return 'Concluído';
+                            if (n === 'pendente' || n === 'pending' || !n) return 'Pendente';
+                            return String(rawStatus || 'Pendente');
+                        };
+
                         return (
                             <Marker key={`e-${p.id || i}`} position={[p.lat, p.lng]} icon={createPinIcon('entrega', 'em_rota', p.label || (i + 1))}>
                                 <Popup className="delivery-popup" closeButton={true}>
                                     <div style={{ minWidth: 220 }}>
                                         <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>{p.cliente || p.title || 'Cliente'}</div>
                                         <div style={{ color: '#374151', fontSize: 13, marginBottom: 8 }}>{p.endereco || ''}</div>
-                                        <div style={{ fontSize: 13 }}>Status: <span style={{ color: statusColor(status), fontWeight: 700 }}>{(p.status || 'Pendente').toString()}</span></div>
+                                        <div style={{ fontSize: 13 }}>Status: <span style={{ color: statusColor(status), fontWeight: 700 }}>{displayStatusText(status, p)}</span></div>
                                     </div>
                                 </Popup>
                             </Marker>
                         );
                     })}
 
-                    {/* Linha de conferência: conecta entregas na ordem (1->2->3...) */}
-                    {entregaRoutePositions && entregaRoutePositions.length > 1 && (
-                        <Polyline positions={entregaRoutePositions} pathOptions={{ color: '#2563eb', weight: 5, opacity: 0.95, lineJoin: 'round' }} />
-                    )}
+                    {/* Linha da estrada (apenas linhas seguindo ruas). Removida a linha azul reta; exibimos somente polylines baseadas em rota (DB ou Mapbox) */}
                     {Array.from(polylinesByMotorista.entries()).map(([mid, coords], idx) => (
                         Array.isArray(coords) && coords.length > 0 ? (
-                            <Polyline key={`poly-${idx}-${dbEntregas.length}`} positions={coords} pathOptions={{ color: '#2563eb', weight: 7, opacity: 1, lineJoin: 'round' }} />
+                            <Polyline key={`poly-${idx}-${dbEntregas.length}`} positions={coords} pathOptions={{ color: '#10b981', weight: 5, opacity: 0.8, lineJoin: 'round' }} />
+                        ) : null
+                    ))}
+                    {Object.entries(runtimePolylines || {}).map(([mid, coords], idx) => (
+                        Array.isArray(coords) && coords.length > 0 ? (
+                            <Polyline key={`rpoly-${mid}-${idx}`} positions={coords} pathOptions={{ color: '#10b981', weight: 5, opacity: 0.8, lineJoin: 'round' }} />
                         ) : null
                     ))}
                     {/* Gestor (you) marker */}

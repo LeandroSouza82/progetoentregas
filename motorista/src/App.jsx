@@ -300,7 +300,7 @@ function InternalMobileApp() {
                 .from('entregas')
                 .select('*')
                 .eq('motorista_id', mId)
-                .eq('status', 'em_rota')
+                .in('status', ['pendente', 'em_rota'])
                 .order('ordem_logistica', { ascending: true, nullsFirst: false });
 
             if (!error && data) {

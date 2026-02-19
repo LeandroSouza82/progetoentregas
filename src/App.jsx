@@ -345,6 +345,7 @@ function App() {
     const [showDriverSelect, setShowDriverSelect] = useState(false);
     const [canSendRoute, setCanSendRoute] = useState(false);
     const [canSendMotoristaId, setCanSendMotoristaId] = useState(null);
+    const [runtimePolylines, setRuntimePolylines] = useState({});
     // Distance and driver-select mode state
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
@@ -413,6 +414,7 @@ function App() {
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
     const enderecoRef = useRef(null);
     const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Autocomplete
+    const [inputEnderecoInvalid, setInputEnderecoInvalid] = useState(false);
     const [predictions, setPredictions] = useState([]);
     const [historySuggestions, setHistorySuggestions] = useState([]);
     const predictionServiceRef = useRef(null);
@@ -447,6 +449,7 @@ function App() {
                 const lng = Number(coords[0]);
                 const lat = Number(coords[1]);
                 setEnderecoCoords({ lat, lng });
+                try { setInputEnderecoInvalid(false); } catch (e) { }
             } else {
                 // Fallback seguro: forçar geocoding interno (appends Biguaçu, SC e aplica bbox)
                 try {
@@ -454,10 +457,12 @@ function App() {
                     const attempt = await geocodeMapbox(text || enderecoEntrega || String(result?.query || ''), bbox, proximity);
                     if (attempt && attempt.lat != null && attempt.lng != null) {
                         setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
+                        try { setInputEnderecoInvalid(false); } catch (e) { }
                         if (!text && attempt.display_name) setEnderecoEntrega(attempt.display_name);
                     } else {
                         // sem resultado válido: limpar coords
                         setEnderecoCoords(null);
+                        try { setInputEnderecoInvalid(true); } catch (e) { }
                     }
                 } catch (e) {
                     console.warn('handleAddressRetrieve geocodeMapbox fallback failed', e);
@@ -1445,9 +1450,8 @@ function App() {
 
                     const path = res.routes?.[0]?.overview_path || null;
                     if (path && path.length > 0) {
-                        const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
-                        routePolylineRef.current = poly;
-                        // If legs are available, compute precise distance and time and return them (traffic-aware)
+                        // Não desenhar mais a polyline azul aqui (remoção definitiva).
+                        // Mantemos apenas os cálculos de distância/tempo a partir das legs.
                         try {
                             const legs = res.routes?.[0]?.legs || [];
                             const meters = legs.reduce((s, l) => s + ((l && l.distance && typeof l.distance.value === 'number') ? l.distance.value : 0), 0);
@@ -1475,11 +1479,9 @@ function App() {
                 }
             }
 
-            // Fallback: straight line through ordered points
+            // Fallback: straight line through ordered points (cálculo apenas — não desenhar a linha azul)
             const path = [origin].concat(waypts).concat([origin]);
             if (path && path.length > 1 && window.google && window.google.maps) {
-                const poly = new window.google.maps.Polyline({ path, strokeColor: '#60a5fa', strokeOpacity: 0.9, strokeWeight: 5, map: mapRef.current });
-                routePolylineRef.current = poly;
                 try {
                     // compute haversine sum (only fallback when no legs info available)
                     let meters = 0;
@@ -1631,34 +1633,62 @@ function App() {
                             try { setEstimatedDistanceKm(Number((routeGeo.distanceMeters / 1000).toFixed(1))); } catch (e) { }
                             try { setEstimatedTimeSec(Math.round(routeGeo.durationSec || 0)); } catch (e) { }
                         }
+                        // Store runtime polyline for immediate map rendering (v44) without forcing DB write
+                        try {
+                            if (routeGeo && Array.isArray(routeGeo.coordsLatLng) && routeGeo.coordsLatLng.length > 0) {
+                                setRuntimePolylines(prev => ({ ...(prev || {}), [String(motoristaId)]: routeGeo.coordsLatLng }));
+                            }
+                        } catch (e) { /* ignore runtime polyline set errors */ }
                     } catch (e) { console.error('Erro obtendo geometria de rota (Mapbox):', e); routeGeo = null; }
                     // Construir array de updates conforme v34
                     const updates = (optimized || []).map((item, i) => {
                         const rawId = item && item.id;
                         const coercedId = (typeof rawId === 'string' && /^\d+$/.test(rawId)) ? Number(rawId) : rawId;
+                        const lat = (item && item.lat != null) ? Number(item.lat) : null;
+                        const lng = (item && item.lng != null) ? Number(item.lng) : null;
+                        // v44: enviar apenas campos seguros ao upsert para evitar 400
                         const base = { id: coercedId, ordem_logistica: parseInt(Number(i + 1), 10) };
-                        if (routeGeo && Array.isArray(routeGeo.coordsLatLng) && routeGeo.coordsLatLng.length > 0) {
-                            // Persistir polyline (JSON array de [lat,lng]) e distancia_estimada em metros
-                            try { base.rota_polyline = JSON.stringify(routeGeo.coordsLatLng); } catch (e) { base.rota_polyline = null; }
-                            try { base.distancia_estimada = Math.round(routeGeo.distanceMeters || 0); } catch (e) { }
-                        }
+                        if (lat != null && !Number.isNaN(lat)) base.lat = lat;
+                        if (lng != null && !Number.isNaN(lng)) base.lng = lng;
                         return base;
                     }).filter(u => u.id !== undefined && u.id !== null);
                     if (updates.length > 0) {
                         try {
-                            // v38: usar upsert padrão sem opções que adicionem parâmetros na query string
-                            const { data: upsertData, error: upsertErr } = await supabase.from('entregas').upsert(updates);
-                            if (upsertErr) {
+                            // v44: usar upsert com payload restrito (id, ordem_logistica, lat, lng)
+                            try {
+                                // v50: use individual .update() calls to avoid GENERATED ALWAYS id conflicts
+                                const toUpdate = updates.map(u => ({ id: u.id, ordem_logistica: u.ordem_logistica }));
+                                const promises = toUpdate.map(item => {
+                                    const id = item.id;
+                                    const ord = Number(item.ordem_logistica);
+                                    if (id === undefined || id === null) return Promise.resolve({ data: null, error: null, skipped: true });
+                                    return supabase.from('entregas').update({ ordem_logistica: ord }).eq('id', id);
+                                });
+                                const results = await Promise.all(promises);
+                                // analyze results
+                                let anyError = false;
+                                for (const r of results) {
+                                    if (!r) continue;
+                                    if (r.error) {
+                                        anyError = true;
+                                        console.error('recalcRotaForMotorista: update error', r.error);
+                                    }
+                                }
+                                if (anyError) {
+                                    allOk = false;
+                                    try { setMensagemGeral('Falha ao atualizar ordem_logistica (v50). Verifique logs.'); } catch (e) { }
+                                } else {
+                                    allOk = true;
+                                    newOrderIds = toUpdate.map(d => d && d.id).filter(Boolean);
+                                    try { await carregarDados(); } catch (err) { /* non-blocking */ }
+                                }
+                            } catch (err) {
                                 allOk = false;
-                                console.error('recalcRotaForMotorista: erro on upsert (v38)', upsertErr);
-                                try { setMensagemGeral('Falha ao persistir ordem_logistica. Verifique logs.'); } catch (e) { }
-                            } else {
-                                newOrderIds = (upsertData || []).map(d => d && d.id).filter(Boolean);
-                                try { await carregarDados(); } catch (err) { /* non-blocking */ }
+                                console.error('recalcRotaForMotorista: exceção on updates (v50)', err);
                             }
                         } catch (err) {
                             allOk = false;
-                            console.error('recalcRotaForMotorista: exceção on upsert (v38)', err);
+                            console.error('recalcRotaForMotorista: exceção no bloco de persistência (v44)', err);
                         }
                     }
                 }
@@ -1855,6 +1885,7 @@ function App() {
         // Não exigir Google Places/Geocoder — preferir coordenadas do histórico quando disponíveis,
         // mas permitir que o gestor salve um pedido sem coordenadas (será tratado posteriormente).
         try {
+            // If no coords, try history lookup first
             if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords?.lat)) || !Number.isFinite(Number(enderecoCoords?.lng))) {
                 if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
                     try {
@@ -1862,18 +1893,44 @@ function App() {
                         if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
                             setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
                         } else {
-                            // No coords in history: keep enderecoCoords null and allow saving without geocode
                             setEnderecoCoords(null);
                         }
                     } catch (e) {
-                        // ignore history lookup failures and allow adding without coords
                         setEnderecoCoords(null);
                     }
                 }
             }
         } catch (e) { /* non-blocking */ }
 
-        // Preferir coordenadas obtidas via Google Places Autocomplete. Se não houver coords, usar fallback randômico baseado no centro do mapa.
+        // If address text exists but still no coords, attempt Mapbox geocoding automatically
+        try {
+            const enderecoValTmp = enderecoEntrega && String(enderecoEntrega).trim().length > 0 ? String(enderecoEntrega).trim() : null;
+            if (enderecoValTmp && (!enderecoCoords || !Number.isFinite(Number(enderecoCoords?.lat)) || !Number.isFinite(Number(enderecoCoords?.lng)))) {
+                const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
+                const proximity = (selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null) ? { lat: Number(selectedMotorista.lat), lng: Number(selectedMotorista.lng) } : (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : null);
+                try {
+                    const attempt = await geocodeMapbox(enderecoValTmp, bbox, proximity);
+                    if (attempt && attempt.lat != null && attempt.lng != null) {
+                        setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
+                        setInputEnderecoInvalid(false);
+                    } else {
+                        // couldn't validate: mark input visually invalid
+                        setEnderecoCoords(null);
+                        setInputEnderecoInvalid(true);
+                    }
+                } catch (e) {
+                    setEnderecoCoords(null);
+                    setInputEnderecoInvalid(true);
+                }
+            }
+        } catch (e) { /* ignore geocode attempt */ }
+
+        // If input marked invalid, stop submission (visual cue shown)
+        if (inputEnderecoInvalid) {
+            return;
+        }
+
+        // Preferir coordenadas obtidas; se não houver coords, usar fallback randômico baseado no centro do mapa.
         let lat = null;
         let lng = null;
         if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
@@ -1889,7 +1946,13 @@ function App() {
         const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
         const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
         const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
-        if (!clienteVal || !enderecoVal) { alert('Preencha nome do cliente e endereço.'); return; }
+        if (!clienteVal) { alert('Preencha o Nome do Cliente.'); return; }
+        if (!enderecoVal) { setInputEnderecoInvalid(true); return; }
+        // If we have an address text but no validated coordinates, show visual warning and stop
+        if (enderecoVal && (!enderecoCoords || !Number.isFinite(Number(enderecoCoords.lat)) || !Number.isFinite(Number(enderecoCoords.lng)))) {
+            setInputEnderecoInvalid(true);
+            return;
+        }
         const { error } = await supabase.from('entregas').insert([{
             cliente: clienteVal,
             endereco: enderecoVal,
@@ -1901,7 +1964,9 @@ function App() {
         }]);
         if (!error) {
             alert("✅ Salvo com sucesso!");
+            // limpar campos e estados relacionados à busca
             setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); setEnderecoFromHistory(false);
+            setPredictions([]); setHistorySuggestions([]); setInputEnderecoInvalid(false);
             // clear draft preview point after persisting
             setDraftPoint(null);
             try { carregarDados(); } catch (e) { }
@@ -2216,7 +2281,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} focusCoords={enderecoCoords} motoristaDaRota={motoristaDaRota} />
+                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} focusCoords={enderecoCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2288,8 +2353,8 @@ function App() {
                                             options={{ language: 'pt', country: 'BR' }}
                                             onRetrieve={handleAddressRetrieve}
                                             value={enderecoEntrega}
-                                            placeholder="Endereço de Entrega"
-                                            inputProps={{ className: 'v10-mapbox-search-input' }}
+                                            placeholder="Ex: Rua Lauro Bechtold, 147, Centro - Palhoça"
+                                            inputProps={{ className: 'v10-mapbox-search-input', style: { borderColor: inputEnderecoInvalid ? '#ef4444' : undefined } }}
                                         />
                                     </div>
                                 </div>

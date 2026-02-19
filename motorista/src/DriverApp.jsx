@@ -260,7 +260,7 @@ export default function AppMotorista() {
                 .from('entregas')
                 .select('*')
                 .eq('motorista_id', motoristaId)
-                .eq('status', 'em_rota')
+                .in('status', ['pendente', 'em_rota'])
                 .order('ordem_logistica', { ascending: true });
 
             const data = res && res.data ? res.data : [];
