@@ -22,34 +22,15 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     const lastCoordsRef = useRef(new Map());
     // cache último ângulo de cada motorista (id -> angulo)
     const lastAnglesRef = useRef(new Map());
-    const [dbEntregas, setDbEntregas] = useState([]);
+    // No delivery state kept here in emergency mode — map will render only fleet markers
     const [gestorPos, setGestorPos] = useState(null);
     const [focusMarker, setFocusMarker] = useState(null);
 
     // build marker lists
     // Memoize markers to avoid re-computation each render
     // ❌ TRAVA FÍSICA: Filtrar coordenadas inválidas (0,0) ou nulas
-    const entregaMarkers = React.useMemo(() => (entregas || [])
-        .filter(e => {
-            if (!e || e.lat == null || e.lng == null) return false;
-            const lat = Number(e.lat);
-            const lng = Number(e.lng);
-            // ❌ EXTERMINAR pinos em (0,0) ou coordenadas inválidas
-            if (lat === 0 || lng === 0) return false;
-            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-            return isValidSC(lat, lng);
-        })
-        .map(e => ({
-            id: e.id,
-            lat: Number(e.lat),
-            lng: Number(e.lng),
-            label: (e.ordem_logistica && Number(e.ordem_logistica) > 0) ? String(Number(e.ordem_logistica)) : null,
-            title: e.cliente || e.endereco,
-            cliente: e.cliente || null,
-            endereco: e.endereco || null,
-            status: e.status || 'pendente',
-            motorista_id: e.motorista_id != null ? String(e.motorista_id) : null
-        })), [entregas]);
+    // Delivery markers disabled in emergency mode — map will not render delivery pins
+    const entregaMarkers = React.useMemo(() => [], []);
 
     // Show any passed fleet items that have valid SC coords and are online & recent
     // Nota: atualização síncrona do cache será feita dentro do useMemo de frotaMarkers
@@ -105,14 +86,14 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         try {
             const inst = mapInstance;
             mapRef.current = inst;
-            const points = [...entregaMarkers.map(p => ({ lat: p.lat, lng: p.lng })), ...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
+            const points = [...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
             if (!points || points.length === 0) {
                 try { inst.setView([-27.5969, -48.5495], 12); } catch (e) { }
                 return;
             }
             try {
                 const bounds = L.latLngBounds(points.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
-                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
+                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: false });
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
     };
@@ -122,17 +103,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     const mapStyle = { width: '100%', height: mobile ? 250 : height };
 
-    // Determine safe center: prefer fleet first, then entregas, fallback to Florianópolis
+    // Determine safe center: prefer fleet first, fallback to default center
     const defaultCenter = { lat: -27.2423, lng: -50.2188 }; // Santa Catarina fixed default center
     const computedCenter = useMemo(() => {
         const firstFleet = (frotaMarkers && frotaMarkers.length > 0) ? frotaMarkers[0] : null;
-        const firstEntrega = (!firstFleet && entregaMarkers && entregaMarkers.length > 0) ? entregaMarkers[0] : null;
-        const candidate = firstFleet || firstEntrega || defaultCenter;
+        const candidate = firstFleet || defaultCenter;
         const lat = Number(candidate.lat);
         const lng = Number(candidate.lng);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return defaultCenter;
         return { lat, lng };
-    }, [frotaMarkers, entregaMarkers]);
+    }, [frotaMarkers]);
 
     // Track last known markers to avoid refitting on every render
     const lastPointsKeyRef = useRef('');
@@ -154,22 +134,22 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
         try {
             // Ajustar bounds sempre que as entregas ou frota mudarem (auto-fit)
-            const key = JSON.stringify({ e: entregaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })), f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })) });
+            const key = JSON.stringify({ f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })) });
             if (key === lastPointsKeyRef.current) return; // nothing changed
             lastPointsKeyRef.current = key;
             if (!mapRef.current) return;
             const inst = mapRef.current;
-            const points = [...entregaMarkers.map(p => ({ lat: p.lat, lng: p.lng })), ...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
+            const points = [...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
             if (!points || points.length === 0) {
                 try { inst.setView([defaultCenter.lat, defaultCenter.lng], 12); } catch (e) { }
                 return;
             }
             try {
                 const bounds = L.latLngBounds(points.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
-                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
+                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: false });
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
-    }, [entregaMarkers, frotaMarkers]);
+    }, [frotaMarkers]);
 
     // Helper: create pin icon for entregas (blue circle with white number)
     function createPinIcon(tipo, status, num = null) {
@@ -233,120 +213,18 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return [];
     }
 
-    // Fetch persisted rota_polyline entries and subscribe to realtime updates
-    useEffect(() => {
-        // 1. Busca inicial
-        const fetchRotas = async () => {
-            try {
-                const { data } = await supabase
-                    .from('entregas')
-                    .select('id, motorista_id, rota_polyline, status')
-                    .eq('status', 'em_rota');
-                if (data) setDbEntregas(data);
-            } catch (e) {
-                console.warn('Erro ao buscar rota_polyline (inicial):', e);
-            }
-        };
+    // Delivery-route DB subscription disabled in emergency mode (no polylines from DB)
+    // useEffect intentionally removed to avoid map-side processing of deliveries.
+    // (Previously fetched rota_polyline from 'entregas' and subscribed to realtime changes.)
 
-        fetchRotas();
-
-        // 2. ⚡ VIGÍLIA EM TEMPO REAL (o pulo do gato)
-        const subscription = supabase
-            .channel('mapa-rotas')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, () => {
-                fetchRotas();
-                // Limpeza de IDs de motoristas que sumiram do realtime
-                const idsAtuais = new Set((frota || []).map(m => m && m.id));
-                Array.from(lastCoordsRef.current.keys()).forEach(id => {
-                    if (!idsAtuais.has(id)) {
-                        lastCoordsRef.current.delete(id);
-                        lastAnglesRef.current && lastAnglesRef.current.delete(id);
-                    }
-                });
-            })
-            .subscribe();
-
-        return () => { try { subscription.unsubscribe(); } catch (e) { /* ignore */ } };
-    }, [frota]);
-
-    // Build polylines per motorista from entregas (only 'em_rota' and with rota_polyline)
-    const polylinesByMotorista = useMemo(() => {
-        const map = new Map();
-        const source = (dbEntregas && dbEntregas.length > 0) ? dbEntregas : (entregas || []);
-        source.forEach(e => {
-            try {
-                const status = String(e.status || '').toLowerCase().trim();
-                if (status !== 'em_rota') return;
-                if (!e.rota_polyline) return;
-                const mid = e.motorista_id != null ? String(e.motorista_id) : '_unassigned';
-                const coords = decodePolyline(e.rota_polyline);
-                if (!coords || coords.length === 0) return;
-                // Normalize [lng,lat] -> [lat,lng] if necessary
-                const first = coords[0];
-                if (Array.isArray(first) && first.length >= 2) {
-                    const a = Number(first[0]), b = Number(first[1]);
-                    if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
-                        coords.forEach((c, idx) => coords[idx] = [Number(c[1]), Number(c[0])]);
-                    } else {
-                        coords.forEach((c, idx) => coords[idx] = [Number(c[0]), Number(c[1])]);
-                    }
-                }
-                // Keep only one poly per motorista (first wins)
-                if (!map.has(mid)) map.set(mid, coords);
-            } catch (e) { /* ignore per-entry */ }
-        });
-        return map; // Map motoristId -> coords
-    }, [entregas, dbEntregas]);
+    // Polylines from deliveries disabled in emergency mode — map will not draw delivery/routes.
 
     // Conectar entregas em ordem (1->2->3) para conferência visual no dashboard
-    const entregaRoutePositions = useMemo(() => {
-        try {
-            if (!entregaMarkers || entregaMarkers.length < 2) return null;
-            const sorted = entregaMarkers.slice().sort((a, b) => {
-                const na = a.label ? Number(a.label) : 0;
-                const nb = b.label ? Number(b.label) : 0;
-                return na - nb;
-            });
-            const positions = sorted.map(p => [Number(p.lat), Number(p.lng)]);
-            // if a motoristaDaRota is provided, try to prepend their current position
-            try {
-                if (motoristaDaRota && motoristaDaRota.id) {
-                    const mid = String(motoristaDaRota.id);
-                    const cachePos = lastCoordsRef.current.get(mid);
-                    let drvPos = null;
-                    if (cachePos && cachePos.lat != null && cachePos.lng != null) drvPos = { lat: Number(cachePos.lat), lng: Number(cachePos.lng) };
-                    else {
-                        // fallback: find in frotaMarkers
-                        const fm = (frotaMarkers || []).find(x => String(x.id) === mid);
-                        if (fm) drvPos = { lat: Number(fm.lat), lng: Number(fm.lng) };
-                    }
-                    if (drvPos && isValidSC(drvPos.lat, drvPos.lng)) {
-                        positions.unshift([Number(drvPos.lat), Number(drvPos.lng)]);
-                    }
-                }
-            } catch (e) { /* ignore driver prepend issues */ }
-            return positions;
-        } catch (e) { return null; }
-    }, [entregaMarkers, motoristaDaRota, frotaMarkers]);
+    // Delivery route positions disabled in emergency mode.
 
     // Focus on Leandro's route when available (executa apenas uma vez)
     const hasFocusedLeandroRef = useRef(false);
-    useEffect(() => {
-        try {
-            if (hasFocusedLeandroRef.current) return;
-            const leandro = (frota || []).find(m => m && m.nome && String(m.nome).toLowerCase().includes('leandro'));
-            if (!leandro || !leandro.id) return;
-            const mid = String(leandro.id);
-            const coords = polylinesByMotorista.get(mid);
-            if (coords && coords.length > 0 && mapRef.current) {
-                try {
-                    const bounds = L.latLngBounds(coords.map(c => L.latLng(Number(c[0]), Number(c[1]))));
-                    mapRef.current.fitBounds(bounds, { padding: [60, 60] });
-                    hasFocusedLeandroRef.current = true;
-                } catch (e) { /* ignore fit errors */ }
-            }
-        } catch (e) { /* ignore */ }
-    }, [polylinesByMotorista, frota]);
+    // Focus-on-Leandro logic removed in emergency mode (avoid map re-centering based on routes).
 
     // Geolocation helper: locate user and set marker
     function Geolocate() {
@@ -400,15 +278,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             const mapboxUrl = token && token.length > 0
                 ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
                 : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
-            // center on motorista Leandro if available
-            const leandro = (frota || []).find(m => m && m.nome && String(m.nome).toLowerCase().includes('leandro') && m.lat != null && m.lng != null);
-            const initialCenter = leandro && Number(leandro.lat) && Number(leandro.lng) ? [Number(leandro.lat), Number(leandro.lng)] : [computedCenter.lat, computedCenter.lng];
+            const initialCenter = [computedCenter.lat, computedCenter.lng];
 
             return (
                 <MapContainer center={initialCenter} zoom={12} style={mapStyle} whenCreated={handleLoad}>
-                    {/* Geolocation: locate user and set marker */}
                     <Geolocate />
-                    {/* SearchBox was moved to the Nova Carga form; no floating search here */}
                     {token ? (
                         <LayersControl position="topright">
                             <LayersControl.BaseLayer name="Modo Noturno" checked>
@@ -436,119 +310,25 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         <TileLayer url={mapboxUrl} attribution={'© OpenStreetMap contributors'} tileSize={256} zoomOffset={0} />
                     )}
 
-                    {/* Frota (drivers) markers */}
+                    {/* Frota (drivers) markers only — delivery pins and polylines disabled in emergency mode */}
                     {frotaMarkers.map(m => {
-                        if (!(m.online === true || String(m.esta_online) === 'true')) return null;
-                        // Recupera última posição conhecida
-                        const cache = lastCoordsRef.current.get(m.id);
-                        let angulo = 0;
-                        let lastAngle = lastAnglesRef.current.get(m.id) || 0;
-                        if (cache && (cache.lat !== m.lat || cache.lng !== m.lng)) {
-                            angulo = calcularAngulo(cache.lat, cache.lng, m.lat, m.lng);
-                            lastAnglesRef.current.set(m.id, angulo);
-                        } else {
-                            angulo = lastAngle;
-                        }
-                        if (!m.lat || !m.lng) return null;
-                        // Use posição mais recente do cache quando disponível para vincular ao estado real-time
                         const pos = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
                         return (
                             <Marker
                                 key={'v10-marker-' + m.id}
                                 position={[Number(pos.lat), Number(pos.lng)]}
-                                icon={getV10MotoIcon(m.online, angulo, m.title)}
+                                icon={getV10MotoIcon(true, lastAnglesRef.current.get(m.id) || 0, m.title)}
                             />
                         );
                     })}
 
-                    {/* Entrega markers */}
-                    {entregaMarkers.map((p, i) => {
-                        const status = String(p.status || '').toLowerCase().trim();
-                        const normalize = (str) => String(str || '').toLowerCase().trim();
-                        const statusColor = (s) => {
-                            if (!s) return '#374151';
-                            const n = normalize(s);
-                            if (n === 'concluido' || n === 'entregue' || n === 'concluído') return '#16a34a';
-                            if (n === 'em_rota' || n === 'em rota' || n === 'em-rota' || n === 'em andamento' || n === 'em_andamento') return '#10b981';
-                            if (n === 'falha' || n === 'failed') return '#ef4444';
-                            if (n === 'pendente' || n === 'pending') return '#f97316';
-                            return '#374151';
-                        };
-
-                        const haversineKmLocal = (lat1, lon1, lat2, lon2) => {
-                            const R = 6371;
-                            const toRad = (d) => d * Math.PI / 180;
-                            const dLat = toRad(lat2 - lat1);
-                            const dLon = toRad(lon2 - lon1);
-                            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-                            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-                            return R * c;
-                        };
-
-                        const pointNearPolyline = (ptLat, ptLng, coords = [], thresholdMeters = 50) => {
-                            if (!Array.isArray(coords) || coords.length === 0) return false;
-                            try {
-                                for (const c of coords) {
-                                    if (!Array.isArray(c) || c.length < 2) continue;
-                                    const lat = Number(c[0]); const lng = Number(c[1]);
-                                    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-                                    const dkm = haversineKmLocal(ptLat, ptLng, lat, lng);
-                                    if ((dkm * 1000) <= thresholdMeters) return true;
-                                }
-                            } catch (e) { /* ignore */ }
-                            return false;
-                        };
-
-                        const displayStatusText = (rawStatus, marker) => {
-                            const n = normalize(rawStatus);
-                            try {
-                                // 1) If DB explicitly indicates em_rota-like states, show Em Andamento
-                                if (n === 'em_rota' || n === 'em rota' || n === 'em-rota' || n === 'em andamento' || n === 'em_andamento') return 'Em Andamento';
-                                // 2) If runtimePolylines has an entry for this motorista, treat as in progress
-                                if (marker && marker.motorista_id && runtimePolylines && runtimePolylines[String(marker.motorista_id)]) return 'Em Andamento';
-                                // 3) If any runtime polyline passes near this marker coordinates, assume it's on route
-                                if (marker && Number(marker.lat) && Number(marker.lng) && runtimePolylines) {
-                                    for (const coords of Object.values(runtimePolylines)) {
-                                        if (pointNearPolyline(Number(marker.lat), Number(marker.lng), coords, 60)) return 'Em Andamento';
-                                    }
-                                }
-                            } catch (e) { /* ignore */ }
-                            if (n === 'concluido' || n === 'entregue' || n === 'concluído') return 'Concluído';
-                            if (n === 'pendente' || n === 'pending' || !n) return 'Pendente';
-                            return String(rawStatus || 'Pendente');
-                        };
-
-                        return (
-                            <Marker key={`e-${p.id || i}`} position={[p.lat, p.lng]} icon={createPinIcon('entrega', 'em_rota', p.label || (i + 1))}>
-                                <Popup className="delivery-popup" closeButton={true}>
-                                    <div style={{ minWidth: 220 }}>
-                                        <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>{p.cliente || p.title || 'Cliente'}</div>
-                                        <div style={{ color: '#374151', fontSize: 13, marginBottom: 8 }}>{p.endereco || ''}</div>
-                                        <div style={{ fontSize: 13 }}>Status: <span style={{ color: statusColor(status), fontWeight: 700 }}>{displayStatusText(status, p)}</span></div>
-                                    </div>
-                                </Popup>
-                            </Marker>
-                        );
-                    })}
-
-                    {/* Linha da estrada (apenas linhas seguindo ruas). Removida a linha azul reta; exibimos somente polylines baseadas em rota (DB ou Mapbox) */}
-                    {Array.from(polylinesByMotorista.entries()).map(([mid, coords], idx) => (
-                        Array.isArray(coords) && coords.length > 0 ? (
-                            <Polyline key={`poly-${idx}-${dbEntregas.length}`} positions={coords} pathOptions={{ color: '#10b981', weight: 5, opacity: 0.8, lineJoin: 'round' }} />
-                        ) : null
-                    ))}
-                    {Object.entries(runtimePolylines || {}).map(([mid, coords], idx) => (
-                        Array.isArray(coords) && coords.length > 0 ? (
-                            <Polyline key={`rpoly-${mid}-${idx}`} positions={coords} pathOptions={{ color: '#10b981', weight: 5, opacity: 0.8, lineJoin: 'round' }} />
-                        ) : null
-                    ))}
                     {/* Gestor (you) marker */}
                     {gestorPos && (
                         <Marker position={gestorPos} icon={getGestorIcon()}>
                             <Popup>Você está aqui</Popup>
                         </Marker>
                     )}
-                    {/* Marcador temporário solicitado pelo formulário de Nova Carga */}
+                    {/* Focus marker disabled for deliveries — kept only for manual testing */}
                     {focusMarker && (
                         <Marker position={[focusMarker.lat, focusMarker.lng]} icon={createPinIcon('search', 'selected', null)}>
                             <Popup>Destino selecionado</Popup>
@@ -560,7 +340,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             console.warn('Leaflet temporariamente indisponível (map render)', e);
             return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>Carregando Mapa...</div>;
         }
-    }, [mapStyle, computedCenter, entregaMarkers, frotaMarkers, polylinesByMotorista, dbEntregas]);
+    }, [mapStyle, computedCenter, frotaMarkers]);
 
     const handleCenterClick = () => {
         try {

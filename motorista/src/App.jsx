@@ -448,11 +448,11 @@ function InternalMobileApp() {
         // IMPORTANTE: Status 'falha' para o pino ficar vermelho instantaneamente no Dashboard
         const { error } = await supabase
             .from('entregas')
-            .update({ status: 'falha', observacoes: motivo })
+            .update({ status: 'falha', obs: motivo })
             .eq('id', id);
 
         if (!error) {
-            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'falha', observacoes: motivo } : item));
+            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'falha', obs: motivo } : item));
             alert("❌ Falha registrada com sucesso. O gestor verá o pino vermelho.");
         } else {
             alert("Erro ao reportar falha: " + error.message);

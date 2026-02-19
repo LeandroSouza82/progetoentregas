@@ -2,7 +2,6 @@ import React from 'react';
 import { useRef, useState, useEffect } from 'react';
 import supabase, { subscribeToTable } from './supabaseClient';
 import MapaLogistica from './MapaLogistica';
-import { SearchBox } from '@mapbox/search-js-react';
 import { geocodeMapbox, nearestNeighborRoute, getRouteGeometry } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 const HAS_SUPABASE_CREDENTIALS = Boolean(supabase && typeof supabase.from === 'function');
@@ -96,7 +95,7 @@ const darkTheme = {
 
 // theme state will be set inside the App component
 // Status padrão para novas cargas — sempre em minúsculas
-const NEW_LOAD_STATUS = 'aguardando';
+const NEW_LOAD_STATUS = 'pendente';
 
 // --- LÓGICA (NÃO MEXEMOS EM NADA AQUI) ---
 
@@ -322,7 +321,8 @@ function App() {
     }
 
     // Estados do Supabase
-    const [entregasEmEspera, setEntregasEmEspera] = useState([]); // agora vem de `entregas`
+    const [entregas, setEntregas] = useState([]);
+    const [pedidosPendentes, setPedidosPendentes] = useState([]);
     const [frota, setFrota] = useState([]); // agora vem de `motoristas`
     const [totalEntregas, setTotalEntregas] = useState(0);
     const [avisos, setAvisos] = useState([]);
@@ -331,8 +331,7 @@ function App() {
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
 
-    // Draft preview state: a temporary point selected by gestor and the optimized preview order
-    const [draftPoint, setDraftPoint] = useState(null);
+    // Draft preview state: optimized preview order (no draft point)
     const [draftPreview, setDraftPreview] = useState([]);
     const draftPolylineRef = useRef(null);
     const draftOptimizeTimerRef = useRef(null);
@@ -409,132 +408,49 @@ function App() {
     const [mensagemGeral, setMensagemGeral] = useState('');
     const [enviandoGeral, setEnviandoGeral] = useState(false);
     const [btnPressed, setBtnPressed] = useState(false);
+    const [adicionando, setAdicionando] = useState(false);
+    const [duplicateTipoMsg, setDuplicateTipoMsg] = useState('');
+    const clienteInputRef = useRef(null);
     const [destinatario, setDestinatario] = useState('all');
     const [nomeCliente, setNomeCliente] = useState('');
+    const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
     const [enderecoEntrega, setEnderecoEntrega] = useState('');
-    const enderecoRef = useRef(null);
-    const [enderecoCoords, setEnderecoCoords] = useState(null); // { lat, lng } when chosen via Autocomplete
+    const [enderecoGeocodeNotFound, setEnderecoGeocodeNotFound] = useState(false);
     const [inputEnderecoInvalid, setInputEnderecoInvalid] = useState(false);
-    const [predictions, setPredictions] = useState([]);
+
     const [historySuggestions, setHistorySuggestions] = useState([]);
-    const predictionServiceRef = useRef(null);
-    const placesServiceRef = useRef(null);
-    const predictionTimerRef = useRef(null);
-    const [enderecoFromHistory, setEnderecoFromHistory] = useState(false); // flag: clicked from history (accept without forcing Places selection)
 
-    // Quando o resultado do SearchBox do Mapbox for selecionado, atualiza o formulário
-    const handleAddressRetrieve = async (result) => {
-        try {
-            const features = result?.features || result?.result?.features || result?.response?.features || [];
-            const feat = Array.isArray(features) && features.length > 0 ? features[0] : null;
-            const coords = feat && (feat.geometry?.coordinates || feat.center);
-            const text = feat?.place_name || feat?.properties?.label || feat?.text || feat?.description || '';
-            if (text) {
-                setEnderecoEntrega(text);
-                setEnderecoFromHistory(false);
-            }
-
-            // BBOX operacional rígido (garante que o ponto não escape)
-            const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
-
-            const coordsValid = (c) => {
-                if (!c || c.length < 2) return false;
-                const lng = Number(c[0]);
-                const lat = Number(c[1]);
-                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-                return lat <= bbox.north && lat >= bbox.south && lng >= bbox.west && lng <= bbox.east;
-            };
-
-            if (coords && coordsValid(coords)) {
-                const lng = Number(coords[0]);
-                const lat = Number(coords[1]);
-                setEnderecoCoords({ lat, lng });
-                try { setInputEnderecoInvalid(false); } catch (e) { }
-            } else {
-                // Fallback seguro: forçar geocoding interno (appends Biguaçu, SC e aplica bbox)
-                try {
-                    const proximity = (selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null) ? { lat: Number(selectedMotorista.lat), lng: Number(selectedMotorista.lng) } : (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : null);
-                    const attempt = await geocodeMapbox(text || enderecoEntrega || String(result?.query || ''), bbox, proximity);
-                    if (attempt && attempt.lat != null && attempt.lng != null) {
-                        setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
-                        try { setInputEnderecoInvalid(false); } catch (e) { }
-                        if (!text && attempt.display_name) setEnderecoEntrega(attempt.display_name);
-                    } else {
-                        // sem resultado válido: limpar coords
-                        setEnderecoCoords(null);
-                        try { setInputEnderecoInvalid(true); } catch (e) { }
-                    }
-                } catch (e) {
-                    console.warn('handleAddressRetrieve geocodeMapbox fallback failed', e);
-                    setEnderecoCoords(null);
-                }
-            }
-
-            // limpa previsões/histórico temporário
-            try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
-        } catch (e) { console.warn('handleAddressRetrieve', e); }
-    };
-
-    // Calculate route distance & duration via Mapbox Directions API when queue changes
+    // Duplicate detection (address + tipo) — v101: block same-service duplicates for same endereco
     useEffect(() => {
         try {
-            if (!Array.isArray(entregasEmEspera)) return;
-            // build hash of coordinates/order to detect real changes
-            const coordsKey = (entregasEmEspera || []).map(p => `${p.lat || ''},${p.lng || ''}`).join('|');
-            if (!coordsKey || coordsKey.length === 0) {
-                // nothing to calculate
-                try { setEstimatedDistanceKm(null); setEstimatedTimeSec(null); } catch (e) { }
+            const enderecoTrim = String(enderecoEntrega || '').trim();
+            if (!enderecoTrim) {
+                setDuplicateTipoMsg('');
                 return;
             }
-            if (coordsKey === lastQueueHashRef.current) return; // no change
-            lastQueueHashRef.current = coordsKey;
-            // debounce small changes
-            try { if (queueCalcTimerRef.current) clearTimeout(queueCalcTimerRef.current); } catch (e) { }
-            queueCalcTimerRef.current = setTimeout(async () => {
-                try {
-                    setDistanceCalculating(true);
-                    const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
-                    const pts = (entregasEmEspera || []).filter(p => p && p.lat != null && p.lng != null);
-                    if (!pts || pts.length < 2) {
-                        setEstimatedDistanceKm(null);
-                        setEstimatedTimeSec(null);
-                        setDistanceCalculating(false);
-                        return;
-                    }
-                    if (token && token.length > 10) {
-                        const coords = pts.map(p => `${Number(p.lng)},${Number(p.lat)}`).join(';');
-                        const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}?overview=false&geometries=polyline&access_token=${token}`;
-                        try {
-                            const resp = await fetch(url);
-                            if (!resp.ok) throw new Error('Mapbox Directions failed');
-                            const data = await resp.json();
-                            const route = data && data.routes && data.routes[0];
-                            if (route) {
-                                const meters = route.distance || 0;
-                                const secs = route.duration || 0;
-                                if (meters > 0) try { setEstimatedDistanceKm(Number((meters / 1000).toFixed(1))); } catch (e) { }
-                                if (secs > 0) try { setEstimatedTimeSec(Math.round(secs)); } catch (e) { }
-                            } else {
-                                // fallback to haversine estimate
-                                const km = computeRouteDistanceKm(null, pts, null);
-                                if (km > 0) try { setEstimatedDistanceKm(Number(km.toFixed(1))); setEstimatedTimeSec(Math.round((km / 40) * 3600)); } catch (e) { }
-                            }
-                        } catch (e) {
-                            console.warn('Mapbox directions error', e);
-                            const km = computeRouteDistanceKm(null, pts, null);
-                            if (km > 0) try { setEstimatedDistanceKm(Number(km.toFixed(1))); setEstimatedTimeSec(Math.round((km / 40) * 3600)); } catch (e) { }
-                        }
-                    } else {
-                        // no token: fallback to haversine + rough time estimate (40 km/h)
-                        const km = computeRouteDistanceKm(null, pts, null);
-                        if (km > 0) try { setEstimatedDistanceKm(Number(km.toFixed(1))); setEstimatedTimeSec(Math.round((km / 40) * 3600)); } catch (e) { }
-                    }
-                } catch (e) { console.warn('queue calc failed', e); }
-                try { setDistanceCalculating(false); } catch (e) { }
-            }, 350);
-        } catch (e) { console.warn('useEffect queue calc error', e); }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [JSON.stringify(entregasEmEspera)]);
+            const normalize = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+            const addrNorm = normalize(enderecoTrim);
+            const pendingMatches = (entregas || []).filter(e => e && String(e.status || '').toLowerCase() === 'pendente' && e.endereco && normalize(e.endereco) === addrNorm);
+            if (!pendingMatches || pendingMatches.length === 0) {
+                setDuplicateTipoMsg('');
+                return;
+            }
+            const selectedTipo = String(tipoEncomenda || 'Entrega').trim();
+            const sameTipoExists = pendingMatches.some(p => String(p.tipo || 'Entrega').trim().toLowerCase() === selectedTipo.toLowerCase());
+            if (sameTipoExists) {
+                setDuplicateTipoMsg(`⚠️ Já existe uma ${selectedTipo} pendente para este endereço. Caso seja um novo serviço, altere o Tipo (ex: Recolha).`);
+            } else {
+                setDuplicateTipoMsg('');
+            }
+        } catch (e) { /* ignore */ }
+    }, [enderecoEntrega, tipoEncomenda, entregas]);
+
+    // Sem SearchBox: o campo de endereço é um input simples controlado por enderecoEntrega
+
+    // Queue calculations removed (emergency reset) — heavy route computations disabled to prevent UI freezes
+    // (previously calculated estimatedDistanceKm / estimatedTimeSec from entregasEmEspera)
+    // noop to keep variables available
+    useEffect(() => { /* queue calc disabled in emergency reset */ }, []);
     // cleanup on unmount
     useEffect(() => {
         return () => { try { if (queueCalcTimerRef.current) clearTimeout(queueCalcTimerRef.current); } catch (e) { } };
@@ -544,7 +460,6 @@ function App() {
     const [recentList, setRecentList] = useState([]);
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
-    const [tipoEncomenda, setTipoEncomenda] = useState('Entrega');
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
 
     const mapRef = useRef(null);
@@ -639,71 +554,12 @@ function App() {
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
 
-    // Autocomplete (Places) — replaced Autocomplete widget with controlled AutocompleteService (debounced)
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        if (abaAtiva !== 'Nova Carga') return;
+    // Autocomplete services removed — no Google Places/Autocomplete initialization
 
-        // Initialize services when Google loaded
-        try {
-            if (typeof window !== 'undefined' && window.google && window.google.maps && window.google.maps.places) {
-                if (!predictionServiceRef.current && window.google.maps.places.AutocompleteService) predictionServiceRef.current = new window.google.maps.places.AutocompleteService();
-                if (!placesServiceRef.current && window.google.maps.places.PlacesService) {
-                    try { placesServiceRef.current = new window.google.maps.places.PlacesService(document.createElement('div')); } catch (e) { placesServiceRef.current = null; }
-                }
-            }
-        } catch (e) { console.warn('AutocompleteService init failed', e); }
+    // Draft point logic removed to simplify form behavior (no ephemeral draft point)
 
-        return () => { /* nothing to clean for services */ };
-    }, [abaAtiva]);
-
-    // Draft point: set when gestor seleciona um endereço
-    useEffect(() => {
-        if (!enderecoCoords || !enderecoEntrega) { setDraftPoint(null); return; }
-        try {
-            setDraftPoint({ cliente: (nomeCliente || '').trim(), endereco: enderecoEntrega, lat: Number(enderecoCoords.lat), lng: Number(enderecoCoords.lng), tipo: String(tipoEncomenda || 'Entrega').trim(), id: `draft-${Date.now()}` });
-        } catch (e) {
-            setDraftPoint(null);
-        }
-    }, [enderecoCoords, enderecoEntrega, tipoEncomenda, nomeCliente]);
-
-    // Draft preview optimization: compute suggested order for entregasEmEspera + draftPoint (visual only)
-    useEffect(() => {
-        let mounted = true;
-        const list = Array.isArray(entregasEmEspera) ? entregasEmEspera.slice() : [];
-        if (draftPoint) list.push(draftPoint);
-        const hash = JSON.stringify({ ids: (list || []).map(p => p && (p.id || (p.lat + ',' + p.lng) || p.endereco || '')), draftId: draftPoint ? draftPoint.id : null });
-        if (lastDraftHashRef.current === hash) return () => { mounted = false; };
-        lastDraftHashRef.current = hash;
-
-        clearTimeout(draftOptimizeTimerRef.current);
-        draftOptimizeTimerRef.current = setTimeout(async () => {
-            try {
-                if (!mounted) return;
-                if (!list || list.length === 0) {
-                    setDraftPreview([]);
-                    return;
-                }
-                const origin = pontoPartida || mapCenterState || DEFAULT_MAP_CENTER;
-                // Use local heuristic for draft preview to avoid calling Google
-                try { setDistanceCalculating(true); } catch (e) { }
-                const optimizedLocal = otimizarRota(origin, list);
-                if (!mounted) return;
-                setDraftPreview((optimizedLocal && optimizedLocal.length > 0) ? optimizedLocal : list);
-                // Compute estimated distance for preview (non-persistent)
-                try {
-                    const pts = (optimizedLocal && optimizedLocal.length > 0) ? optimizedLocal : list;
-                    const dist = computeRouteDistanceKm(origin, pts, pontoPartida || mapCenterState || DEFAULT_MAP_CENTER);
-                    setEstimatedDistanceKm(Number(dist.toFixed(1)));
-                } catch (e) { /* ignore */ } finally { try { setDistanceCalculating(false); } catch (e) { } }
-            } catch (e) {
-                console.warn('draftPreview: erro ao calcular pré-roteiro', e);
-                if (mounted) setDraftPreview([]);
-            }
-        }, 700);
-
-        return () => { mounted = false; clearTimeout(draftOptimizeTimerRef.current); };
-    }, [entregasEmEspera, draftPoint, pontoPartida, mapCenterState]);
+    // Draft preview optimization disabled (emergency reset) — remove heavy recalculations
+    useEffect(() => { /* draft preview disabled in emergency reset */ }, []);
 
     // Suggestions: fetch history matches from Supabase
     async function fetchHistoryMatches(q) {
@@ -715,52 +571,7 @@ function App() {
         } catch (e) { setHistorySuggestions([]); }
     }
 
-    // Suggestions: fetch Google Place predictions (debounced caller)
-    async function fetchPredictions(q) {
-        try {
-            if (!q || String(q).trim().length < 3) { setPredictions([]); return; }
-            if (googleQuotaExceededRef.current) { setPredictions([]); return []; } // Google bloqueado hoje: usar histórico somente
-            if (!predictionServiceRef.current) { setPredictions([]); return; }
-            return new Promise((resolve) => {
-                predictionServiceRef.current.getPlacePredictions({ input: q, componentRestrictions: { country: 'br' }, types: ['address'] }, (preds, status) => {
-                    if (status === 'OK' && Array.isArray(preds)) { setPredictions(preds.slice(0, 8)); resolve(preds.slice(0, 8)); }
-                    else if (status === 'OVER_QUERY_LIMIT') { markGoogleQuotaExceeded('Places', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setPredictions([]); resolve([]); }
-                    else if (status === 'REQUEST_DENIED' || status === 'API_NOT_ALLOWED') { markGoogleQuotaExceeded('Places', '⚠️ API do Google não autorizada para Places. Use o histórico e cole o endereço manualmente.'); setPredictions([]); resolve([]); }
-                    else { setPredictions([]); resolve([]); }
-                });
-            });
-        } catch (e) { setPredictions([]); }
-    }
-
-    async function handlePredictionClick(pred) {
-        try {
-            if (!pred) return;
-            // Mark as not history
-            try { setEnderecoFromHistory(false); } catch (e) { }
-            try { setEnderecoEntrega(pred.description || (pred && pred.structured_formatting && pred.structured_formatting.main_text) || ''); } catch (e) { }
-            // If we have a place_id, fetch details for coords
-            if (pred && pred.place_id && placesServiceRef.current && placesServiceRef.current.getDetails) {
-                try {
-                    if (googleQuotaExceededRef.current) {
-                        // Google bloqueado — não tentar buscar detalhes
-                        setEnderecoCoords(null);
-                    } else {
-                        const details = await new Promise((resolve) => placesServiceRef.current.getDetails({ placeId: pred.place_id, fields: ['geometry', 'formatted_address'] }, (res, stat) => resolve({ res, stat })));
-                        if (details && details.stat === 'OK' && details.res && details.res.geometry && details.res.geometry.location) {
-                            const loc = details.res.geometry.location;
-                            setEnderecoCoords({ lat: loc.lat(), lng: loc.lng() });
-                        } else {
-                            if (details && details.stat === 'OVER_QUERY_LIMIT') markGoogleQuotaExceeded('PlaceDetails');
-                            if (details && (details.stat === 'REQUEST_DENIED' || details.stat === 'API_NOT_ALLOWED')) markGoogleQuotaExceeded('PlaceDetails', '⚠️ API do Google não autorizada para Place Details. Use Histórico ou cole o endereço manualmente.');
-                            setEnderecoCoords(null);
-                        }
-                    }
-                } catch (e) { if (String(e).includes && String(e).includes('OVER_QUERY_LIMIT')) markGoogleQuotaExceeded('PlaceDetails', 'Modo de Segurança Ativado: Usando dados locais do histórico'); setEnderecoCoords(null); }
-            }
-            // clear suggestions
-            try { setPredictions([]); setHistorySuggestions([]); } catch (e) { }
-        } catch (e) { /* ignore */ }
-    }
+    // Predictions and Places interaction removed (no autocomplete)
 
     const carregarDados = React.useCallback(async () => {
         // Fetch control refs to avoid concurrent fetches
@@ -832,19 +643,19 @@ function App() {
             const { data: entregasPend, error: entregasErr } = await q;
             if (entregasErr) {
                 console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
-                setEntregasEmEspera([]);
+                setPedidosPendentes([]);
             } else {
                 const list = entregasPend || [];
                 // fallback local sort if server didn't order
                 const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : list;
-                setEntregasEmEspera(sorted);
+                setPedidosPendentes(sorted);
                 // reset retry counter on success
                 try { retryCountRef.current = 0; } catch (e) { }
             }
         } catch (e) {
             console.warn('Erro carregando entregas (filtro de status):', e);
-            // preserve previous entregasEmEspera if available
-            setEntregasEmEspera(prev => (prev && prev.length) ? prev : []);
+            // preserve previous pedidosPendentes if available
+            setPedidosPendentes(prev => (prev && prev.length) ? prev : []);
             // schedule capped retry
             scheduleRetry(5000);
         }
@@ -854,6 +665,8 @@ function App() {
             let q2 = supabase.from('entregas').select('*');
             const { data: todas } = await q2;
             setTotalEntregas((todas || []).length);
+            // persist full entregas list for other UI checks
+            setEntregas(Array.isArray(todas) ? todas : (todas || []));
         } catch (e) {
             console.warn('Erro contando entregas:', e);
             // don't reset total to 0 on transient errors
@@ -1265,7 +1078,7 @@ function App() {
     };
 
     // Combina entregas em espera e rota ativa para analisar status por motorista
-    const entregasAtivos = [...(entregasEmEspera || []), ...(rotaAtiva || [])];
+    const entregasAtivos = [...(pedidosPendentes || []), ...(rotaAtiva || [])];
 
 
 
@@ -1835,25 +1648,8 @@ function App() {
     // NOTE: v34 — removidos efeitos que resetavam `canSendRoute` automaticamente.
     // O botão permanece verde após persistência até envio manual pelo gestor.
 
-    // Auto-zoom / fitBounds behavior for Google Map when pontos mudam
-    useEffect(() => {
-        if (!mapRef.current) return;
-        const map = mapRef.current;
-        const pontos = [
-            ...orderedRota.map(p => [p.lat, p.lng]),
-            ...((frota || []).filter(m => m.esta_online === true && m.lat != null && m.lng != null).map(m => [m.lat, m.lng]))
-        ].filter(pt => pt && pt.length >= 2 && !isNaN(Number(pt[0])) && !isNaN(Number(pt[1])));
-        if (!pontos || pontos.length === 0) return;
-        const bounds = new window.google.maps.LatLngBounds();
-        pontos.forEach(pt => { bounds.extend({ lat: Number(pt[0]), lng: Number(pt[1]) }); });
-        try {
-            map.fitBounds(bounds, 80);
-            // ensure zoom isn't too close/far; clamp between 13 and 15
-            const currentZoom = map.getZoom && map.getZoom();
-            if (currentZoom && currentZoom < 13) map.setZoom(13);
-            if (currentZoom && currentZoom > 15) map.setZoom(15);
-        } catch (e) { /* ignore */ }
-    }, [orderedRota, frota]);
+    // Auto-zoom / fitBounds disabled in emergency mode — avoid map re-centering that can trigger freeze
+    useEffect(() => { /* disabled (v85 emergency reset) */ }, []);
 
     // Remover motoristas sem atualização há mais de 2 minutos (evita 'fantasmas')
     useEffect(() => {
@@ -1881,98 +1677,94 @@ function App() {
     // NOTE: v42 cleanup: removed automatic clearing of canSendRoute (managed manually)
 
     const adicionarAosPendentes = async (e) => {
-        e.preventDefault();
-        // Não exigir Google Places/Geocoder — preferir coordenadas do histórico quando disponíveis,
-        // mas permitir que o gestor salve um pedido sem coordenadas (será tratado posteriormente).
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        if (adicionando) return; // already saving, ignore duplicate clicks
+        setAdicionando(true);
+
         try {
-            // If no coords, try history lookup first
-            if (!enderecoCoords || !Number.isFinite(Number(enderecoCoords?.lat)) || !Number.isFinite(Number(enderecoCoords?.lng))) {
-                if (enderecoEntrega && enderecoEntrega.trim().length > 3) {
-                    try {
-                        const { data: hist, error: histErr } = await supabase.from('entregas').select('lat,lng').ilike('endereco', `%${enderecoEntrega}%`).limit(1);
-                        if (!histErr && hist && hist.length > 0 && hist[0].lat != null && hist[0].lng != null) {
-                            setEnderecoCoords({ lat: Number(hist[0].lat), lng: Number(hist[0].lng) });
-                        } else {
-                            setEnderecoCoords(null);
-                        }
-                    } catch (e) {
-                        setEnderecoCoords(null);
-                    }
-                }
+            // Require numeric street number before attempting save
+            const hasNumber = /\d/.test(String(enderecoEntrega || ''));
+            if (!hasNumber) {
+                alert('O endereço precisa conter um número (ex: Rua, 123).');
+                return;
             }
-        } catch (e) { /* non-blocking */ }
 
-        // If address text exists but still no coords, attempt Mapbox geocoding automatically
-        try {
-            const enderecoValTmp = enderecoEntrega && String(enderecoEntrega).trim().length > 0 ? String(enderecoEntrega).trim() : null;
-            if (enderecoValTmp && (!enderecoCoords || !Number.isFinite(Number(enderecoCoords?.lat)) || !Number.isFinite(Number(enderecoCoords?.lng)))) {
-                const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
-                const proximity = (selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null) ? { lat: Number(selectedMotorista.lat), lng: Number(selectedMotorista.lng) } : (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : null);
-                try {
-                    const attempt = await geocodeMapbox(enderecoValTmp, bbox, proximity);
-                    if (attempt && attempt.lat != null && attempt.lng != null) {
-                        setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
-                        setInputEnderecoInvalid(false);
-                    } else {
-                        // couldn't validate: mark input visually invalid
-                        setEnderecoCoords(null);
-                        setInputEnderecoInvalid(true);
+            const clienteTrim = String(nomeCliente || '').trim();
+            const enderecoTrim = String(enderecoEntrega || '').trim();
+
+            // DUPLICITY RULE (v101): check existing pending delivery for same endereco
+            try {
+                const { data: existing, error: dupErr } = await supabase
+                    .from('entregas')
+                    .select('id, tipo, endereco')
+                    .ilike('endereco', enderecoTrim)
+                    .eq('status', 'pendente')
+                    .limit(1);
+                if (dupErr) {
+                    console.warn('Erro ao checar duplicidade por endereco:', dupErr);
+                } else if (Array.isArray(existing) && existing.length > 0) {
+                    const existingTipo = String(existing[0].tipo || 'Entrega').trim();
+                    const selectedTipo = String(tipoEncomenda || 'Entrega').trim();
+                    if (existingTipo.toLowerCase() === selectedTipo.toLowerCase()) {
+                        alert(`⚠️ Já existe uma ${selectedTipo} pendente para este endereço. Caso seja um novo serviço, altere o Tipo (ex: Recolha).`);
+                        return;
                     }
-                } catch (e) {
-                    setEnderecoCoords(null);
-                    setInputEnderecoInvalid(true);
+                    // different tipo => allow save
                 }
+            } catch (dupCheckErr) {
+                console.warn('Erro na verificação de duplicidade por endereco:', dupCheckErr);
             }
-        } catch (e) { /* ignore geocode attempt */ }
 
-        // If input marked invalid, stop submission (visual cue shown)
-        if (inputEnderecoInvalid) {
-            return;
-        }
+            // Try geocoding with timeout (non-blocking guard). If geocode fails, we still save.
+            let coords = null;
+            try {
+                const geocodePromise = geocodeMapbox && typeof geocodeMapbox === 'function' ? geocodeMapbox(enderecoTrim) : null;
+                const res = await Promise.race([
+                    geocodePromise || Promise.resolve(null),
+                    new Promise(r => setTimeout(() => r(null), 1200))
+                ]);
+                if (res && res.lat != null && res.lng != null) coords = { lat: Number(res.lat), lng: Number(res.lng) };
+            } catch (err) {
+                coords = null;
+            }
 
-        // Preferir coordenadas obtidas; se não houver coords, usar fallback randômico baseado no centro do mapa.
-        let lat = null;
-        let lng = null;
-        if (enderecoCoords && Number.isFinite(Number(enderecoCoords.lat)) && Number.isFinite(Number(enderecoCoords.lng))) {
-            lat = Number(enderecoCoords.lat);
-            lng = Number(enderecoCoords.lng);
-        } else {
-            const baseLat = Number((mapCenterState && mapCenterState.lat) || 0);
-            const baseLng = Number((mapCenterState && mapCenterState.lng) || 0);
-            lat = baseLat + (Math.random() - 0.5) * 0.04;
-            lng = baseLng + (Math.random() - 0.5) * 0.04;
-        }
-        // Preparar observações: sempre enviar string ('' quando vazio) e aplicar trim
-        const obsValue = (observacoesGestor && String(observacoesGestor).trim().length > 0) ? String(observacoesGestor).trim() : '';
-        const clienteVal = (nomeCliente && String(nomeCliente).trim().length > 0) ? String(nomeCliente).trim() : null;
-        const enderecoVal = (enderecoEntrega && String(enderecoEntrega).trim().length > 0) ? String(enderecoEntrega).trim() : null;
-        if (!clienteVal) { alert('Preencha o Nome do Cliente.'); return; }
-        if (!enderecoVal) { setInputEnderecoInvalid(true); return; }
-        // If we have an address text but no validated coordinates, show visual warning and stop
-        if (enderecoVal && (!enderecoCoords || !Number.isFinite(Number(enderecoCoords.lat)) || !Number.isFinite(Number(enderecoCoords.lng)))) {
-            setInputEnderecoInvalid(true);
-            return;
-        }
-        const { error } = await supabase.from('entregas').insert([{
-            cliente: clienteVal,
-            endereco: enderecoVal,
-            tipo: String(tipoEncomenda || '').trim(),
-            lat: lat,
-            lng: lng,
-            status: String(NEW_LOAD_STATUS).trim().toLowerCase(),
-            observacoes: obsValue
-        }]);
-        if (!error) {
-            alert("✅ Salvo com sucesso!");
-            // limpar campos e estados relacionados à busca
-            setNomeCliente(''); setEnderecoEntrega(''); setObservacoesGestor(''); setEnderecoCoords(null); setEnderecoFromHistory(false);
-            setPredictions([]); setHistorySuggestions([]); setInputEnderecoInvalid(false);
-            // clear draft preview point after persisting
-            setDraftPoint(null);
-            try { carregarDados(); } catch (e) { }
+            const payload = {
+                cliente: clienteTrim,
+                endereco: enderecoTrim,
+                status: 'pendente',
+                tipo: tipoEncomenda || 'Entrega',
+                obs: observacoesGestor || ''
+            };
+            payload.lat = (coords && Number.isFinite(Number(coords.lat))) ? Number(coords.lat) : 0;
+            payload.lng = (coords && Number.isFinite(Number(coords.lng))) ? Number(coords.lng) : 0;
+
+            const { error } = await supabase.from('entregas').insert([payload]);
+            if (error) {
+                console.error('Erro ao salvar no banco:', error);
+                alert('Erro ao salvar no banco: ' + (error.message || String(error)));
+                return;
+            }
+
+            // Clear fields immediately after success and focus Nome do Cliente
+            setNomeCliente('');
+            setEnderecoEntrega('');
+            setObservacoesGestor('');
+            setEnderecoGeocodeNotFound(!coords);
+            try { clienteInputRef && clienteInputRef.current && typeof clienteInputRef.current.focus === 'function' && clienteInputRef.current.focus(); } catch (e) { /* ignore */ }
+
+            try { await carregarDados(); } catch (e) { /* ignore */ }
+
+            if (!coords) {
+                try { alert('Carga adicionada — coordenadas não encontradas (marcada como pendente para correção).'); } catch (e) { }
+            } else {
+                try { alert('Carga adicionada com sucesso!'); } catch (e) { }
+            }
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setAdicionando(false);
         }
     };
-
     const excluirPedido = async (id) => {
         const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
         if (!parsedId || isNaN(parsedId)) {
@@ -1986,10 +1778,10 @@ function App() {
     };
 
     const dispararRota = async () => {
-        if (entregasEmEspera.length === 0) return alert("⚠️ Fila vazia.");
+        if (pedidosPendentes.length === 0) return alert("⚠️ Fila vazia.");
         // Auto-selecionar o motorista ONLINE mais próximo do primeiro ponto da fila
         try {
-            const first = (entregasEmEspera && entregasEmEspera.length > 0) ? entregasEmEspera[0] : null;
+            const first = (pedidosPendentes && pedidosPendentes.length > 0) ? pedidosPendentes[0] : null;
             if (first && first.lat != null && first.lng != null && Array.isArray(frota) && frota.length > 0) {
                 // calc haversine local
                 const haversineLocal = (lat1, lon1, lat2, lon2) => {
@@ -2049,18 +1841,18 @@ function App() {
             let rotaOtimizada = [];
             try {
                 try { setDistanceCalculating(true); } catch (e) { }
-                rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, entregasEmEspera, motoristaIdVal);
+                rotaOtimizada = await otimizarRotaComGoogle(mapCenterState, pedidosPendentes, motoristaIdVal);
                 try { setDistanceCalculating(false); } catch (e) { }
-                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
+                if (!rotaOtimizada || rotaOtimizada.length === 0) rotaOtimizada = otimizarRota(mapCenterState, pedidosPendentes);
             } catch (e) {
                 // fallback para algoritmo local em caso de erro com Google API
-                rotaOtimizada = otimizarRota(mapCenterState, entregasEmEspera);
+                rotaOtimizada = otimizarRota(mapCenterState, pedidosPendentes);
             }
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
-            // status para despacho: seguir regra solicitada ('pendente')
-            const statusValue = String('pendente').trim().toLowerCase();
+            // status para despacho: enviar como 'em_rota' para remover da Central
+            const statusValue = String('em_rota').trim().toLowerCase();
 
             // Determine entregas to dispatch and collect their IDs (preserve original type)
             const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
@@ -2072,62 +1864,34 @@ function App() {
             } else {
                 let updErr = null;
                 try {
-                    // Try bulk update; if .in is not available (mock), fallback to per-item updates
-                    let q = supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue });
-                    if (q && typeof q.in === 'function') {
-                        const { data: updData, error } = await q.in('id', assignedIds);
-                        updErr = error;
-                        if (!updErr) {
-                            setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
-                        }
-                    } else {
-                        // Fallback: update one by one
-                        for (const id of assignedIds) {
-                            try {
-                                const { error } = await supabase.from('entregas').update({ motorista_id: motoristaIdVal, status: statusValue }).eq('id', id);
-                                if (error) { updErr = error; console.error('Erro atualizando entrega individual:', error); break; }
-                            } catch (e) { updErr = e; console.error('Erro na requisição individual:', e); break; }
-                        }
-                        if (!updErr) setEntregasEmEspera(prev => prev.filter(p => !assignedIdsStr.includes(String(p.id))));
+                    // Persist each entrega with motorista_id, status='em_rota' and ordem_logistica (per-index)
+                    const promises = (rotaOtimizada || []).map((item, idx) => {
+                        const pid = item && item.id;
+                        if (pid === undefined || pid === null) return Promise.resolve({ skipped: true });
+                        const payload = { motorista_id: motoristaIdVal, status: statusValue, ordem_logistica: Number(idx + 1) };
+                        return supabase.from('entregas').update(payload).eq('id', pid);
+                    });
+                    const results = await Promise.all(promises);
+                    // detect any errors
+                    for (const r of results) {
+                        if (!r) continue;
+                        if (r.error) { updErr = r.error; console.error('assignDriver: update error', r.error); break; }
+                    }
+
+                    if (!updErr) {
+                        // Force refresh: ensure DB is reloaded and pending list cleared so Central fica limpa
+                        try { await carregarDados(); } catch (e) { /* ignore */ }
+                        try { setPedidosPendentes([]); } catch (e) { /* ignore */ }
+                        try { routingInProgressRef.current = false; } catch (e) { /* ignore */ }
+                        setShowDriverSelect(false);
+                        setSelectedMotorista(null);
                     }
                 } catch (err) {
                     updErr = err;
-                    console.error('Erro ao tentar atualizar entregas (bulk ou individual):', err && err.message ? err.message : err);
-                }
-
-                // Update local rotaOtimizada objects with ordem for UI only
-                for (let i = 0; i < rotaOtimizada.length; i++) {
-                    const pedido = rotaOtimizada[i];
-                    const pid = pedido.id;
-                    rotaOtimizada[i] = { ...pedido, ordem: i + 1, ordem_logistica: i + 1, motorista_id: motoristaIdVal, id: pid };
-                }
-
-                // Update estimated distance (after assignment)
-                try {
-                    const originForCalc = mapCenterState || pontoPartida || DEFAULT_MAP_CENTER;
-                    const dist = computeRouteDistanceKm(originForCalc, rotaOtimizada, originForCalc);
-                    setEstimatedDistanceKm(Number(dist.toFixed(1)));
-                } catch (e) { /* ignore */ }
-
-                // Only close modal and clear selection if update succeeded
-                if (!updErr) {
-                    setShowDriverSelect(false);
-                    setSelectedMotorista(null);
+                    console.error('Erro ao tentar atualizar entregas (per-item):', err && err.message ? err.message : err);
                 }
             }
-            // Persist ordem_logistica per entrega (cada pedido precisa da sua ordem específica)
-            try {
-                for (let i = 0; i < rotaOtimizada.length; i++) {
-                    const pid = rotaOtimizada[i].id;
-                    if (pid === undefined || pid === null) continue;
-                    try {
-                        const { error: ordErr } = await supabase.from('entregas').update({ ordem_logistica: Number(i + 1) }).eq('id', pid);
-                        if (ordErr) console.error('Erro atualizando ordem_logistica:', ordErr && ordErr.message, ordErr && ordErr.hint);
-                    } catch (e) {
-                        console.error('Erro na requisição ordem_logistica:', e && e.message);
-                    }
-                }
-            } catch (e) { /* non-blocking */ }
+            // ordem_logistica já foi persistida por item acima (se aplicável)
             setRotaAtiva(rotaOtimizada);
             setMotoristaDaRota(driver);
             setAbaAtiva('Visão Geral');
@@ -2281,7 +2045,8 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica entregas={(orderedRota && orderedRota.length > 0) ? orderedRota : entregasEmEspera} frota={frota} height={500} mobile={false} focusCoords={enderecoCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
+                                            {/* <MapaLogistica ... /> desativado (modo emergência) */}
+                                            <div style={{ padding: 18, color: theme.textLight, textAlign: 'center' }}>Mapa desativado — modo emergência</div>
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2345,21 +2110,39 @@ function App() {
                                         <option>Outros</option>
                                     </select>
                                 </label>
-                                <input name="cliente" placeholder="Nome do Cliente" style={{ ...inputStyle, width: '95% !important', boxSizing: 'border-box' }} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
+                                <input ref={clienteInputRef} name="cliente" placeholder="Nome do Cliente" style={{ ...inputStyle, width: '95% !important', boxSizing: 'border-box' }} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
                                 <div style={{ position: 'relative' }}>
                                     <div style={{ width: '93% !important', boxSizing: 'border-box' }}>
-                                        <SearchBox
-                                            accessToken={import.meta.env.VITE_MAPBOX_TOKEN || ''}
-                                            options={{ language: 'pt', country: 'BR' }}
-                                            onRetrieve={handleAddressRetrieve}
-                                            value={enderecoEntrega}
+                                        <input
+                                            type="text"
+                                            name="endereco"
                                             placeholder="Ex: Rua Lauro Bechtold, 147, Centro - Palhoça"
-                                            inputProps={{ className: 'v10-mapbox-search-input', style: { borderColor: inputEnderecoInvalid ? '#ef4444' : undefined } }}
+                                            value={enderecoEntrega}
+                                            onChange={(e) => { setEnderecoEntrega(e.target.value); setEnderecoGeocodeNotFound(false); }}
+                                            className="v10-mapbox-search-input"
+                                            style={{ padding: '10px', borderRadius: '8px', border: inputEnderecoInvalid ? '1px solid #ef4444' : '1px solid #cbd5e1', width: '100%', boxSizing: 'border-box' }}
                                         />
+                                        <div style={{ marginTop: 8, fontSize: 12, color: '#94a3b8' }}>Exemplo ideal: Rua Dom Pedro II, 176, Campinas, São José, SC</div>
+                                        {enderecoGeocodeNotFound && (
+                                            <div style={{ marginTop: 8, color: '#f59e0b', fontSize: 13 }}>⚠️ Endereço não encontrado! Melhore sua digitação ou siga o padrão: Rua, Número, Bairro, Cidade.</div>
+                                        )}
                                     </div>
                                 </div>
-                                <textarea name="observacoes_gestor" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical', width: '95% !important', boxSizing: 'border-box' }} />
-                                <button type="submit" style={btnStyle(theme.primary)}>ADICIONAR À LISTA</button>
+                                <textarea name="obs" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical', width: '95% !important', boxSizing: 'border-box' }} />
+                                {/* Disable add if address has no number */}
+                                <button
+                                    type="submit"
+                                    disabled={adicionando || !!duplicateTipoMsg || !(/\d/.test(enderecoEntrega || ''))}
+                                    style={{
+                                        ...btnStyle(theme.primary),
+                                        opacity: adicionando || duplicateTipoMsg ? 0.6 : (/\d/.test(enderecoEntrega || '') ? 1 : 0.5),
+                                        cursor: adicionando || !!duplicateTipoMsg || !(/\d/.test(enderecoEntrega || '')) ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {adicionando ? 'Salvando...' : 'ADICIONAR À LISTA'}
+                                </button>
+                                {duplicateTipoMsg && <div style={{ marginTop: 8, fontSize: 13, color: '#f97316' }}>{duplicateTipoMsg}</div>}
+                                {!(/\d/.test(enderecoEntrega || '')) && <div style={{ marginTop: 8, fontSize: 12, color: '#f97316' }}>Endereço precisa conter um número para salvar automaticamente.</div>}
                             </form>
                         </div>
 
@@ -2376,36 +2159,8 @@ function App() {
                                             try {
                                                 setNomeCliente(it.cliente || '');
                                                 setEnderecoEntrega(it.endereco || '');
-                                                setEnderecoFromHistory(true);
                                             } catch (e) { }
-                                            try {
-                                                if (it && (it.lat != null && it.lng != null)) {
-                                                    setEnderecoCoords({ lat: Number(it.lat), lng: Number(it.lng) });
-                                                } else {
-                                                    // If history entry lacks coords, prefer not to call Google when quota blocked
-                                                    if (it && (it.lat == null || it.lng == null)) {
-                                                        if (googleQuotaExceededRef.current) {
-                                                            // Keep history accepted but without coords
-                                                            setEnderecoCoords(null);
-                                                            try { markGoogleQuotaExceeded('Geocoder', 'Modo de Segurança Ativado: Usando dados locais do histórico'); } catch (e) { }
-                                                        } else {
-                                                            // Tentar geocoding interno (Mapbox + bbox) como fallback
-                                                            try {
-                                                                const bbox = { west: -48.815, south: -27.600, east: -48.450, north: -27.350 };
-                                                                const proximity = (selectedMotorista && selectedMotorista.lat != null && selectedMotorista.lng != null) ? { lat: Number(selectedMotorista.lat), lng: Number(selectedMotorista.lng) } : (pontoPartida && pontoPartida.lat != null && pontoPartida.lng != null ? { lat: Number(pontoPartida.lat), lng: Number(pontoPartida.lng) } : null);
-                                                                const attempt = await geocodeMapbox(it.endereco || String(it.address || ''), bbox, proximity);
-                                                                if (attempt && attempt.lat != null && attempt.lng != null) {
-                                                                    setEnderecoCoords({ lat: attempt.lat, lng: attempt.lng });
-                                                                } else {
-                                                                    setEnderecoCoords(null);
-                                                                }
-                                                            } catch (e) { console.warn('historico onClick geocode failed (mapbox fallback)', e); setEnderecoCoords(null); }
-                                                        }
-                                                    } else {
-                                                        setEnderecoCoords(null);
-                                                    }
-                                                }
-                                            } catch (e) { console.warn('historico onClick geocode failed', e); setEnderecoCoords(null); }
+                                            // historico click: apenas preencher cliente e endereço (sem coordenadas)
                                         }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
                                             <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
                                             <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
@@ -2471,9 +2226,9 @@ function App() {
                                 </div>
                             </div>
                         </div>
-                        {(!entregasEmEspera || entregasEmEspera.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
+                        {(!pedidosPendentes || pedidosPendentes.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-                                {entregasEmEspera?.map(p => {
+                                {pedidosPendentes?.filter(e => String(e.status || '').trim().toLowerCase() === 'pendente').map(p => {
                                     const tipo = p.tipo || 'Entrega';
                                     const tipoColor = getColorForType(tipo);
                                     const contrast = getContrastText(tipoColor);
@@ -2483,9 +2238,14 @@ function App() {
                                                 <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
                                                 <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: tipoColor, color: contrast, fontWeight: 700 }}>{tipo}</span>
                                             </div>
-                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco}</p>
+                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco} {(!(p.lat && p.lng)) && <span title="Sem coordenadas: não participará da roteirização automática" style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Sem coords</span>}</p>
                                             <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
-                                            <button onClick={() => excluirPedido(p.id)} style={{ marginTop: '10px', background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
+                                            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                                                <button onClick={() => excluirPedido(p.id)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
+                                                {(p.lat && p.lng) ? (
+                                                    <button onClick={() => { try { window.open('https://www.google.com/maps/search/?api=1&query=' + Number(p.lat) + ',' + Number(p.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ background: '#0ea5e9', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
+                                                ) : null}
+                                            </div>
                                         </div>
                                     );
                                 })}
@@ -2587,6 +2347,9 @@ function App() {
                                             <td style={{ padding: '15px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: dotColor, display: 'inline-block', boxShadow: dotShadow }} />
                                                 <span style={{ color: '#ffffff', fontWeight: 600 }}>{m.nome}</span>
+                                                {(m.lat && m.lng) ? (
+                                                    <button onClick={(ev) => { ev.stopPropagation(); try { window.open('https://www.google.com/maps/search/?api=1&query=' + Number(m.lat) + ',' + Number(m.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ marginLeft: 8, background: 'transparent', border: '1px solid rgba(255,255,255,0.06)', color: '#fff', padding: '4px 8px', borderRadius: 6, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
+                                                ) : null}
                                             </td>
                                             <td>
                                                 {/* Texto dinâmico: se tiver carga, mostrar verbo + contador; senão Disponível/Offline */}
