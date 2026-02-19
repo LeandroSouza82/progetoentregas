@@ -1757,8 +1757,8 @@ function App() {
         } catch (e) {
             console.warn('recalcRotaForMotorista failed:', e);
         } finally {
-            // release routing lock with a small grace period
-            try { setTimeout(() => { routingInProgressRef.current = false; }, 400); } catch (e) { routingInProgressRef.current = false; }
+            // release routing lock with a slightly longer grace period to avoid repeated retriggers (v51)
+            try { setTimeout(() => { routingInProgressRef.current = false; }, 2000); } catch (e) { routingInProgressRef.current = false; }
             // ensure we always remove this motorista from pending set (defensive cleanup)
             try { if (motoristaId) { pendingRecalcRef.current.delete(String(motoristaId)); setPendingRecalcCount(pendingRecalcRef.current.size); } } catch (e) { }
         }

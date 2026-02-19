@@ -265,7 +265,16 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 
         // v45/v48: regras agressivas para casos conhecidos
         try {
-            const lower = String(address || '').toLowerCase();
+            // LIMPEZA INICIAL REFORÇADA: remover símbolos comuns que atrapalham o geocoding
+            let raw = String(address || '');
+            // remover n°, nº, N°, #, travessões e similares, e colapsar espaços
+            raw = raw.replace(/n\s*[º°]/ig, ' ')
+                .replace(/nº/ig, ' ')
+                .replace(/[–—−]/g, ' ')
+                .replace(/#/g, ' ')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+            const lower = raw.toLowerCase();
 
             // Fix para erros de digitação/variações 'ajla' / 'najla' -> RUa Najla Carone Guedert
             if (lower.indexOf('ajla') !== -1 || lower.indexOf('najla') !== -1) {
@@ -293,8 +302,9 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 
             // Regra agressiva para Ponte do Imaruí (usa CEP e endereço fixo)
             // Regra agressiva para Morro das Feiticeiras (forçar Florianópolis + CEP)
-            if (lower.indexOf('morro das feiticeiras') !== -1 || lower.indexOf('morro das feiticeiras'.toLowerCase()) !== -1) {
-                const fixedMorro = 'Rua Morro das Feiticeiras, Florianópolis, SC, 88058-583';
+            if (lower.indexOf('morro das feiticeiras') !== -1 || lower.indexOf('feiticeiras') !== -1) {
+                // Forçar busca para Ingleses Norte quando aparecer Feiticeiras
+                const fixedMorro = 'Rua Morro das Feiticeiras, Ingleses Norte, Florianópolis, SC, 88058-583, Brasil';
                 try {
                     const cityCenter = getCityCenter('Florianópolis') || { lat: -27.59, lng: -48.54 };
                     const d = 0.03;
@@ -419,7 +429,18 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         }
 
         // --- Fluxo anterior (sem cidade estrita) ---
-        const b = bounds || defaultBounds;
+        const b = Object.assign({}, bounds || defaultBounds);
+        // Se detectamos Ingleses no texto original, expandir levemente o bbox para cobrir o Norte da Ilha
+        try {
+            const lowerAddr = String(address || '').toLowerCase();
+            if (lowerAddr.indexOf('ingleses') !== -1 || lowerAddr.indexOf('feiticeiras') !== -1) {
+                // Move limite norte para cobrir Ingleses/Norte da Ilha e afrouxa limites laterais
+                b.north = Math.max(b.north || -27.35, -27.20);
+                b.west = Math.min(b.west || -48.9, -48.95);
+                b.east = Math.max(b.east || -48.35, -48.25);
+                console.log('[GEO v51] Ajustado bbox para Ingleses/Feiticeiras:', b);
+            }
+        } catch (e) { /* ignore bbox adjust errors */ }
         const bbox = `${b.west},${b.south},${b.east},${b.north}`;
 
         // Mantém comportamento anterior de anexar contexto quando cidade ausente
@@ -435,8 +456,9 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                 addressWithCity = `${addressWithCity.trim()}, Palhoça, SC, Brasil`;
             } else if (lowerAddr.indexOf('campinas') !== -1) {
                 addressWithCity = `${addressWithCity.trim()}, São José, SC, Brasil`;
-            } else if (lowerAddr.indexOf('ingleses') !== -1) {
-                addressWithCity = `${addressWithCity.trim()}, Florianópolis, SC, Brasil`;
+            } else if (lowerAddr.indexOf('ingleses') !== -1 || lowerAddr.indexOf('feiticeiras') !== -1) {
+                // Regra rígida v51: quando detectamos Ingleses ou Feiticeiras, anexa sufixo específico para Ingleses Norte
+                addressWithCity = `${addressWithCity.trim()}, Ingleses Norte, Florianópolis, SC, 88058-583, Brasil`;
             } else if (!hasKnownCity) {
                 // Default para a Grande Florianópolis: assumir Palhoça quando cidade não foi informada
                 addressWithCity = `${addressWithCity.trim()}, Palhoça, SC, Brasil`;
@@ -459,6 +481,75 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         addressClean = addressClean.replace(/\(.*?\)/g, '').replace(/[^0-9A-Za-zÀ-ÿ, \-]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
         console.log('🧹 Mapbox - Endereço limpo:', addressClean);
+
+        // v54: PRÉ-BUSCA DE CEP (se o gestor não informou um CEP, tentar obter postcode via Mapbox)
+        let foundPostcode = null;
+        try {
+            const cepRegex = /(\d{5}-\d{3}|\d{8})/;
+            if (!cepRegex.test(addressClean)) {
+                // tentar buscar postcode por types=postcode usando o termo limpo
+                const postcodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?access_token=${MAPBOX_TOKEN}&bbox=${bbox}&proximity=${proximityParam}&types=postcode&language=pt&limit=1`;
+                console.log('[GEO v54] Tentando obter CEP via Mapbox (postcode lookup):', postcodeUrl);
+                try {
+                    const respPc = await fetch(postcodeUrl, { headers: { 'Accept': 'application/json' } });
+                    if (respPc && respPc.ok) {
+                        const jdpc = await respPc.json();
+                        if (jdpc && jdpc.features && jdpc.features.length > 0) {
+                            const pc = jdpc.features[0];
+                            // Mapbox retorna o texto do feature como postcode em muitos casos
+                            const pcText = (pc && pc.text) ? String(pc.text).trim() : (pc && pc.place_name ? String(pc.place_name).trim() : null);
+                            if (pcText && /\d{5}/.test(pcText)) {
+                                // normalizar para 5-3 quando possível
+                                const digits = pcText.replace(/[^0-9]/g, '');
+                                if (digits.length === 8) foundPostcode = digits.slice(0, 5) + '-' + digits.slice(5);
+                                else if (digits.length === 7) foundPostcode = digits; else foundPostcode = pcText;
+                                console.log('[GEO v54] CEP encontrado via postcode lookup:', foundPostcode);
+                            }
+                        }
+                    }
+                } catch (e) { console.warn('[GEO v54] postcode lookup falhou:', e); }
+            } else {
+                // extrair CEP diretamente se já fornecido
+                const m = addressClean.match(/(\d{5}-\d{3}|\d{8})/);
+                if (m) {
+                    const d = m[1].replace(/[^0-9]/g, '');
+                    foundPostcode = (d.length === 8) ? (d.slice(0, 5) + '-' + d.slice(5)) : m[1];
+                }
+            }
+        } catch (e) { /* ignore postcode errors */ }
+
+        // Se encontramos um CEP, refazer a busca usando [CEP], [Número], [Cidade] para máxima precisão
+        if (foundPostcode) {
+            try {
+                // extrair número se presente
+                const numMatch = String(address || '').match(/(\d+[A-Za-z0-9\/\-]*)/);
+                const numberToken = numMatch ? numMatch[1] : '';
+                // extrair parte de logradouro (antes da vírgula)
+                const streetOnly = (addressClean && addressClean.split(',') && addressClean.split(',').length > 0) ? addressClean.split(',')[0].trim() : addressClean;
+                // priorizar cidade detectada ou forçar Florianópolis para Ingleses/Feiticeiras
+                let cityForSearch = detectCityStrict(address) || null;
+                const lowerAddrLocal = String(address || '').toLowerCase();
+                if (!cityForSearch && (lowerAddrLocal.indexOf('ingleses') !== -1 || lowerAddrLocal.indexOf('feiticeiras') !== -1)) cityForSearch = 'Florianópolis';
+
+                const searchWithCep = `${streetOnly}${numberToken ? (', ' + numberToken) : ''}, ${foundPostcode}${cityForSearch ? (', ' + cityForSearch + ', SC, Brasil') : ''}`;
+                const urlCep = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(searchWithCep)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                console.log('[GEO v54] Reconsultando com CEP para precisão:', searchWithCep, urlCep);
+                try {
+                    const respCep = await fetch(urlCep, { headers: { 'Accept': 'application/json' } });
+                    if (respCep && respCep.ok) {
+                        const datacep = await respCep.json();
+                        if (datacep && datacep.features && datacep.features.length > 0) {
+                            const r = datacep.features[0];
+                            if (r && r.center && r.center.length >= 2) {
+                                const lng = r.center[0], lat = r.center[1];
+                                console.log('[GEO v54] Resultado via CEP (preciso):', { lat, lng, postcode: foundPostcode });
+                                return { lat, lng, display_name: r.place_name || searchWithCep, postcode: foundPostcode };
+                            }
+                        }
+                    }
+                } catch (e) { /* fallthrough to normal flow if CEP-based search fails */ }
+            } catch (e) { /* ignore cep requery issues */ }
+        }
 
         // proximity: usar proximity param se fornecido, senão central Florianópolis
         let proximityParam = '-48.54,-27.59';
