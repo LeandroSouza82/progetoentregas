@@ -325,16 +325,262 @@ function App() {
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [mapCleared, setMapCleared] = useState(false);
 
-    function limparMarcadores() {
+    const carregarDados = React.useCallback(async (opts = {}) => {
+        const forceAll = opts && opts.forceAll === true;
+        // Ensure any previous frontend clear is undone so pins show
+        try { setMapCleared(false); } catch (e) { }
+        // MapaLogistica controls showPins via clearMap prop
+        try { console.log('🔄 Recarregando pins do banco...' + (forceAll ? ' (forceAll)' : '')); } catch (e) { }
+
+        // Fetch control refs to avoid concurrent fetches
+        if (fetchInProgressRef.current) return;
+        fetchInProgressRef.current = true;
+        setLoadingFrota(true);
+
         try {
-            const ok = window.confirm('Deseja limpar todos os pins do mapa visual? Isso não apagará os dados do banco.');
+            let q = supabase.from('motoristas').select('*');
+            if (q && typeof q.order === 'function') q = q.order('id');
+            const { data: motoristas, error: motorErr } = await q;
+            if (motorErr) {
+                console.warn('carregarDados: erro ao buscar motoristas', motorErr);
+                scheduleRetry(5000);
+                setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
+            } else {
+                const normalized = (motoristas || []).map(m => ({
+                    ...m,
+                    lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
+                    lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
+                }));
+
+                const merged = (function (prev) {
+                    try {
+                        const byId = new Map((prev || []).map(p => [p.id, p]));
+                        return normalized.map(n => {
+                            const existing = byId.get(n.id);
+                            if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
+                                return existing;
+                            }
+                            return n;
+                        });
+                    } catch (e) {
+                        return normalized;
+                    }
+                })(lastFrotaRef.current || []);
+
+                setFrota(merged);
+                lastFrotaRef.current = merged;
+                if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+                try { retryCountRef.current = 0; } catch (err) { }
+            }
+        } catch (e) {
+            console.warn('Erro carregando motoristas:', e);
+            scheduleRetry(5000);
+            setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
+        } finally {
+            fetchInProgressRef.current = false;
+            setLoadingFrota(false);
+        }
+
+        try {
+            // Build active-route filter: pending/em_rota OR completed/failure within threshold OR tracked IDs from session
+            const now = new Date();
+            // when forceAll requested, limit to last 12 hours to avoid old history; otherwise use start of day
+            const threshold = forceAll ? new Date(now.getTime() - (12 * 60 * 60 * 1000)) : new Date(now.setHours(0, 0, 0, 0));
+            const isoThreshold = threshold.toISOString();
+            let trackedIds = [];
+            try {
+                const raw = typeof window !== 'undefined' ? window.sessionStorage.getItem('v10_tracked_entregas') : null;
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) trackedIds = parsed.map(x => String(x)).filter(Boolean);
+                }
+            } catch (e) { trackedIds = []; }
+
+            const orParts = [];
+            // Always include recent completed/failed (threshold)
+            orParts.push(`created_at.gte.${isoThreshold}`);
+            // Always include current active statuses
+            orParts.push('status.in.(pendente,em_rota)');
+            // Include tracked IDs if present (session memory)
+            if (trackedIds && trackedIds.length > 0) {
+                // join ids as comma-separated (no quotes)
+                orParts.push(`id.in.(${trackedIds.join(',')})`);
+            }
+
+            const orString = orParts.join(',');
+
+            // Only clear pending UI list when not forcing a full reload
+            if (!forceAll) { try { setPedidosPendentes([]); } catch (e) { } }
+
+            let q = supabase.from('entregas').select('*');
+            // Exclude archived entries from any load
+            if (q && typeof q.not === 'function') q = q.not('status', 'eq', 'arquivado');
+            if (orString && typeof q.or === 'function') q = q.or(orString);
+            if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
+            const { data: entregasPend, error: entregasErr } = await q;
+            if (entregasErr) {
+                console.warn('carregarDados: erro ao buscar entregas', entregasErr);
+                setPedidosPendentes([]);
+            } else {
+                const list = entregasPend || [];
+                const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : list;
+                setPedidosPendentes(sorted);
+                try { retryCountRef.current = 0; } catch (e) { }
+                if (!sorted || (Array.isArray(sorted) && sorted.length === 0)) {
+                    console.warn('carregarDados: busca retornou zero entregas (pedidosPendentes vazio)');
+                }
+                // Persist tracked IDs for session memory
+                try {
+                    if (typeof window !== 'undefined' && window.sessionStorage) {
+                        const idsToStore = (sorted || []).map(s => s && s.id).filter(Boolean);
+                        window.sessionStorage.setItem('v10_tracked_entregas', JSON.stringify(idsToStore));
+                    }
+                } catch (e) { }
+            }
+        } catch (e) {
+            console.warn('Erro carregando entregas:', e);
+            setPedidosPendentes(prev => (prev && prev.length) ? prev : []);
+            scheduleRetry(5000);
+        }
+
+        try {
+            // Limit runtime polyline assembly to today's/active/tracked entregas to avoid loading old history
+            const todayStart_forPoly = new Date();
+            todayStart_forPoly.setHours(0, 0, 0, 0);
+            const isoToday_forPoly = todayStart_forPoly.toISOString();
+            let trackedIds_forPoly = [];
+            try {
+                const raw = typeof window !== 'undefined' ? window.sessionStorage.getItem('v10_tracked_entregas') : null;
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed)) trackedIds_forPoly = parsed.map(x => String(x)).filter(Boolean);
+                }
+            } catch (e) { trackedIds_forPoly = []; }
+
+            const orPartsPoly = [];
+            orPartsPoly.push(`created_at.gte.${isoToday_forPoly}`);
+            orPartsPoly.push('status.in.(pendente,em_rota)');
+            if (trackedIds_forPoly && trackedIds_forPoly.length > 0) orPartsPoly.push(`id.in.(${trackedIds_forPoly.join(',')})`);
+            const orStringPoly = orPartsPoly.join(',');
+
+            let q2 = supabase.from('entregas').select('*');
+            // Exclude archived entries
+            if (q2 && typeof q2.not === 'function') q2 = q2.not('status', 'eq', 'arquivado');
+            if (orStringPoly && typeof q2.or === 'function') q2 = q2.or(orStringPoly);
+            const { data: todas } = await q2;
+            setTotalEntregas((todas || []).length);
+            setEntregas(Array.isArray(todas) ? todas : (todas || []));
+            try {
+                const polyMap = {};
+                if (Array.isArray(todas)) {
+                    for (const e of todas) {
+                        try {
+                            if (!e) continue;
+                            const mid = e.motorista_id != null ? String(e.motorista_id) : null;
+                            if (!mid) continue;
+                            const rp = e.rota_polyline || e.rota_polyline_raw || null;
+                            if (!rp) continue;
+                            let geom = null;
+                            if (typeof rp === 'string') {
+                                try { geom = JSON.parse(rp); } catch (err) { geom = null; }
+                            } else if (typeof rp === 'object') geom = rp;
+                            if (geom && Array.isArray(geom.coordinates) && geom.coordinates.length > 0) {
+                                const coordsLatLng = geom.coordinates.map(c => [Number(c[1]), Number(c[0])]);
+                                polyMap[mid] = coordsLatLng;
+                            }
+                        } catch (err) { }
+                    }
+                }
+                // Replace runtime polylines with freshly assembled map (do not merge stale entries)
+                if (Object.keys(polyMap).length > 0) setRuntimePolylines(polyMap); else setRuntimePolylines({});
+            } catch (err) { }
+        } catch (e) {
+            console.warn('Erro contando entregas:', e);
+            scheduleRetry(5000);
+        }
+
+        try {
+            let q3 = supabase.from('avisos_gestor').select('titulo, mensagem, created_at');
+            if (q3 && typeof q3.order === 'function') q3 = q3.order('created_at', { ascending: false });
+            if (q3 && typeof q3.limit === 'function') q3 = q3.limit(10);
+            const { data: avisosData, error: avisosErr } = await q3;
+            if (avisosErr) { console.warn('carregarDados: erro ao buscar avisos', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
+        } catch (e) { console.warn('Erro carregando avisos:', e); setAvisos([]); }
+
+        try {
+            let q4 = supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone');
+            if (q4 && typeof q4.limit === 'function') q4 = q4.limit(1);
+            const { data: cfg } = await q4;
+            if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
+        } catch (e) { console.warn('Erro carregando configuracoes:', e); setGestorPhone(null); }
+
+        try {
+            let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
+            // Exclude archived entries from recent history as well
+            if (q5 && typeof q5.not === 'function') q5 = q5.not('status', 'eq', 'arquivado');
+            if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
+            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(200);
+            const { data: recent, error: recentErr } = await q5;
+            if (recentErr) { console.warn('carregarDados: erro ao buscar histórico', recentErr); setRecentList([]); }
+            else if (recent) {
+                const seen = new Set();
+                const unique = [];
+                for (const r of recent) {
+                    const key = (r.cliente || '').trim().toLowerCase();
+                    if (!key) continue;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    unique.push({ cliente: r.cliente, endereco: r.endereco });
+                }
+                setRecentList(unique);
+            } else {
+                setRecentList([]);
+            }
+        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); scheduleRetry(5000); }
+        setLoadingFrota(false);
+    }, []);
+
+    async function limparMarcadores() {
+        try {
+            const ok = window.confirm('Deseja arquivar esta rota? Os pontos concluídos não aparecerão mais no mapa.');
             if (!ok) return;
-            // Clear only frontend state: entregas list and pending list
+
+            // Determine which entregas on screen should be archived (only concluído/entregue/falha)
+            try {
+                const toArchive = (pedidosPendentes || []).filter(p => {
+                    const s = String(p && p.status || '').trim().toLowerCase();
+                    return s === 'entregue' || s === 'concluido' || s === 'falha';
+                }).map(p => p.id).filter(Boolean);
+
+                if (toArchive.length > 0 && HAS_SUPABASE_CREDENTIALS) {
+                    try {
+                        // Persist archive status in DB
+                        const { data, error } = await supabase.from('entregas').update({ status: 'arquivado' }).in('id', toArchive);
+                        if (error) console.warn('limparMarcadores: erro ao arquivar entregas', error);
+                        else {
+                            // reflect locally: remove archived from pedidosPendentes and entregas
+                            try { setPedidosPendentes(prev => (prev || []).filter(p => !toArchive.includes(p.id))); } catch (e) { }
+                            try { setEntregas(prev => (prev || []).filter(p => !toArchive.includes(p.id))); } catch (e) { }
+                        }
+                    } catch (e) { console.warn('limparMarcadores: exeption ao arquivar', e); }
+                }
+            } catch (e) { /* ignore per-entry */ }
+
+            // Clear frontend-only visual state: entregas list and pending list (remaining)
             try { setEntregas([]); } catch (e) { }
             try { setPedidosPendentes([]); } catch (e) { }
+            // Clear runtime polylines so the route line disappears
+            try { setRuntimePolylines({}); } catch (e) { }
             // Ensure map receives the clear flag so it recenters and hides pins
             setMapCleared(true);
         } catch (e) { }
+    }
+    async function recarregarMapa() {
+        try {
+            // Reset any visual clear flag and force data reload
+            setMapCleared(false);
+            await carregarDados();
+        } catch (e) { console.warn('recarregarMapa failed', e); }
     }
     const [mapFocusCoords, setMapFocusCoords] = useState(null);
 
@@ -352,6 +598,8 @@ function App() {
     const [canSendRoute, setCanSendRoute] = useState(false);
     const [canSendMotoristaId, setCanSendMotoristaId] = useState(null);
     const [runtimePolylines, setRuntimePolylines] = useState({});
+
+
     // Distance and driver-select mode state
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
@@ -558,6 +806,13 @@ function App() {
         } catch (e) { console.warn('Erro desenhando draft polyline', e); }
         return () => { try { if (draftPolylineRef.current) { draftPolylineRef.current.setMap(null); draftPolylineRef.current = null; } } catch (e) { } };
     }, [draftPreview, pontoPartida, mapCenterState]);
+
+    // Ensure data loads immediately on first mount so F5 shows pins
+    useEffect(() => {
+        try {
+            carregarDados();
+        } catch (e) { /* ignore */ }
+    }, [carregarDados]);
     // Google API loading is handled by APIProvider from the maps library (mapsLib.APIProvider)
     const googleLoaded = typeof window !== 'undefined' && window.google && window.google.maps ? true : false;
 
@@ -579,150 +834,6 @@ function App() {
     }
 
     // Predictions and Places interaction removed (no autocomplete)
-
-    const carregarDados = React.useCallback(async () => {
-        // Fetch control refs to avoid concurrent fetches
-        if (fetchInProgressRef.current) return;
-        fetchInProgressRef.current = true;
-        setLoadingFrota(true);
-
-        try {
-            let q = supabase.from('motoristas').select('*');
-            if (q && typeof q.order === 'function') q = q.order('id');
-            const { data: motoristas, error: motorErr } = await q;
-            if (motorErr) {
-                console.warn('carregarDados: erro ao buscar motoristas', motorErr);
-                // Schedule capped retry to avoid infinite loops
-                scheduleRetry(5000);
-                // Preserve last known valid frota
-                setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
-            } else {
-                const normalized = (motoristas || []).map(m => ({
-                    ...m,
-                    lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
-                    lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
-                }));
-
-                const merged = (function (prev) {
-                    try {
-                        const byId = new Map((prev || []).map(p => [p.id, p]));
-                        return normalized.map(n => {
-                            const existing = byId.get(n.id);
-                            if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
-                                return existing;
-                            }
-                            return n;
-                        });
-                    } catch (e) {
-                        return normalized;
-                    }
-                })(lastFrotaRef.current || []);
-
-                setFrota(merged);
-                lastFrotaRef.current = merged;
-                // clear any pending retry
-                if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
-                // reset retry counter on success
-                try {
-                    retryCountRef.current = 0;
-                } catch (err) {
-                    /* ignore */
-                }
-            }
-        } catch (e) {
-            console.warn('Erro carregando motoristas:', e);
-            // schedule capped retry
-            scheduleRetry(5000);
-            // keep previous frota
-            setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
-        } finally {
-            fetchInProgressRef.current = false;
-            setLoadingFrota(false);
-        }
-
-
-        // entregas: filtro por NEW_LOAD_STATUS
-        try {
-            let q = supabase.from('entregas').select('*');
-            if (q && typeof q.eq === 'function') q = q.eq('status', String(NEW_LOAD_STATUS).trim().toLowerCase());
-            // Prefer server-side ordering by ordem_logistica when supported
-            if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
-            const { data: entregasPend, error: entregasErr } = await q;
-            if (entregasErr) {
-                console.warn('carregarDados: erro ao buscar entregas (filtro de status)', entregasErr);
-                setPedidosPendentes([]);
-            } else {
-                const list = entregasPend || [];
-                // fallback local sort if server didn't order
-                const sorted = Array.isArray(list) ? list.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0)) : list;
-                setPedidosPendentes(sorted);
-                // reset retry counter on success
-                try { retryCountRef.current = 0; } catch (e) { }
-            }
-        } catch (e) {
-            console.warn('Erro carregando entregas (filtro de status):', e);
-            // preserve previous pedidosPendentes if available
-            setPedidosPendentes(prev => (prev && prev.length) ? prev : []);
-            // schedule capped retry
-            scheduleRetry(5000);
-        }
-
-        // total de entregas
-        try {
-            let q2 = supabase.from('entregas').select('*');
-            const { data: todas } = await q2;
-            setTotalEntregas((todas || []).length);
-            // persist full entregas list for other UI checks
-            setEntregas(Array.isArray(todas) ? todas : (todas || []));
-        } catch (e) {
-            console.warn('Erro contando entregas:', e);
-            // don't reset total to 0 on transient errors
-            // leave current value
-            // schedule capped retry
-            scheduleRetry(5000);
-        }
-
-        // avisos do gestor
-        try {
-            let q3 = supabase.from('avisos_gestor').select('titulo, mensagem, created_at');
-            if (q3 && typeof q3.order === 'function') q3 = q3.order('created_at', { ascending: false });
-            if (q3 && typeof q3.limit === 'function') q3 = q3.limit(10);
-            const { data: avisosData, error: avisosErr } = await q3;
-            if (avisosErr) { console.warn('carregarDados: erro ao buscar avisos', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
-        } catch (e) { console.warn('Erro carregando avisos:', e); setAvisos([]); }
-
-        // configuracoes (gestor_phone)
-        try {
-            let q4 = supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone');
-            if (q4 && typeof q4.limit === 'function') q4 = q4.limit(1);
-            const { data: cfg } = await q4;
-            if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
-        } catch (e) { console.warn('Erro carregando configuracoes:', e); setGestorPhone(null); }
-
-        // Histórico recente
-        try {
-            let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
-            if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
-            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(200);
-            const { data: recent, error: recentErr } = await q5;
-            if (recentErr) { console.warn('carregarDados: erro ao buscar histórico', recentErr); setRecentList([]); }
-            else if (recent) {
-                const seen = new Set();
-                const unique = [];
-                for (const r of recent) {
-                    const key = (r.cliente || '').trim().toLowerCase();
-                    if (!key) continue;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    unique.push({ cliente: r.cliente, endereco: r.endereco });
-                }
-                setRecentList(unique);
-            } else {
-                setRecentList([]);
-            }
-        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); scheduleRetry(5000); }
-        setLoadingFrota(false);
-    }, []);
 
     // Approve / Reject handlers for Gestão de Motoristas
     // New admin-facing approve by id
@@ -1459,6 +1570,20 @@ function App() {
                                 setRuntimePolylines(prev => ({ ...(prev || {}), [String(motoristaId)]: routeGeo.coordsLatLng }));
                             }
                         } catch (e) { /* ignore runtime polyline set errors */ }
+                        // Persist rota_polyline in DB for this motorista's deliveries so column is not null
+                        try {
+                            if (routeGeo && routeGeo.geometry) {
+                                const geomStr = JSON.stringify(routeGeo.geometry);
+                                // Update all entregas for this motorista to have the same rota_polyline
+                                const { data: updData, error: updErr } = await supabase.from('entregas').update({ rota_polyline: geomStr }).eq('motorista_id', motoristaId);
+                                if (updErr) {
+                                    console.error('recalcRotaForMotorista: falha ao gravar rota_polyline no Supabase', updErr);
+                                } else {
+                                    console.log('recalcRotaForMotorista: rota_polyline atualizada para entregas do motorista', motoristaId, (updData || []).length);
+                                    try { await carregarDados(); } catch (e) { /* non-blocking refresh */ }
+                                }
+                            }
+                        } catch (e) { console.error('recalcRotaForMotorista: exceção ao persistir rota_polyline', e); }
                     } catch (e) { console.error('Erro obtendo geometria de rota (Mapbox):', e); routeGeo = null; }
                     // Construir array de updates conforme v34
                     const updates = (optimized || []).map((item, i) => {
@@ -2055,7 +2180,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica clearMap={mapCleared} entregas={mapCleared ? [] : pedidosPendentes.concat(entregas || [])} frota={frota} height={500} mobile={false} focusCoords={mapFocusCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
+                                            <MapaLogistica clearMap={mapCleared} entregas={mapCleared ? [] : pedidosPendentes} frota={frota} height={500} mobile={false} focusCoords={mapFocusCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2072,8 +2197,9 @@ function App() {
 
                         {/* INFO LATERAL */}
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '18px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', marginBottom: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', marginBottom: 8, gap: 8 }}>
                                 <button onClick={() => limparMarcadores()} style={{ padding: '10px', background: 'rgba(15,23,42,0.85)', color: '#fff', borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontWeight: 800 }} title="Limpar Mapa">🧹 Limpar Mapa</button>
+                                <button onClick={() => carregarDados({ forceAll: true })} style={{ padding: '10px', background: '#0b6b4a', color: '#fff', borderRadius: 10, border: '1px solid rgba(0,0,0,0.12)', cursor: 'pointer', fontWeight: 800 }} title="Recarregar Mapa">🔄 Recarregar Mapa</button>
                             </div>
                             <h3 style={{ marginTop: 20, color: theme.textMain }}>Status da Operação</h3>
                             {motoristaDaRota ? (

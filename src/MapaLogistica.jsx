@@ -26,6 +26,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // No delivery state kept here in emergency mode — map will render only fleet markers
     const [gestorPos, setGestorPos] = useState(null);
     const [focusMarker, setFocusMarker] = useState(null);
+    // map visual mode: 'dark' or 'light' — affects polyline styling
+    const [mapMode, setMapMode] = useState(token && token.length > 0 ? 'dark' : 'light');
 
     // Local copy of entregas so the map can react to realtime updates
     const [localEntregas, setLocalEntregas] = useState(entregas || []);
@@ -74,8 +76,9 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // ❌ TRAVA FÍSICA: Filtrar coordenadas inválidas (0,0) ou nulas
     const entregaMarkers = React.useMemo(() => {
         try {
-            // include 'falha' explicitly so failures render on the map
-            const list = (localEntregas || []).filter(e => e && ['pendente', 'em_rota', 'concluido', 'entregue', 'falha'].includes(String(e.status || '').toLowerCase()));
+            // include all entregas from DB so historic & all-status points render
+            // (don't restrict by status here; filtering by valid coords happens later)
+            const list = (localEntregas || []).filter(e => e);
             return list.map(e => ({
                 id: e.id,
                 lat: Number(e.lat),
@@ -222,6 +225,13 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     // Helper: create pin icon for entregas (blue circle with white number)
     // use createCustomPinIcon from src/CustomPin.jsx
+    const normalizeText = (s) => {
+        try {
+            return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+        } catch (e) {
+            return String(s || '').toLowerCase().trim();
+        }
+    };
 
     // Função para calcular o ângulo (bearing) entre dois pontos
     const calcularAngulo = (lat1, lon1, lat2, lon2) => {
@@ -319,6 +329,23 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return null;
     }
 
+    // Listen for LayersControl base layer change to toggle mapMode
+    useEffect(() => {
+        try {
+            const map = mapRef.current;
+            if (!map || typeof map.on !== 'function') return;
+            const handler = (e) => {
+                try {
+                    const name = String(e?.name || '').toLowerCase();
+                    if (name.includes('noturno') || name.includes('dark')) setMapMode('dark');
+                    else setMapMode('light');
+                } catch (err) { /* ignore */ }
+            };
+            map.on('baselayerchange', handler);
+            return () => { try { map.off('baselayerchange', handler); } catch (e) { } };
+        } catch (e) { /* ignore */ }
+    }, []);
+
     // Inject CSS to ensure delivery popups are above polylines
     useEffect(() => {
         try {
@@ -373,25 +400,20 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
                     {/* Delivery markers: show pendente and em_rota */}
                     {showPins && entregaMarkers.map((p, idx) => {
-                        const tipoRaw = String(p.tipo || '');
-                        const tipo = tipoRaw.trim().toLowerCase();
-                        const statusRaw = String(p.status || '');
-                        const status = statusRaw.trim().toLowerCase();
-                        // Order of checks: FAIL first, then exact delivered/concluded, then pending/em_rota color by type
+                        const tipo = normalizeText(p.tipo || '');
+                        const status = normalizeText(p.status || '');
+                        // V138: prioritize status -> delivered/finalized (green), failure (red)
+                        // otherwise color by tipo (entrega=blue, recolha=orange). Default to lilac only if unknown
                         let color = '#a855f7'; // default lilás (Outros)
-                        if (status === 'falha') {
-                            // Always red on failure, regardless of type
-                            color = '#ef4444';
-                        } else if (status === 'entregue' || status === 'concluido') {
-                            // Only green for explicit delivered/concluded
+                        if (status.includes('entreg') || status.includes('conclu')) {
                             color = '#22c55e';
-                        } else if (status === 'pendente' || status === 'em_rota') {
-                            // Pending/in-route: color by tipo
-                            if (tipo === 'entrega') color = '#2563eb';
-                            else if (tipo === 'recolha') color = '#f97316';
-                            else color = '#a855f7';
+                        } else if (status.includes('falha')) {
+                            color = '#ef4444';
+                        } else if (tipo.includes('entrega')) {
+                            color = '#2563eb';
+                        } else if (tipo.includes('recolha')) {
+                            color = '#f97316';
                         } else {
-                            // any other status: keep neutral lilac
                             color = '#a855f7';
                         }
                         const numero = (p.ordem_logistica != null && p.ordem_logistica !== '') ? p.ordem_logistica : (idx + 1);
@@ -400,11 +422,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                                 <Popup>
                                     <div style={{ fontWeight: 800 }}>{p.cliente || 'Sem cliente'}</div>
                                     <div style={{ marginTop: 6 }}><strong>Status:</strong> {
-                                        (status === 'pendente' || status === 'em_rota') ? '🕒 Em progresso' :
-                                            (status === 'entregue' || status === 'concluido') ? '✅ Concluído com êxito' :
-                                                (status === 'falha') ? '❌ Falha na operação' : status
+                                        (status.includes('pendente') || status.includes('em_rota')) ? '🕒 Em progresso' :
+                                            (status.includes('entreg') || status.includes('conclu')) ? '✅ Concluído com êxito' :
+                                                (status.includes('falha')) ? '❌ Falha na operação' : (p.status || status)
                                     }</div>
-                                    {status === 'falha' && (
+                                    {status.includes('falha') && (
                                         <div style={{ marginTop: 6 }}><strong>Motivo:</strong> {p.motivo_nao_entrega || p.motivo || 'Não informado'}</div>
                                     )}
                                     <div style={{ marginTop: 6 }}><strong>Tipo:</strong> {p.tipo || 'Entrega'}</div>
@@ -413,6 +435,29 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             </Marker>
                         );
                     })}
+
+                    {/* Route polylines: responsive to map mode (dark -> white with glow, light -> black) */}
+                    {(() => {
+                        try {
+                            if (!runtimePolylines) return null;
+                            const items = Array.isArray(runtimePolylines) ? runtimePolylines : (typeof runtimePolylines === 'object' && runtimePolylines !== null ? Object.values(runtimePolylines) : [runtimePolylines]);
+                            return items.map((r, ri) => {
+                                const coords = decodePolyline(r) || [];
+                                if (!coords || coords.length < 2) return null;
+                                // Ensure lat/lng pairs
+                                const latlngs = coords.map(c => Array.isArray(c) ? [Number(c[0]), Number(c[1])] : c);
+                                if (mapMode === 'dark') {
+                                    return (
+                                        <React.Fragment key={`route-${ri}`}>
+                                            <Polyline positions={latlngs} pathOptions={{ color: '#ffffff', weight: 10, opacity: 0.12 }} />
+                                            <Polyline positions={latlngs} pathOptions={{ color: '#ffffff', weight: 4, opacity: 0.8 }} />
+                                        </React.Fragment>
+                                    );
+                                }
+                                return <Polyline key={`route-${ri}`} positions={latlngs} pathOptions={{ color: '#000000', weight: 4, opacity: 0.8 }} />;
+                            });
+                        } catch (e) { return null; }
+                    })()}
 
                     {/* Frota (drivers) markers */}
                     {frotaMarkers.map(m => {
@@ -444,7 +489,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             console.warn('Leaflet temporariamente indisponível (map render)', e);
             return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>Carregando Mapa...</div>;
         }
-    }, [mapStyle, computedCenter, frotaMarkers]);
+    }, [mapStyle, computedCenter, frotaMarkers, localEntregas, showPins, mapMode, runtimePolylines]);
 
     const handleCenterClick = () => {
         try {
