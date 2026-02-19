@@ -165,7 +165,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     const mapStyle = { width: '100%', height: mobile ? 250 : height };
 
     // Determine safe center: prefer fleet first, fallback to default center
-    const defaultCenter = { lat: -27.2423, lng: -50.2188 }; // Santa Catarina fixed default center
+    const defaultCenter = { lat: -27.63, lng: -48.65 }; // Palhoça / São José (Grande Florianópolis)
     const computedCenter = useMemo(() => {
         const firstFleet = (frotaMarkers && frotaMarkers.length > 0) ? frotaMarkers[0] : null;
         const candidate = firstFleet || defaultCenter;
@@ -284,6 +284,119 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return [];
     }
 
+    // Helpers for animation and geometry
+    const toLatLng = (p) => ({ lat: Number(p[0]), lng: Number(p[1]) });
+    const distanceMeters = (a, b) => {
+        const R = 6371000; // m
+        const lat1 = a.lat * Math.PI / 180;
+        const lat2 = b.lat * Math.PI / 180;
+        const dLat = (b.lat - a.lat) * Math.PI / 180;
+        const dLon = (b.lng - a.lng) * Math.PI / 180;
+        const sa = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(sa), Math.sqrt(1 - sa));
+        return R * c;
+    };
+    const lerpLatLng = (a, b, t) => ({ lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t });
+
+    // Animation state per motorista: stores progress along path
+    const animStateRef = useRef(new Map());
+
+    // Animate drivers along their runtime polyline paths (if present)
+    useEffect(() => {
+        let raf = null;
+        let lastTime = performance.now();
+
+        function step(now) {
+            const dt = Math.max(0, (now - lastTime) / 1000);
+            lastTime = now;
+
+            try {
+                // Iterate active drivers
+                (frotaMarkers || []).forEach(m => {
+                    const id = String(m.id);
+                    const raw = runtimePolylines && runtimePolylines[id];
+                    // if no runtime polyline for this driver, skip animation (GPS will keep marker)
+                    if (!raw) return;
+                    let path = decodePolyline(raw) || [];
+                    // normalize to [{lat,lng},...]
+                    path = path.map(p => Array.isArray(p) ? toLatLng(p) : (p && p.lat != null && p.lng != null ? { lat: Number(p.lat), lng: Number(p.lng) } : null)).filter(Boolean);
+                    if (!path || path.length < 2) return;
+
+                    // init anim state
+                    let st = animStateRef.current.get(id);
+                    if (!st || !st.pathKey || st.pathKey !== JSON.stringify(path)) {
+                        // Initialize with current first point or existing last coord
+                        const start = path[0];
+                        // try to start at driver's last known position if available
+                        const last = lastCoordsRef.current.get(m.id) || start;
+                        st = {
+                            path,
+                            pathKey: JSON.stringify(path),
+                            segIndex: 0,
+                            segT: 0,
+                            speed: 8 /* m/s default ~28.8 km/h */,
+                            pos: { lat: Number(last.lat), lng: Number(last.lng) }
+                        };
+                        animStateRef.current.set(id, st);
+                    }
+
+                    // advance along path by speed*dt
+                    const speed = st.speed || 8;
+                    let remaining = speed * dt; // meters to advance
+                    // consume remaining across segments
+                    while (remaining > 0 && st.segIndex < st.path.length - 1) {
+                        const a = st.path[st.segIndex];
+                        const b = st.path[st.segIndex + 1];
+                        const segLen = distanceMeters(a, b);
+                        const curT = st.segT;
+                        const curPosDist = segLen * curT;
+                        const avail = segLen - curPosDist;
+                        if (remaining < avail) {
+                            // advance within segment
+                            const newPosDist = curPosDist + remaining;
+                            st.segT = segLen > 0 ? newPosDist / segLen : 1;
+                            remaining = 0;
+                        } else {
+                            // move to next segment
+                            remaining = remaining - avail;
+                            st.segIndex += 1;
+                            st.segT = 0;
+                        }
+                    }
+
+                    // compute current position from segIndex and segT
+                    if (st.segIndex >= st.path.length - 1) {
+                        st.pos = st.path[st.path.length - 1];
+                    } else {
+                        const a = st.path[st.segIndex];
+                        const b = st.path[st.segIndex + 1];
+                        st.pos = lerpLatLng(a, b, st.segT);
+                    }
+
+                    // compute desired angle and smooth it
+                    const nextPoint = (st.segIndex < st.path.length - 1) ? st.path[Math.min(st.segIndex + 1, st.path.length - 1)] : st.pos;
+                    const desiredAngle = calcularAngulo(st.pos.lat, st.pos.lng, nextPoint.lat, nextPoint.lng);
+                    const prevAngle = lastAnglesRef.current.get(m.id) || desiredAngle;
+                    // clamp rotation speed
+                    const maxTurnDegPerSec = 180; // degrees per second
+                    const diff = ((((desiredAngle - prevAngle + 540) % 360) - 180)); // signed shortest
+                    const maxStep = maxTurnDegPerSec * dt;
+                    const clamped = Math.abs(diff) > maxStep ? (prevAngle + Math.sign(diff) * maxStep) : desiredAngle;
+                    const newAngle = (clamped + 360) % 360;
+
+                    // Update shared refs for rendering
+                    lastCoordsRef.current.set(m.id, { lat: st.pos.lat, lng: st.pos.lng });
+                    lastAnglesRef.current.set(m.id, newAngle);
+                });
+            } catch (e) { /* ignore per-driver errors */ }
+
+            raf = requestAnimationFrame(step);
+        }
+
+        raf = requestAnimationFrame(step);
+        return () => { if (raf) cancelAnimationFrame(raf); };
+    }, [frotaMarkers, runtimePolylines]);
+
     // Delivery-route DB subscription disabled in emergency mode (no polylines from DB)
     // useEffect intentionally removed to avoid map-side processing of deliveries.
     // (Previously fetched rota_polyline from 'entregas' and subscribed to realtime changes.)
@@ -305,11 +418,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     const lat = Number(e.latlng.lat);
                     const lng = Number(e.latlng.lng);
                     if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                        // store gestor position but do NOT flyTo on first load (avoid jump)
                         setGestorPos([lat, lng]);
-                        if (!hasAutoCenteredRef.current) {
-                            try { map.flyTo(e.latlng, 15); } catch (err) { }
-                            hasAutoCenteredRef.current = true;
-                        }
                     }
                 } catch (err) { /* ignore */ }
             },
