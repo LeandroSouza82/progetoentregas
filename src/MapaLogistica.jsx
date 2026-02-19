@@ -23,6 +23,10 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     const lastCoordsRef = useRef(new Map());
     // cache último ângulo de cada motorista (id -> angulo)
     const lastAnglesRef = useRef(new Map());
+    // timestamp of last DB GPS update per motorista (ms)
+    const lastGpsUpdateRef = useRef(new Map());
+    // displayed positions for smooth marker interpolation (id -> {lat,lng})
+    const lastDisplayedRef = useRef(new Map());
     // No delivery state kept here in emergency mode — map will render only fleet markers
     const [gestorPos, setGestorPos] = useState(null);
     const [focusMarker, setFocusMarker] = useState(null);
@@ -131,7 +135,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         }
                     } catch (e) { /* ignore */ }
                     // Atualiza cache apenas de quem está online de fato
+                    const prev = lastCoordsRef.current.get(m.id);
                     lastCoordsRef.current.set(m.id, { lat: latN, lng: lngN });
+                    // record DB update timestamp only when coords changed
+                    try {
+                        if (!prev || prev.lat !== latN || prev.lng !== lngN) {
+                            lastGpsUpdateRef.current.set(m.id, Date.now());
+                            // ensure there is a displayed position entry
+                            if (!lastDisplayedRef.current.get(m.id)) lastDisplayedRef.current.set(m.id, { lat: latN, lng: lngN });
+                        }
+                    } catch (e) { /* ignore */ }
                     out.push({ id: m.id, lat: latN, lng: lngN, title: m.nome || 'Motorista', online: true });
                 }
             } else {
@@ -298,104 +311,53 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     };
     const lerpLatLng = (a, b, t) => ({ lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t });
 
-    // Animation state per motorista: stores progress along path
-    const animStateRef = useRef(new Map());
+    const [, setDisplayTick] = useState(0); // used to force rerenders during animation
 
-    // Animate drivers along their runtime polyline paths (if present)
+    // Smoothly interpolate displayed marker positions toward lastCoordsRef, but only when
+    // actual DB-updated coordinates changed. If no coordinate change for >10s, keep marker static.
     useEffect(() => {
         let raf = null;
         let lastTime = performance.now();
-
-        function step(now) {
+        function loop(now) {
             const dt = Math.max(0, (now - lastTime) / 1000);
             lastTime = now;
-
+            let changed = false;
             try {
-                // Iterate active drivers
                 (frotaMarkers || []).forEach(m => {
-                    const id = String(m.id);
-                    const raw = runtimePolylines && runtimePolylines[id];
-                    // if no runtime polyline for this driver, skip animation (GPS will keep marker)
-                    if (!raw) return;
-                    let path = decodePolyline(raw) || [];
-                    // normalize to [{lat,lng},...]
-                    path = path.map(p => Array.isArray(p) ? toLatLng(p) : (p && p.lat != null && p.lng != null ? { lat: Number(p.lat), lng: Number(p.lng) } : null)).filter(Boolean);
-                    if (!path || path.length < 2) return;
-
-                    // init anim state
-                    let st = animStateRef.current.get(id);
-                    if (!st || !st.pathKey || st.pathKey !== JSON.stringify(path)) {
-                        // Initialize with current first point or existing last coord
-                        const start = path[0];
-                        // try to start at driver's last known position if available
-                        const last = lastCoordsRef.current.get(m.id) || start;
-                        st = {
-                            path,
-                            pathKey: JSON.stringify(path),
-                            segIndex: 0,
-                            segT: 0,
-                            speed: 8 /* m/s default ~28.8 km/h */,
-                            pos: { lat: Number(last.lat), lng: Number(last.lng) }
-                        };
-                        animStateRef.current.set(id, st);
-                    }
-
-                    // advance along path by speed*dt
-                    const speed = st.speed || 8;
-                    let remaining = speed * dt; // meters to advance
-                    // consume remaining across segments
-                    while (remaining > 0 && st.segIndex < st.path.length - 1) {
-                        const a = st.path[st.segIndex];
-                        const b = st.path[st.segIndex + 1];
-                        const segLen = distanceMeters(a, b);
-                        const curT = st.segT;
-                        const curPosDist = segLen * curT;
-                        const avail = segLen - curPosDist;
-                        if (remaining < avail) {
-                            // advance within segment
-                            const newPosDist = curPosDist + remaining;
-                            st.segT = segLen > 0 ? newPosDist / segLen : 1;
-                            remaining = 0;
-                        } else {
-                            // move to next segment
-                            remaining = remaining - avail;
-                            st.segIndex += 1;
-                            st.segT = 0;
+                    const id = m.id;
+                    const target = lastCoordsRef.current.get(id);
+                    if (!target) return;
+                    const disp = lastDisplayedRef.current.get(id) || target;
+                    const lastUpdate = lastGpsUpdateRef.current.get(id) || 0;
+                    const age = Date.now() - lastUpdate;
+                    // If no recent update within 10s and target equals displayed, ensure static
+                    if (age > 10000) {
+                        if (disp.lat !== target.lat || disp.lng !== target.lng) {
+                            // snap to target and stop
+                            lastDisplayedRef.current.set(id, { lat: target.lat, lng: target.lng });
+                            changed = true;
                         }
+                        return;
                     }
 
-                    // compute current position from segIndex and segT
-                    if (st.segIndex >= st.path.length - 1) {
-                        st.pos = st.path[st.path.length - 1];
-                    } else {
-                        const a = st.path[st.segIndex];
-                        const b = st.path[st.segIndex + 1];
-                        st.pos = lerpLatLng(a, b, st.segT);
-                    }
+                    // If coordinates unchanged, do nothing
+                    if (Math.abs(disp.lat - target.lat) < 1e-6 && Math.abs(disp.lng - target.lng) < 1e-6) return;
 
-                    // compute desired angle and smooth it
-                    const nextPoint = (st.segIndex < st.path.length - 1) ? st.path[Math.min(st.segIndex + 1, st.path.length - 1)] : st.pos;
-                    const desiredAngle = calcularAngulo(st.pos.lat, st.pos.lng, nextPoint.lat, nextPoint.lng);
-                    const prevAngle = lastAnglesRef.current.get(m.id) || desiredAngle;
-                    // clamp rotation speed
-                    const maxTurnDegPerSec = 180; // degrees per second
-                    const diff = ((((desiredAngle - prevAngle + 540) % 360) - 180)); // signed shortest
-                    const maxStep = maxTurnDegPerSec * dt;
-                    const clamped = Math.abs(diff) > maxStep ? (prevAngle + Math.sign(diff) * maxStep) : desiredAngle;
-                    const newAngle = (clamped + 360) % 360;
-
-                    // Update shared refs for rendering
-                    lastCoordsRef.current.set(m.id, { lat: st.pos.lat, lng: st.pos.lng });
-                    lastAnglesRef.current.set(m.id, newAngle);
+                    // Interpolate towards target (smoothing factor)
+                    const smoothing = 6; // higher = faster convergence
+                    const t = Math.min(1, smoothing * dt);
+                    const nx = disp.lat + (target.lat - disp.lat) * t;
+                    const ny = disp.lng + (target.lng - disp.lng) * t;
+                    lastDisplayedRef.current.set(id, { lat: nx, lng: ny });
+                    changed = true;
                 });
-            } catch (e) { /* ignore per-driver errors */ }
-
-            raf = requestAnimationFrame(step);
+            } catch (e) { /* ignore */ }
+            if (changed) setDisplayTick(n => n + 1);
+            raf = requestAnimationFrame(loop);
         }
-
-        raf = requestAnimationFrame(step);
+        raf = requestAnimationFrame(loop);
         return () => { if (raf) cancelAnimationFrame(raf); };
-    }, [frotaMarkers, runtimePolylines]);
+    }, [frotaMarkers]);
 
     // Delivery-route DB subscription disabled in emergency mode (no polylines from DB)
     // useEffect intentionally removed to avoid map-side processing of deliveries.
@@ -571,11 +533,12 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
                     {/* Frota (drivers) markers */}
                     {frotaMarkers.map(m => {
-                        const pos = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
+                        const target = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
+                        const disp = lastDisplayedRef.current.get(m.id) || target;
                         return (
                             <Marker
                                 key={'v10-marker-' + m.id}
-                                position={[Number(pos.lat), Number(pos.lng)]}
+                                position={[Number(disp.lat), Number(disp.lng)]}
                                 icon={getV10MotoIcon(true, lastAnglesRef.current.get(m.id) || 0, m.title)}
                             />
                         );
