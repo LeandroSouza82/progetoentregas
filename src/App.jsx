@@ -558,16 +558,18 @@ function App() {
         if (!ok) return;
 
         try {
-            // Update banco: arquivar todos os registros que estejam concluido ou falha
+            // Update banco: arquivar apenas linhas que estiverem entregues ou com falha
             if (HAS_SUPABASE_CREDENTIALS) {
                 const { data, error } = await supabase
                     .from('entregas')
                     .update({ status: 'arquivado' })
-                    .in('status', ['concluido', 'falha']);
+                    .in('status', ['entregue', 'falha']);
                 if (error) {
                     console.warn('limparMarcadores: falha no update', error);
                 }
             }
+            // refresh local data so dashboard fetches latest state
+            try { await carregarDados(); } catch (err) { console.warn('limparMarcadores: falha ao recarregar mapa', err); }
         } catch (e) {
             console.warn('limparMarcadores: exceção ao atualizar banco', e);
         }
