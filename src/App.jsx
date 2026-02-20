@@ -687,22 +687,7 @@ function App() {
 
     const [historySuggestions, setHistorySuggestions] = useState([]);
 
-    // Busca reativa e normalizada para o Histórico (v157)
-    const filteredRecentList = React.useMemo(() => {
-        try {
-            const q = String(historyFilter || '').trim();
-            if (!q) return recentList || [];
-            const normalize = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
-            const nq = normalize(q);
-            return (recentList || []).filter(it => {
-                try {
-                    const c = normalize(it && it.cliente || '');
-                    const a = normalize(it && it.endereco || '');
-                    return c.includes(nq) || a.includes(nq);
-                } catch (e) { return false; }
-            });
-        } catch (e) { return recentList || []; }
-    }, [recentList, historyFilter]);
+    
 
     // Duplicate detection (address + tipo) — v101: block same-service duplicates for same endereco
     useEffect(() => {
@@ -743,6 +728,22 @@ function App() {
     // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
     const [recentList, setRecentList] = useState([]);
     const [historyFilter, setHistoryFilter] = useState('');
+    // Busca reativa e normalizada para o Histórico (v157/v158)
+    const filteredRecentList = React.useMemo(() => {
+        try {
+            const q = String(historyFilter || '').trim();
+            if (!q) return recentList || [];
+            const normalize = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const nq = normalize(q);
+            return (recentList || []).filter(it => {
+                try {
+                    const c = normalize(it && it.cliente || '');
+                    const a = normalize(it && it.endereco || '');
+                    return c.includes(nq) || a.includes(nq);
+                } catch (e) { return false; }
+            });
+        } catch (e) { return recentList || []; }
+    }, [recentList, historyFilter]);
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
