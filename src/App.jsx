@@ -675,6 +675,11 @@ function App() {
     const [mensagemGeral, setMensagemGeral] = useState('');
     const [enviandoGeral, setEnviandoGeral] = useState(false);
     const [btnPressed, setBtnPressed] = useState(false);
+    // Configurar WhatsApp do Gestor (v159)
+    const [showGestorModal, setShowGestorModal] = useState(false);
+    const [gestorPhoneInput, setGestorPhoneInput] = useState('');
+    const [gestorPhoneLoading, setGestorPhoneLoading] = useState(false);
+    const [gestorPhoneMessage, setGestorPhoneMessage] = useState('');
     const [adicionando, setAdicionando] = useState(false);
     const [duplicateTipoMsg, setDuplicateTipoMsg] = useState('');
     const clienteInputRef = useRef(null);
@@ -686,6 +691,43 @@ function App() {
     const [inputEnderecoInvalid, setInputEnderecoInvalid] = useState(false);
 
     const [historySuggestions, setHistorySuggestions] = useState([]);
+
+    // Carrega o número salvo no banco para edição
+    async function loadGestorPhone() {
+        try {
+            if (!HAS_SUPABASE_CREDENTIALS) return;
+            const { data, error } = await supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone').limit(1);
+            if (!error && Array.isArray(data) && data.length > 0) {
+                setGestorPhoneInput(String(data[0].valor || ''));
+            } else {
+                setGestorPhoneInput('');
+            }
+        } catch (e) {
+            console.warn('loadGestorPhone error', e);
+            setGestorPhoneInput('');
+        }
+    }
+
+    // Salva / upsert do número na tabela configuracoes
+    async function saveGestorPhone() {
+        try {
+            if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível salvar.');
+            const val = String(gestorPhoneInput || '').trim();
+            if (!val) return alert('Digite um número válido.');
+            setGestorPhoneLoading(true);
+            const payload = [{ chave: 'gestor_phone', valor: val }];
+            const { data, error } = await supabase.from('configuracoes').upsert(payload, { returning: 'minimal' });
+            if (error) throw error;
+            setGestorPhoneMessage('✅ Número atualizado! Todos os motoristas agora enviarão notificações para este contato.');
+            try { setTimeout(() => setGestorPhoneMessage(''), 4000); } catch (e) { }
+            setShowGestorModal(false);
+        } catch (e) {
+            console.error('saveGestorPhone error', e);
+            try { alert('Falha ao salvar: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+        } finally {
+            setGestorPhoneLoading(false);
+        }
+    }
 
 
 
@@ -2488,7 +2530,15 @@ function App() {
                                     <textarea value={mensagemGeral} onChange={(e) => setMensagemGeral(e.target.value)} placeholder="Escreva a mensagem..." style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #cbd5e1', minHeight: '96px', resize: 'vertical', fontSize: '14px' }} />
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center' }}>
+                                <button
+                                    title="Configurar WhatsApp da Central"
+                                    onClick={() => { setShowGestorModal(true); try { loadGestorPhone(); } catch (e) { } }}
+                                    style={{ padding: '8px 10px', background: '#0ea5e9', border: 'none', color: '#fff', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', boxShadow: '0 6px 14px rgba(14,165,233,0.18)' }}
+                                >
+                                    📱
+                                </button>
+
                                 <button
                                     onMouseDown={() => setBtnPressed(true)}
                                     onMouseUp={() => setBtnPressed(false)}
@@ -2521,6 +2571,22 @@ function App() {
                                 >
                                     {enviandoGeral ? 'ENVIANDO...' : 'ENVIAR MENSAGEM'}
                                 </button>
+
+                                {/* Modal de configuração do WhatsApp da Central */}
+                                {showGestorModal && (
+                                    <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 12000 }}>
+                                        <div style={{ width: 420, maxWidth: '94%', background: theme.card, padding: 20, borderRadius: 12, boxShadow: theme.shadow, color: theme.textMain }}>
+                                            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Configurar WhatsApp da Central</h3>
+                                            <div style={{ marginBottom: 8, color: theme.textLight, fontSize: 13 }}>Digite o número com código do país e DDD (ex: 5548996525008).</div>
+                                            <input value={gestorPhoneInput} onChange={(e) => setGestorPhoneInput(e.target.value)} placeholder="5548996525008" style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)', background: '#071228', color: '#fff', boxSizing: 'border-box' }} />
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                                                <button onClick={() => setShowGestorModal(false)} style={{ padding: '8px 12px', borderRadius: 8, background: 'transparent', color: theme.textLight, border: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>Cancelar</button>
+                                                <button onClick={saveGestorPhone} disabled={gestorPhoneLoading} style={{ padding: '8px 12px', borderRadius: 8, background: '#0ea5e9', color: '#000', border: 'none', fontWeight: 700, cursor: 'pointer' }}>{gestorPhoneLoading ? 'SALVANDO...' : 'Salvar'}</button>
+                                            </div>
+                                            {gestorPhoneMessage ? <div style={{ marginTop: 10, color: '#34d399', fontWeight: 700 }}>{gestorPhoneMessage}</div> : null}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
