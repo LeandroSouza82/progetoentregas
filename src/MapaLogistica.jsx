@@ -499,42 +499,27 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             data_conclusao: p.data_conclusao || ''
                         };
 
-                        // determine type label using pin color (as requested)
+                        // determine tipo label based on pin color (unchanged colors)
                         let tipoLabel = 'Entrega';
                         if (color === '#f97316') tipoLabel = 'Recolha';
                         else if (color === '#a855f7') tipoLabel = 'Outros';
 
-                        // status string shown raw
+                        // status string shown raw (fallback to placeholder)
                         const statusText = row.status && String(row.status).trim() !== '' ? row.status : 'Desconhecido';
                         const stNorm = normalizeText(row.status);
 
-                        // choose horario only for delivered or failure
-                        let horarioLine = null;
-                        if (stNorm.includes('entreg') || stNorm.includes('falha')) {
-                            const raw = row.horario_conclusao || row.data_conclusao || '';
-                            let formatted = '';
-                            try {
-                                if (raw && raw.includes(':')) {
-                                    // assume ISO or time string, take HH:MM
-                                    formatted = raw.substr(11,5) || raw;
-                                } else {
-                                    formatted = raw;
-                                }
-                            } catch (e) { formatted = raw; }
-                            horarioLine = formatted || 'Horário não registrado';
-                        }
-
+                        // motivo fallback
                         const motivoText = row.motivo_nao_entrega || row.tipo_recebedor || 'Motivo não informado';
 
                         return (
-                            <div style={{ width:50, height:50, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+                            <div style={{ width:60, height:60, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', background: 'transparent' }}>
                                 <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
                                     <Popup className="delivery-popup">
                                         <div style={{ fontWeight: 800 }}>{row.cliente || 'Sem cliente'}</div>
                                         <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
                                         <div><strong>Tipo:</strong> {tipoLabel}</div>
                                         <p><strong>Status:</strong> {statusText}</p>
-                                        {horarioLine && <p><strong>Horário:</strong> {horarioLine}</p>}
+                                        <p><strong>Horário:</strong> {row.horario_conclusao ? new Date(row.horario_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : (row.data_conclusao ? new Date(row.data_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '---')}</p>
                                         {stNorm.includes('falha') && <p><strong>Motivo:</strong> {motivoText}</p>}
                                     </Popup>
                                 </Marker>
