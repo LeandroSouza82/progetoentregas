@@ -687,7 +687,7 @@ function App() {
 
     const [historySuggestions, setHistorySuggestions] = useState([]);
 
-    
+
 
     // Duplicate detection (address + tipo) — v101: block same-service duplicates for same endereco
     useEffect(() => {
