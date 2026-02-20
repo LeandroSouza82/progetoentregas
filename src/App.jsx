@@ -321,6 +321,8 @@ function App() {
     const [avisos, setAvisos] = useState([]);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
+    const [motoristaCidade, setMotoristaCidade] = useState(null);
+    const cidadeCacheRef = useRef(new Map());
     const [mapCleared, setMapCleared] = useState(false);
 
     const carregarDados = React.useCallback(async (opts = {}) => {
@@ -1034,6 +1036,41 @@ function App() {
             } catch (e) { /* ignore */ }
         })();
     }, []);
+
+    // Reverse geocode motoristaDaRota coordinates to city name (auto-updates)
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                if (!motoristaDaRota || motoristaDaRota.lat == null || motoristaDaRota.lng == null) {
+                    if (!cancelled) setMotoristaCidade(null);
+                    return;
+                }
+                const key = `${Number(motoristaDaRota.lat).toFixed(4)},${Number(motoristaDaRota.lng).toFixed(4)}`;
+                if (cidadeCacheRef.current.has(key)) {
+                    if (!cancelled) setMotoristaCidade(cidadeCacheRef.current.get(key));
+                    return;
+                }
+                const token = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_MAPBOX_TOKEN) ? import.meta.env.VITE_MAPBOX_TOKEN : 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
+                const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${Number(motoristaDaRota.lng)},${Number(motoristaDaRota.lat)}.json?types=place&language=pt&limit=1&access_token=${token}`;
+                const resp = await fetch(url, { headers: { Accept: 'application/json' } });
+                if (!resp || !resp.ok) {
+                    cidadeCacheRef.current.set(key, null);
+                    if (!cancelled) setMotoristaCidade(null);
+                    return;
+                }
+                const jd = await resp.json();
+                const feat = jd && jd.features && jd.features[0];
+                const city = feat && (feat.text || (feat.place_name && feat.place_name.split(',')[0])) ? (feat.text || feat.place_name.split(',')[0]) : null;
+                cidadeCacheRef.current.set(key, city);
+                if (!cancelled) setMotoristaCidade(city);
+            } catch (e) {
+                try { cidadeCacheRef.current.set(key, null); } catch (err) { }
+                if (!cancelled) setMotoristaCidade(null);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [motoristaDaRota && motoristaDaRota.lat, motoristaDaRota && motoristaDaRota.lng]);
 
     // Tenta obter localização do gestor via Geolocation + reverse geocoding
     useEffect(() => {
@@ -2290,7 +2327,11 @@ function App() {
                                     <div style={{ padding: '15px', background: '#e0e7ff', borderRadius: '12px', marginBottom: '20px', color: theme.primary }}>
                                         <strong>🚛 Motorista:</strong> {motoristaDaRota.nome}<br />
                                         <strong>🔌 Status:</strong> {motoristaDaRota.esta_online === true ? 'Online' : 'Offline'}
-                                        {motoristaDaRota.lat && motoristaDaRota.lng && (<div><strong>📍</strong> {motoristaDaRota.lat.toFixed ? `${motoristaDaRota.lat.toFixed(4)}, ${motoristaDaRota.lng.toFixed(4)}` : `${motoristaDaRota.lat}, ${motoristaDaRota.lng}`}</div>)}
+                                        {motoristaDaRota.lat && motoristaDaRota.lng && (
+                                            <div>
+                                                <strong>📍</strong> {motoristaCidade ? `Localização: ${motoristaCidade}` : (motoristaDaRota.lat.toFixed ? `${motoristaDaRota.lat.toFixed(4)}, ${motoristaDaRota.lng.toFixed(4)}` : `${motoristaDaRota.lat}, ${motoristaDaRota.lng}`)}
+                                            </div>
+                                        )}
                                     </div>
                                     <h4 style={{ margin: '10px 0' }}>Próximas Entregas:</h4>
                                     <div style={{ flex: 1, overflowY: 'auto' }}>
