@@ -87,8 +87,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 id: e.id,
                 lat: Number(e.lat),
                 lng: Number(e.lng),
+                endereco: e.endereco || e.address || '',
                 cliente: e.cliente,
-                endereco: e.endereco || '',
                 tipo: e.tipo,
                 status: e.status,
                 obs: e.obs || e.observacoes || '',
@@ -477,18 +477,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         const status = normalizeText(p.status || '');
                         // V138: prioritize status -> delivered/finalized (green), failure (red)
                         // otherwise color by tipo (entrega=blue, recolha=orange). Default to lilac only if unknown
-                        // Lógica de cor priorizando status (v163):
-                        // - Concluído -> verde
-                        // - Falha -> vermelho
-                        // - Em Progresso (pendente/em_rota) -> amarelo
-                        // fallback para cores por tipo quando status não informar
                         let color = '#a855f7'; // default lilás (Outros)
                         if (status.includes('entreg') || status.includes('conclu')) {
-                            color = '#22c55e'; // verde
+                            color = '#22c55e';
                         } else if (status.includes('falha')) {
-                            color = '#ef4444'; // vermelho
-                        } else if (status.includes('pendente') || status.includes('em_rota')) {
-                            color = '#f59e0b'; // amarelo para em progresso
+                            color = '#ef4444';
                         } else if (tipo.includes('entrega')) {
                             color = '#2563eb';
                         } else if (tipo.includes('recolha')) {
@@ -497,24 +490,18 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             color = '#a855f7';
                         }
                         const numero = (p.ordem_logistica != null && p.ordem_logistica !== '') ? p.ordem_logistica : (idx + 1);
+                        const row = {
+                            ...p,
+                            status: p.status != null ? p.status : '',
+                            motivo_falha: p.motivo_falha || p.motivo_nao_entrega || p.motivo || ''
+                        };
                         return (
                             <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
                                 <Popup>
-                                    <div style={{ fontWeight: 800 }}>{p.cliente || 'Sem cliente'}</div>
-                                    <div style={{ marginTop: 6 }}>{p.endereco || ''}</div>
-                                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <div style={{ width: 10, height: 10, borderRadius: 6, background: color }} />
-                                        <div><strong>Status:</strong> {
-                                            (status.includes('pendente') || status.includes('em_rota')) ? 'Em Progresso' :
-                                                (status.includes('entreg') || status.includes('conclu')) ? 'Concluído' :
-                                                    (status.includes('falha')) ? 'Falha' : (p.status || status)
-                                        }</div>
-                                    </div>
-                                    {status.includes('falha') && (
-                                        <div style={{ marginTop: 6 }}><strong>Motivo da Falha:</strong> {p.motivo_nao_entrega || p.motivo || 'Não informado'}</div>
-                                    )}
-                                    <div style={{ marginTop: 6 }}><strong>Tipo:</strong> {p.tipo || 'Entrega'}</div>
-                                    <div style={{ marginTop: 6 }}><strong>Obs:</strong> {p.obs || ''}</div>
+                                    <div style={{ fontWeight: 800 }}>{row.cliente || 'Sem cliente'}</div>
+                                    <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
+                                    <p><strong>Status:</strong> {row.status || 'Em Progresso'}</p>
+                                    {row.status === 'falha' && <p><strong>Motivo:</strong> {row.motivo_falha || 'Motivo não informado'}</p>}
                                 </Popup>
                             </Marker>
                         );
