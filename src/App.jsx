@@ -553,51 +553,49 @@ function App() {
     }, []);
 
     async function limparMarcadores() {
+        // Prompt first and bail early if cancelled
+        const ok = window.confirm('Deseja remover as entregas concluídas e falhas do mapa?');
+        if (!ok) return;
+
+        // Immediately drop any concluido/falha pins from the React state so the map re-renders right away.
+        setEntregas(prev => (prev || []).filter(item => {
+            try {
+                const s = String(item && item.status || '').trim().toLowerCase();
+                return s !== 'concluido' && s !== 'falha';
+            } catch (err) {
+                return true;
+            }
+        }));
+        setPedidosPendentes(prev => (prev || []).filter(item => {
+            try {
+                const s = String(item && item.status || '').trim().toLowerCase();
+                return s !== 'concluido' && s !== 'falha';
+            } catch (err) {
+                return true;
+            }
+        }));
+
         try {
-            const ok = window.confirm('Deseja remover as entregas concluídas e falhas do mapa?');
-            if (!ok) return;
+            // gather ids that were removed so we can archive them in the database
+            const toArchive = (entregas || []).filter(e => {
+                const s = String(e && e.status || '').trim().toLowerCase();
+                return s === 'concluido' || s === 'falha';
+            }).map(e => e.id).filter(Boolean);
 
-            // Determine which entregas on screen should be archived (only 'concluido' and 'falha')
-            try {
-                const toArchive = (pedidosPendentes || []).filter(p => {
-                    const s = String(p && p.status || '').trim().toLowerCase();
-                    return s === 'concluido' || s === 'falha';
-                }).map(p => p.id).filter(Boolean);
-
-                if (toArchive.length > 0 && HAS_SUPABASE_CREDENTIALS) {
-                    try {
-                        // Persist archive status in DB for selected items
-                        const { data, error } = await supabase.from('entregas').update({ status: 'arquivado' }).in('id', toArchive);
-                        if (error) console.warn('limparMarcadores: erro ao arquivar entregas', error);
-                        else {
-                            // reflect locally: remove only archived items from pedidosPendentes and entregas
-                            try { setPedidosPendentes(prev => (prev || []).filter(p => !toArchive.includes(p.id))); } catch (e) { }
-                            try { setEntregas(prev => (prev || []).filter(p => !toArchive.includes(p.id))); } catch (e) { }
-                        }
-                    } catch (e) { console.warn('limparMarcadores: exeption ao arquivar', e); }
+            if (toArchive.length > 0 && HAS_SUPABASE_CREDENTIALS) {
+                try {
+                    const { data, error } = await supabase.from('entregas').update({ status: 'arquivado' }).in('id', toArchive);
+                    if (error) {
+                        console.warn('limparMarcadores: erro ao arquivar entregas', error);
+                    }
+                } catch (e) {
+                    console.warn('limparMarcadores: exceção ao arquivar', e);
                 }
-            } catch (e) { /* ignore per-entry */ }
-
-            // Additionally, ensure front-end state removes any pins with status 'concluido' or 'falha'
-            try {
-                setEntregas(prev => (prev || []).filter(e => {
-                    try {
-                        const s = String(e && e.status || '').trim().toLowerCase();
-                        return s !== 'concluido' && s !== 'falha';
-                    } catch (err) { return true; }
-                }));
-            } catch (e) { }
-            try {
-                setPedidosPendentes(prev => (prev || []).filter(e => {
-                    try {
-                        const s = String(e && e.status || '').trim().toLowerCase();
-                        return s !== 'concluido' && s !== 'falha';
-                    } catch (err) { return true; }
-                }));
-            } catch (e) { }
-
-            // Important: do NOT clear runtime polylines here. Preserve 'pendente' and 'em_rota' pins and polylines.
-        } catch (e) { }
+            }
+        } catch (e) {
+            // do not block UI cleanup if archiving fails
+            console.warn('limparMarcadores: falha ao preparar arquivamento', e);
+        }
     }
     async function recarregarMapa() {
         try {
