@@ -627,7 +627,69 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             }
         }
 
-        if (!result) return null;
+        if (!result) {
+            // Tentativa extra (fallback específico v162):
+            // Se o endereço mencionar 'Morro das Feiticeiras' OU se não houve resultados,
+            // tentar uma busca simplificada: Rua + Numero + Cidade.
+            try {
+                const lowerAddrFull = String(address || '').toLowerCase();
+                const shouldTryFallback = lowerAddrFull.indexOf('morro das feiticeiras') !== -1 || lowerAddrFull.indexOf('feiticeiras') !== -1 || true;
+                // NOTE: o `|| true` acima garante que este bloco rode quando "não houve resultado" (estamos aqui).
+                if (shouldTryFallback) {
+                    // Extrair número se presente
+                    const numMatch = String(address || '').match(/(\d+[A-Za-z0-9\/\-]*)/);
+                    const numberToken = numMatch ? numMatch[1] : '';
+
+                    // Preparar streetOnly: remover nomes de condomínio e o bairro longo 'Ingleses do Rio Vermelho'
+                    let streetOnly = String(address || '')
+                        .replace(/Ingleses do Rio Vermelho/ig, '')
+                        .replace(/condom[ií]nio[^,]*/ig, '')
+                        .replace(/cond\.\s*[^,]*/ig, '')
+                        .replace(/torre[^,]*/ig, '')
+                        .replace(/bloco[^,]*/ig, '')
+                        .replace(/apartamento[^,]*/ig, '')
+                        .replace(/apto[^,]*/ig, '')
+                        .replace(/unidade[^,]*/ig, '')
+                        .replace(/\(.*?\)/g, '')
+                        .replace(/,\s*,+/g, ',')
+                        .trim();
+
+                    // Remover qualquer vírgula final e tokens de bairro grandes que possam confundir
+                    streetOnly = streetOnly.split(',').map(s => s.trim()).filter(Boolean).slice(0, 2).join(', ');
+
+                    // Determinar cidade: preferir cidade detectada, senão usar Florianópolis quando 'ingleses' detectado
+                    let cityForSearch = detectCityStrict(address) || null;
+                    if (!cityForSearch) {
+                        if (lowerAddrFull.indexOf('ingleses') !== -1 || lowerAddrFull.indexOf('feiticeiras') !== -1) cityForSearch = 'Florianópolis';
+                    }
+                    // Montar query simplificada (Rua, Número, Cidade)
+                    const simpleQuery = `${streetOnly}${numberToken ? (', ' + numberToken) : ''}${cityForSearch ? (', ' + cityForSearch + ', SC, Brasil') : ''}`.replace(/\s{2,}/g, ' ').trim();
+
+                    if (simpleQuery && simpleQuery.length > 5) {
+                        try {
+                            const urlSimple = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(simpleQuery)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                            console.log('[GEO v162-fallback] Tentando busca simplificada:', simpleQuery, urlSimple);
+                            const respSimple = await fetch(urlSimple, { headers: { 'Accept': 'application/json' } });
+                            if (respSimple && respSimple.ok) {
+                                const jdSimple = await respSimple.json();
+                                if (jdSimple && jdSimple.features && jdSimple.features.length > 0) {
+                                    const r = jdSimple.features[0];
+                                    if (r && r.center && r.center.length >= 2) {
+                                        const lng = r.center[0], lat = r.center[1];
+                                        // Validação de bbox operacional
+                                        if (lat <= (b.north) && lat >= (b.south) && lng >= (b.west) && lng <= (b.east)) {
+                                            console.log('[GEO v162-fallback] Sucesso na busca simplificada:', { lat, lng, simpleQuery });
+                                            return { lat, lng, display_name: r.place_name || simpleQuery };
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) { /* fallthrough to null */ }
+                    }
+                }
+            } catch (e) { /* ignore fallback errors */ }
+            return null;
+        }
 
         const coords = result.center; // [lng, lat]
         const lng = coords[0], lat = coords[1];
