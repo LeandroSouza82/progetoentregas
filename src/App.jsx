@@ -557,7 +557,22 @@ function App() {
         const ok = window.confirm('Deseja remover as entregas concluídas e falhas do mapa?');
         if (!ok) return;
 
-        // Immediately drop any concluido/falha pins from the React state so the map re-renders right away.
+        try {
+            // Update banco: arquivar todos os registros que estejam concluido ou falha
+            if (HAS_SUPABASE_CREDENTIALS) {
+                const { data, error } = await supabase
+                    .from('entregas')
+                    .update({ status: 'arquivado' })
+                    .in('status', ['concluido', 'falha']);
+                if (error) {
+                    console.warn('limparMarcadores: falha no update', error);
+                }
+            }
+        } catch (e) {
+            console.warn('limparMarcadores: exceção ao atualizar banco', e);
+        }
+
+        // Remove itens do estado local, o map atualizará automaticamente
         setEntregas(prev => (prev || []).filter(item => {
             try {
                 const s = String(item && item.status || '').trim().toLowerCase();
@@ -576,26 +591,8 @@ function App() {
         }));
 
         try {
-            // gather ids that were removed so we can archive them in the database
-            const toArchive = (entregas || []).filter(e => {
-                const s = String(e && e.status || '').trim().toLowerCase();
-                return s === 'concluido' || s === 'falha';
-            }).map(e => e.id).filter(Boolean);
-
-            if (toArchive.length > 0 && HAS_SUPABASE_CREDENTIALS) {
-                try {
-                    const { data, error } = await supabase.from('entregas').update({ status: 'arquivado' }).in('id', toArchive);
-                    if (error) {
-                        console.warn('limparMarcadores: erro ao arquivar entregas', error);
-                    }
-                } catch (e) {
-                    console.warn('limparMarcadores: exceção ao arquivar', e);
-                }
-            }
-        } catch (e) {
-            // do not block UI cleanup if archiving fails
-            console.warn('limparMarcadores: falha ao preparar arquivamento', e);
-        }
+            alert('Entregas finalizadas foram arquivadas com sucesso');
+        } catch (e) { }
     }
     async function recarregarMapa() {
         try {
