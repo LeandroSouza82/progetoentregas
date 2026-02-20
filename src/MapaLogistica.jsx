@@ -161,13 +161,17 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         try {
             const inst = mapInstance;
             mapRef.current = inst;
-            const points = [...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
-            if (!points || points.length === 0) {
+            // Combine fleet + entregas so map fits all pins on load
+            const combined = [
+                ...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng })),
+                ...entregaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))
+            ].filter(pt => pt && Number.isFinite(Number(pt.lat)) && Number.isFinite(Number(pt.lng)));
+            if (!combined || combined.length === 0) {
                 try { inst.setView([-27.5969, -48.5495], 12); } catch (e) { }
                 return;
             }
             try {
-                const bounds = L.latLngBounds(points.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
+                const bounds = L.latLngBounds(combined.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
                 inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: false });
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
@@ -220,12 +224,18 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
         try {
             // Ajustar bounds sempre que as entregas ou frota mudarem (auto-fit)
-            const key = JSON.stringify({ f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })) });
+            const key = JSON.stringify({
+                f: frotaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng })),
+                e: entregaMarkers.map(p => ({ id: p.id, lat: p.lat, lng: p.lng }))
+            });
             if (key === lastPointsKeyRef.current) return; // nothing changed
             lastPointsKeyRef.current = key;
             if (!mapRef.current) return;
             const inst = mapRef.current;
-            const points = [...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))];
+            const points = [
+                ...frotaMarkers.map(p => ({ lat: p.lat, lng: p.lng })),
+                ...entregaMarkers.map(p => ({ lat: p.lat, lng: p.lng }))
+            ].filter(pt => pt && Number.isFinite(Number(pt.lat)) && Number.isFinite(Number(pt.lng)));
             if (!points || points.length === 0) {
                 try { inst.setView([defaultCenter.lat, defaultCenter.lng], 12); } catch (e) { }
                 return;
@@ -235,7 +245,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: false });
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
-    }, [frotaMarkers]);
+    }, [frotaMarkers, entregaMarkers, focusCoords]);
 
     // Helper: create pin icon for entregas (blue circle with white number)
     // use createCustomPinIcon from src/CustomPin.jsx
@@ -262,18 +272,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         const safeName = esc(nome);
         // usar caminho absoluto root para /moto.png (garante consistência de deploy)
         const motoSrc = '/moto.png';
-        const html = `
-<div style="position: relative; width: 60px; height: 60px; display: flex; justify-content: center; align-items: center;">
-    <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1;"></div>
-    <img src="${motoSrc}" style="position: absolute; width: 50px; height: 50px; transform: rotate(${angulo}deg); z-index: 2; opacity: 1;" />
-    <div style="position: absolute; top: -20px; background: rgba(0,0,0,0.8); color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; z-index: 3;">${safeName}</div>
-</div>`;
-        return L.divIcon({
-            html,
-            className: 'moto-icon-limpo',
-            iconSize: [60, 60],
-            iconAnchor: [30, 30]
-        });
+                const html = `
+    <div style="width:60px;height:80px;position:relative;display:block;pointer-events:auto;">
+        <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);display:flex;align-items:flex-end;justify-content:center;">
+            <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1; bottom: 6px;">
+            </div>
+            <img src="${motoSrc}" style="width:50px;height:50px;transform:rotate(${angulo}deg);z-index:2;" />
+            <div style="position:absolute;top:-20px;background:rgba(0,0,0,0.8);color:white;padding:2px 8px;border-radius:10px;font-size:11px;white-space:nowrap;z-index:3;">${safeName}</div>
+        </div>
+    </div>`;
+                return L.divIcon({ html, className: 'moto-icon-limpo', iconSize: [60, 80], iconAnchor: [30, 80] });
     }
 
     function getGestorIcon() {
@@ -512,18 +520,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         const motivoText = row.motivo_nao_entrega || row.tipo_recebedor || 'Motivo não informado';
 
                         return (
-                            <div style={{ width:60, height:60, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', background: 'transparent' }}>
-                                <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
-                                    <Popup className="delivery-popup">
-                                        <div style={{ fontWeight: 800 }}>{row.cliente || 'Sem cliente'}</div>
-                                        <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
-                                        <div><strong>Tipo:</strong> {tipoLabel}</div>
-                                        <p><strong>Status:</strong> {statusText}</p>
-                                        <p><strong>Horário:</strong> {row.horario_conclusao ? new Date(row.horario_conclusao).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit', timeZone: 'America/Sao_Paulo'}) : (row.data_conclusao ? new Date(row.data_conclusao).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit', timeZone: 'America/Sao_Paulo'}) : '---')}</p>
-                                        {stNorm.includes('falha') && <p><strong>Motivo:</strong> {motivoText}</p>}
-                                    </Popup>
-                                </Marker>
-                            </div>
+                            <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
+                                <Popup className="delivery-popup">
+                                    <div style={{ fontWeight: 800 }}>{row.cliente || 'Sem cliente'}</div>
+                                    <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
+                                    <div><strong>Tipo:</strong> {tipoLabel}</div>
+                                    <p><strong>Status:</strong> {statusText}</p>
+                                    <p><strong>Horário:</strong> {row.horario_conclusao ? new Date(row.horario_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : (row.data_conclusao ? new Date(row.data_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : '---')}</p>
+                                    {stNorm.includes('falha') && <p><strong>Motivo:</strong> {motivoText}</p>}
+                                </Popup>
+                            </Marker>
                         );
                     })}
 
