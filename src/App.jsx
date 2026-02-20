@@ -687,6 +687,23 @@ function App() {
 
     const [historySuggestions, setHistorySuggestions] = useState([]);
 
+    // Busca reativa e normalizada para o Histórico (v157)
+    const filteredRecentList = React.useMemo(() => {
+        try {
+            const q = String(historyFilter || '').trim();
+            if (!q) return recentList || [];
+            const normalize = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const nq = normalize(q);
+            return (recentList || []).filter(it => {
+                try {
+                    const c = normalize(it && it.cliente || '');
+                    const a = normalize(it && it.endereco || '');
+                    return c.includes(nq) || a.includes(nq);
+                } catch (e) { return false; }
+            });
+        } catch (e) { return recentList || []; }
+    }, [recentList, historyFilter]);
+
     // Duplicate detection (address + tipo) — v101: block same-service duplicates for same endereco
     useEffect(() => {
         try {
@@ -2344,17 +2361,10 @@ function App() {
 
                             </div>
                             <div className="v10-history-list">
-                                {(!recentList || recentList.length === 0) ? (
+                                {(!filteredRecentList || filteredRecentList.length === 0) ? (
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
-                                    (historyFilter && String(historyFilter).trim().length > 0 ? recentList.filter(it => {
-                                        try {
-                                            const q = String(historyFilter).trim().toLowerCase();
-                                            const a = String(it.endereco || '').toLowerCase();
-                                            const c = String(it.cliente || '').toLowerCase();
-                                            return a.includes(q) || c.includes(q);
-                                        } catch (e) { return false; }
-                                    }) : recentList)?.map((it, idx) => (
+                                    (filteredRecentList || []).map((it, idx) => (
                                         <div key={idx}
                                             className="v10-history-card"
                                             onClick={async () => {
