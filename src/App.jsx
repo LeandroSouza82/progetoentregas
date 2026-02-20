@@ -691,6 +691,10 @@ function App() {
     const [gestorPhoneInput, setGestorPhoneInput] = useState('');
     const [gestorPhoneLoading, setGestorPhoneLoading] = useState(false);
     const [gestorPhoneMessage, setGestorPhoneMessage] = useState('');
+    const [showBackupModal, setShowBackupModal] = useState(false);
+    const [backupLoading, setBackupLoading] = useState(false);
+    const [deletingDb, setDeletingDb] = useState(false);
+    const [deleteResultMessage, setDeleteResultMessage] = useState('');
     const [adicionando, setAdicionando] = useState(false);
     const [duplicateTipoMsg, setDuplicateTipoMsg] = useState('');
     const clienteInputRef = useRef(null);
@@ -2661,6 +2665,93 @@ function App() {
                                         </div>
                                     </div>
                                 )}
+                                {/* Modal: Backup antes de zerar DB */}
+                                {showBackupModal && (
+                                    <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 12000 }}>
+                                        <div style={{ width: 520, maxWidth: '96%', background: theme.card, padding: 20, borderRadius: 12, boxShadow: theme.shadow, color: theme.textMain }}>
+                                            <h3 style={{ marginTop: 0 }}>Atenção: Antes de zerar, deseja exportar um backup das entregas?</h3>
+                                            <div style={{ marginBottom: 12, color: theme.textLight }}>Recomendado: baixe o CSV para manter uma cópia externa antes de prosseguir.</div>
+                                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                                <button onClick={() => setShowBackupModal(false)} style={{ padding: '8px 12px', borderRadius: 8, background: 'transparent', color: theme.textLight, border: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer' }}>Cancelar</button>
+                                                <button onClick={async () => {
+                                                    try {
+                                                        setBackupLoading(true);
+                                                        if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível exportar.');
+                                                        const { data, error } = await supabase.from('entregas').select('*');
+                                                        if (error) throw error;
+                                                        // Convert to CSV
+                                                        const rows = Array.isArray(data) ? data : [];
+                                                        if (rows.length === 0) {
+                                                            try { alert('Não há entregas para exportar.'); } catch (e) { }
+                                                            return;
+                                                        }
+                                                        const keys = Object.keys(rows[0]);
+                                                        const csv = [keys.join(',')].concat(rows.map(r => keys.map(k => {
+                                                            const v = r[k] == null ? '' : String(r[k]).replace(/"/g, '""');
+                                                            return `"${v}"`;
+                                                        }).join(','))).join('\n');
+                                                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                                                        const url = URL.createObjectURL(blob);
+                                                        const a = document.createElement('a');
+                                                        a.href = url;
+                                                        a.download = `backup_entregas_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+                                                        document.body.appendChild(a);
+                                                        a.click();
+                                                        a.remove();
+                                                        URL.revokeObjectURL(url);
+                                                    } catch (e) {
+                                                        console.error('Erro exportando CSV', e);
+                                                        try { alert('Falha ao exportar backup: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+                                                    } finally { setBackupLoading(false); }
+                                                }} style={{ padding: '8px 12px', borderRadius: 8, background: '#0ea5e9', color: '#000', border: 'none', fontWeight: 700, cursor: 'pointer' }}>{backupLoading ? 'GERANDO...' : 'Baixar CSV'}</button>
+                                                <button onClick={async () => {
+                                                    try {
+                                                        setShowBackupModal(false);
+                                                        // Segundo aviso: confirmação final
+                                                        const ok = window.confirm('VOCÊ TEM CERTEZA? Isso apagará TODAS as entregas e históricos permanentemente. Esta ação não pode ser desfeita.');
+                                                        if (!ok) return;
+                                                        if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível executar a operação.');
+                                                        setDeletingDb(true);
+                                                        try {
+                                                            // Delete entregas
+                                                            const { error: err1 } = await supabase.from('entregas').delete();
+                                                            if (err1) throw err1;
+                                                            // Delete logs_roteirizacao (histórico)
+                                                            const { error: err2 } = await supabase.from('logs_roteirizacao').delete();
+                                                            if (err2) throw err2;
+                                                            setDeleteResultMessage('Banco de dados zerado com sucesso.');
+                                                            try { alert('Banco de dados zerado com sucesso.'); } catch (e) { }
+                                                            try { await carregarDados(); } catch (e) { }
+                                                        } catch (e) {
+                                                            console.error('Erro ao zerar banco', e);
+                                                            try { alert('Falha ao zerar banco: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+                                                        } finally { setDeletingDb(false); }
+                                                    } catch (e) { console.error('Erro no fluxo de zerar DB', e); }
+                                                }} style={{ padding: '8px 12px', borderRadius: 8, background: '#ef4444', color: '#fff', border: 'none', fontWeight: 900, cursor: 'pointer' }}>{deletingDb ? 'APAGANDO...' : 'Continuar'}</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {/* Botão de manutenção crítica: Zerar Banco de Dados */}
+                                <div style={{ marginLeft: 8 }}>
+                                    <style>{`@keyframes blink {0%{box-shadow:0 0 0 rgba(239,68,68,0.85)}50%{box-shadow:0 0 20px rgba(239,68,68,0.5)}100%{box-shadow:0 0 0 rgba(239,68,68,0.85)}} .v10-blink-red{animation: blink 1s infinite;}`}</style>
+                                    <button
+                                        onClick={() => setShowBackupModal(true)}
+                                        title="Zerar Banco de Dados (ação irreversível)"
+                                        style={{
+                                            padding: '10px 14px',
+                                            borderRadius: 8,
+                                            border: totalEntregas > 450 ? '2px solid #ef4444' : '1px solid rgba(255,0,0,0.16)',
+                                            background: totalEntregas > 450 ? '#fff1f0' : 'transparent',
+                                            color: totalEntregas > 450 ? '#7f1d1d' : '#ef4444',
+                                            fontWeight: 900,
+                                            cursor: 'pointer'
+                                        }}
+                                        className={totalEntregas > 450 ? 'v10-blink-red' : ''}
+                                    >
+                                        ⚠️ Zerar Banco de Dados
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
