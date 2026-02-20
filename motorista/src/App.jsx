@@ -446,13 +446,14 @@ function InternalMobileApp() {
         if (!window.confirm("Confirmar FALHA na entrega?")) return;
 
         // IMPORTANTE: Status 'falha' para o pino ficar vermelho instantaneamente no Dashboard
+        // Ao reportar falha gravamos o motivo em `motivo_nao_entrega` e limpamos `recebedor` e `tipo_recebedor`
         const { error } = await supabase
             .from('entregas')
-            .update({ status: 'falha', obs: motivo })
+            .update({ status: 'falha', motivo_nao_entrega: motivo, recebedor: null, tipo_recebedor: null })
             .eq('id', id);
 
         if (!error) {
-            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'falha', obs: motivo } : item));
+            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'falha', motivo_nao_entrega: motivo, recebedor: null, tipo_recebedor: null } : item));
             alert("❌ Falha registrada com sucesso. O gestor verá o pino vermelho.");
         } else {
             alert("Erro ao reportar falha: " + error.message);
