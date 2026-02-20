@@ -241,8 +241,15 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 return;
             }
             try {
+                // Only auto-fit when there is at least one delivery
+                if ((entregaMarkers || []).length < 1) return;
                 const bounds = L.latLngBounds(points.map(pt => L.latLng(Number(pt.lat), Number(pt.lng))));
-                inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: false });
+                // Use flyToBounds for smooth animation; Leaflet duration is in seconds
+                if (typeof inst.flyToBounds === 'function') {
+                    try { inst.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15, duration: 1 }); } catch (e) { inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 }); }
+                } else {
+                    inst.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+                }
             } catch (e) { /* ignore */ }
         } catch (e) { /* ignore */ }
     }, [frotaMarkers, entregaMarkers, focusCoords]);
