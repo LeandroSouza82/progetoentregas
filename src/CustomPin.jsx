@@ -20,14 +20,16 @@ export function createCustomPinIcon(color = '#2563eb', number = null, status = '
   ${safeNumber ? `<text x='14' y='13.2' text-anchor='middle' font-size='12' font-weight='800' fill='#ffffff' stroke='#000000' stroke-width='1' paint-order='stroke' font-family='Arial' alignment-baseline='middle'>${safeNumber}</text>` : ''}
 </svg>`;
 
-        const html = `<div style="width:28px;height:38px;display:flex;align-items:flex-start;justify-content:center;transform:translateY(-6px);">${svg}</div>`;
-        // iconSize set to [28,38], anchor at bottom tip [14,38]
-        return L.divIcon({ html, className: 'custom-pin-icon', iconSize: [28, 38], iconAnchor: [14, 38], popupAnchor: [0, -34] });
+        const html = `<div style="width:28px;height:38px;display:flex;align-items:flex-start;justify-content:center;transform:translateY(-6px);cursor:pointer;">${svg}</div>`;
+        // iconSize enlarged to provide bigger hitbox; visible SVG remains 28x38
+        // anchor adjusted accordingly (center bottom of hitbox)
+        return L.divIcon({ html, className: 'custom-pin-icon', iconSize: [40, 50], iconAnchor: [20, 50], popupAnchor: [0, -34] });
     } catch (e) {
         // fallback: simple small circle with number
         try {
-            const fallback = `<div style="width:28px;height:28px;border-radius:50%;background:#2563eb;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px">${number || ''}</div>`;
-            return L.divIcon({ html: fallback, className: 'custom-pin-fallback', iconSize: [28, 28], iconAnchor: [14, 28], popupAnchor: [0, -28] });
+            const fallback = `<div style="width:28px;height:28px;border-radius:50%;background:#2563eb;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px;cursor:pointer">${number || ''}</div>`;
+            // enlarge fallback hitbox similarly
+            return L.divIcon({ html: fallback, className: 'custom-pin-fallback', iconSize: [40, 50], iconAnchor: [20, 50], popupAnchor: [0, -28] });
         } catch (ee) {
             return L.divIcon();
         }

@@ -493,15 +493,34 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         const row = {
                             ...p,
                             status: p.status != null ? p.status : '',
-                            motivo_falha: p.motivo_falha || p.motivo_nao_entrega || p.motivo || ''
+                            motivo_nao_entrega: p.motivo_nao_entrega || p.motivo_falha || p.motivo || '',
+                            recebedor: p.recebedor || '',
+                            horario_conclusao: p.horario_conclusao || ''
                         };
+
+                        // derive display labels for type and status
+                        let tipoLabel = 'Entrega';
+                        if (color === '#2563eb') tipoLabel = 'Entrega';
+                        else if (color === '#f97316') tipoLabel = 'Recolha';
+                        else if (color === '#a855f7') tipoLabel = 'Outros';
+
+                        let statusText = 'Em Progresso';
+                        const stNorm = normalizeText(row.status);
+                        if (stNorm.includes('entreg') || stNorm.includes('conclu')) statusText = 'Concluído';
+                        else if (stNorm.includes('falha')) statusText = 'Falha';
+
                         return (
                             <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
-                                <Popup>
+                                <Popup className="delivery-popup">
                                     <div style={{ fontWeight: 800 }}>{row.cliente || 'Sem cliente'}</div>
                                     <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
-                                    <p><strong>Status:</strong> {row.status || 'Em Progresso'}</p>
-                                    {row.status === 'falha' && <p><strong>Motivo:</strong> {row.motivo_falha || 'Motivo não informado'}</p>}
+                                    <div><strong>Tipo:</strong> {tipoLabel}</div>
+                                    <p><strong>Status:</strong> {statusText}</p>
+                                    {(statusText === 'Concluído' || statusText === 'Falha') && row.horario_conclusao && (
+                                        <p><strong>Horário:</strong> {row.horario_conclusao}</p>
+                                    )}
+                                    {statusText === 'Falha' && <p><strong>Motivo:</strong> {row.motivo_nao_entrega || 'Motivo não informado'}</p>}
+                                    {((statusText === 'Concluído' || statusText === 'Falha') && row.recebedor) && <p><strong>Recebido por:</strong> {row.recebedor}</p>}
                                 </Popup>
                             </Marker>
                         );
