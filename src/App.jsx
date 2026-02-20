@@ -2262,7 +2262,7 @@ function App() {
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
+                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {motoristaCidade || gestorLocation}</div>
                         <div style={{ opacity: 0.6 }}>Contato: 5548996525008</div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
