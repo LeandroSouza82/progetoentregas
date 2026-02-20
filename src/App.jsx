@@ -554,23 +554,23 @@ function App() {
 
     async function limparMarcadores() {
         try {
-            const ok = window.confirm('Deseja arquivar esta rota? Os pontos concluídos não aparecerão mais no mapa.');
+            const ok = window.confirm('Deseja remover as entregas concluídas e falhas do mapa?');
             if (!ok) return;
 
-            // Determine which entregas on screen should be archived (only concluído/entregue/falha)
+            // Determine which entregas on screen should be archived (only 'concluido' and 'falha')
             try {
                 const toArchive = (pedidosPendentes || []).filter(p => {
                     const s = String(p && p.status || '').trim().toLowerCase();
-                    return s === 'entregue' || s === 'concluido' || s === 'falha';
+                    return s === 'concluido' || s === 'falha';
                 }).map(p => p.id).filter(Boolean);
 
                 if (toArchive.length > 0 && HAS_SUPABASE_CREDENTIALS) {
                     try {
-                        // Persist archive status in DB
+                        // Persist archive status in DB for selected items
                         const { data, error } = await supabase.from('entregas').update({ status: 'arquivado' }).in('id', toArchive);
                         if (error) console.warn('limparMarcadores: erro ao arquivar entregas', error);
                         else {
-                            // reflect locally: remove archived from pedidosPendentes and entregas
+                            // reflect locally: remove only archived items from pedidosPendentes and entregas
                             try { setPedidosPendentes(prev => (prev || []).filter(p => !toArchive.includes(p.id))); } catch (e) { }
                             try { setEntregas(prev => (prev || []).filter(p => !toArchive.includes(p.id))); } catch (e) { }
                         }
@@ -578,13 +578,8 @@ function App() {
                 }
             } catch (e) { /* ignore per-entry */ }
 
-            // Clear frontend-only visual state: entregas list and pending list (remaining)
-            try { setEntregas([]); } catch (e) { }
-            try { setPedidosPendentes([]); } catch (e) { }
-            // Clear runtime polylines so the route line disappears
-            try { setRuntimePolylines({}); } catch (e) { }
-            // Ensure map receives the clear flag so it recenters and hides pins
-            setMapCleared(true);
+            // Important: do NOT clear all entregas/pedidos or runtime polylines here.
+            // Preserve pins with status 'pendente', 'em_rota' or 'em progresso' and keep existing polylines.
         } catch (e) { }
     }
     async function recarregarMapa() {
