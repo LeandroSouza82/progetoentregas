@@ -725,6 +725,7 @@ function App() {
 
     // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
     const [recentList, setRecentList] = useState([]);
+    const [historyFilter, setHistoryFilter] = useState('');
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
@@ -2299,13 +2300,56 @@ function App() {
 
                         {/* Coluna Direita: Histórico (scroll) */}
                         <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
-                            <h3 style={{ marginTop: 0, color: theme.textMain }}>Histórico de Clientes</h3>
-                            <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
-                            <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                                <div>
+                                    <h3 style={{ marginTop: 0, color: theme.textMain, marginBottom: 6 }}>Histórico de Clientes</h3>
+                                    <div style={{ color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <input
+                                        aria-label="Buscar histórico"
+                                        value={historyFilter || ''}
+                                        onChange={(e) => setHistoryFilter(e.target.value)}
+                                        placeholder="Pesquisar..."
+                                        style={{
+                                            background: theme.card,
+                                            color: theme.textMain,
+                                            border: '1px solid rgba(255,255,255,0.06)',
+                                            padding: '8px 10px',
+                                            borderRadius: 10,
+                                            minWidth: 200,
+                                            outline: 'none',
+                                            boxSizing: 'border-box'
+                                        }}
+                                    />
+                                    <button
+                                        title="Limpar histórico (local)"
+                                        onClick={() => {
+                                            try {
+                                                const ok = window.confirm('Deseja apagar todo o histórico de endereços?');
+                                                if (!ok) return;
+                                                setRecentList([]);
+                                                setHistoryFilter('');
+                                            } catch (e) { }
+                                        }}
+                                        style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: 18, padding: 6, borderRadius: 8 }}
+                                    >
+                                        🗑️
+                                    </button>
+                                </div>
+                            </div>
+                            <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px', marginTop: 10 }}>
                                 {(!recentList || recentList.length === 0) ? (
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
-                                    recentList?.map((it, idx) => (
+                                    (historyFilter && String(historyFilter).trim().length > 0 ? recentList.filter(it => {
+                                        try {
+                                            const q = String(historyFilter).trim().toLowerCase();
+                                            const a = String(it.endereco || '').toLowerCase();
+                                            const c = String(it.cliente || '').toLowerCase();
+                                            return a.includes(q) || c.includes(q);
+                                        } catch (e) { return false; }
+                                    }) : recentList)?.map((it, idx) => (
                                         <div key={idx} onClick={async () => {
                                             try {
                                                 setNomeCliente(it.cliente || '');
