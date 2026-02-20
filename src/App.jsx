@@ -578,8 +578,25 @@ function App() {
                 }
             } catch (e) { /* ignore per-entry */ }
 
-            // Important: do NOT clear all entregas/pedidos or runtime polylines here.
-            // Preserve pins with status 'pendente', 'em_rota' or 'em progresso' and keep existing polylines.
+            // Additionally, ensure front-end state removes any pins with status 'concluido' or 'falha'
+            try {
+                setEntregas(prev => (prev || []).filter(e => {
+                    try {
+                        const s = String(e && e.status || '').trim().toLowerCase();
+                        return s !== 'concluido' && s !== 'falha';
+                    } catch (err) { return true; }
+                }));
+            } catch (e) { }
+            try {
+                setPedidosPendentes(prev => (prev || []).filter(e => {
+                    try {
+                        const s = String(e && e.status || '').trim().toLowerCase();
+                        return s !== 'concluido' && s !== 'falha';
+                    } catch (err) { return true; }
+                }));
+            } catch (e) { }
+
+            // Important: do NOT clear runtime polylines here. Preserve 'pendente' and 'em_rota' pins and polylines.
         } catch (e) { }
     }
     async function recarregarMapa() {
