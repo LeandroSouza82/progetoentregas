@@ -27,7 +27,9 @@ export function createCustomPinIcon(color = '#2563eb', number = null, status = '
     } catch (e) {
         // fallback: simple small circle with number
         try {
-            const fallback = `<div style="width:28px;height:28px;border-radius:50%;background:#2563eb;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px;cursor:pointer">${number || ''}</div>`;
+            const fallback = `<div style="width:40px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+                    <div style="width:28px;height:28px;border-radius:50%;background:#2563eb;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:12px">${number || ''}</div>
+                </div>`;
             // enlarge fallback hitbox similarly
             return L.divIcon({ html: fallback, className: 'custom-pin-fallback', iconSize: [40, 50], iconAnchor: [20, 50], popupAnchor: [0, -28] });
         } catch (ee) {
