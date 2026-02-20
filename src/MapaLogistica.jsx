@@ -519,7 +519,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                                         <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
                                         <div><strong>Tipo:</strong> {tipoLabel}</div>
                                         <p><strong>Status:</strong> {statusText}</p>
-                                        <p><strong>Horário:</strong> {row.horario_conclusao ? new Date(row.horario_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : (row.data_conclusao ? new Date(row.data_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '---')}</p>
+                                        <p><strong>Horário:</strong> {row.horario_conclusao ? new Date(row.horario_conclusao).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit', timeZone: 'America/Sao_Paulo'}) : (row.data_conclusao ? new Date(row.data_conclusao).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit', timeZone: 'America/Sao_Paulo'}) : '---')}</p>
                                         {stNorm.includes('falha') && <p><strong>Motivo:</strong> {motivoText}</p>}
                                     </Popup>
                                 </Marker>
