@@ -2249,7 +2249,7 @@ function App() {
 
                 {/* NOVA CARGA */}
                 {abaAtiva === 'Nova Carga' && (
-                    <div style={{ display: 'flex', gap: '24px', background: 'transparent' }}>
+                    <div style={{ display: 'flex', gap: '24px', background: 'transparent', alignItems: 'stretch' }}>
                         {/* Coluna Esquerda: Formulário */}
                         <div style={{ flex: '0 0 48%', background: theme.card, padding: '28px', borderRadius: '12px', boxShadow: theme.shadow }}>
                             <h2 style={{ marginTop: 0, color: theme.primary }}>Registrar Encomenda</h2>
@@ -2299,30 +2299,35 @@ function App() {
                         </div>
 
                         {/* Coluna Direita: Histórico (scroll) */}
-                        <div style={{ flex: '0 0 52%', background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                                <div>
-                                    <h3 style={{ marginTop: 0, color: theme.textMain, marginBottom: 6 }}>Histórico de Clientes</h3>
-                                    <div style={{ color: theme.textLight, fontSize: '13px' }}>Clique para preencher o formulário à esquerda</div>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div className="v10-history-panel" style={{ flex: '1 1 0', minWidth: 0, background: theme.card, padding: '18px', borderRadius: '12px', boxShadow: theme.shadow, display: 'flex', flexDirection: 'column', alignSelf: 'stretch' }}>
+                            {/* CSS específico para forçar alinhamento e larguras do painel de histórico (v156) */}
+                            <style>{`
+                                .v10-history-panel{ position:relative; max-width:none !important; width:100% !important; padding-right:12px !important; box-sizing:border-box; }
+                                .v10-history-controls{ display:flex; width:100% !important; gap:10px; align-items:center; }
+                                .v10-history-input{ flex:1 1 auto !important; min-width:0 !important; width:100% !important; padding-right:56px !important; }
+                                .v10-history-trash{ position:absolute !important; top:12px !important; right:12px !important; width:40px !important; height:40px !important; display:flex !important; align-items:center !important; justify-content:center !important; cursor:pointer !important; background:transparent !important; border:none !important; }
+                                .v10-history-list{ overflow-y:auto; max-height:420px; padding-right:6px; margin-top:0; flex:1; min-height:0; }
+                                .v10-history-card{ width:100% !important; box-sizing:border-box; padding:12px; border-radius:8px; margin-bottom:10px; cursor:pointer; background: rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.06); transition: background 160ms ease, box-shadow 160ms ease; overflow:hidden; }
+                                .v10-history-card:hover{ background: rgba(255,255,255,0.08); box-shadow:0 6px 18px rgba(0,0,0,0.25); }
+                                .v10-history-card .title, .v10-history-card .addr{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+                            `}</style>
+
+                            <div>
+                                <h3 style={{ marginTop: 0, color: theme.textMain, marginBottom: 6 }}>Histórico de Clientes</h3>
+                                <div style={{ color: theme.textLight, fontSize: '13px', marginBottom: 8 }}>Clique para preencher o formulário à esquerda</div>
+
+                                {/* Linha de controle (busca + lixeira) */}
+                                <div className="v10-history-controls" style={{ marginBottom: 8 }}>
                                     <input
+                                        className="v10-history-input"
                                         aria-label="Buscar histórico"
                                         value={historyFilter || ''}
                                         onChange={(e) => setHistoryFilter(e.target.value)}
                                         placeholder="Pesquisar..."
-                                        style={{
-                                            background: theme.card,
-                                            color: theme.textMain,
-                                            border: '1px solid rgba(255,255,255,0.06)',
-                                            padding: '8px 10px',
-                                            borderRadius: 10,
-                                            minWidth: 200,
-                                            outline: 'none',
-                                            boxSizing: 'border-box'
-                                        }}
+                                        style={{ background: theme.card, color: theme.textMain, border: '1px solid rgba(255,255,255,0.06)', padding: '8px 12px', borderRadius: 10, outline: 'none', boxSizing: 'border-box' }}
                                     />
                                     <button
+                                        className="v10-history-trash"
                                         title="Limpar histórico (local)"
                                         onClick={() => {
                                             try {
@@ -2332,13 +2337,13 @@ function App() {
                                                 setHistoryFilter('');
                                             } catch (e) { }
                                         }}
-                                        style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: 18, padding: 6, borderRadius: 8 }}
                                     >
                                         🗑️
                                     </button>
                                 </div>
+
                             </div>
-                            <div style={{ overflowY: 'auto', maxHeight: '420px', paddingRight: '6px', marginTop: 10 }}>
+                            <div className="v10-history-list">
                                 {(!recentList || recentList.length === 0) ? (
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
@@ -2350,15 +2355,17 @@ function App() {
                                             return a.includes(q) || c.includes(q);
                                         } catch (e) { return false; }
                                     }) : recentList)?.map((it, idx) => (
-                                        <div key={idx} onClick={async () => {
-                                            try {
-                                                setNomeCliente(it.cliente || '');
-                                                setEnderecoEntrega(it.endereco || '');
-                                            } catch (e) { }
-                                            // historico click: apenas preencher cliente e endereço (sem coordenadas)
-                                        }} style={{ padding: '12px', borderRadius: '10px', marginBottom: '8px', cursor: 'pointer', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
-                                            <div style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
-                                            <div style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
+                                        <div key={idx}
+                                            className="v10-history-card"
+                                            onClick={async () => {
+                                                try {
+                                                    setNomeCliente(it.cliente || '');
+                                                    setEnderecoEntrega(it.endereco || '');
+                                                } catch (e) { }
+                                            }}
+                                        >
+                                            <div className="title" style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
+                                            <div className="addr" style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
                                         </div>
                                     ))
                                 )}
