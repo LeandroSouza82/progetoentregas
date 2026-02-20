@@ -319,8 +319,6 @@ function App() {
     const [frota, setFrota] = useState([]); // agora vem de `motoristas`
     const [totalEntregas, setTotalEntregas] = useState(0);
     const [avisos, setAvisos] = useState([]);
-    const [gestorPhone, setGestorPhone] = useState(null);
-    const [nomeGestor, setNomeGestor] = useState(null);
     const [rotaAtiva, setRotaAtiva] = useState([]);
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [mapCleared, setMapCleared] = useState(false);
@@ -507,30 +505,44 @@ function App() {
             if (avisosErr) { console.warn('carregarDados: erro ao buscar avisos', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
         } catch (e) { console.warn('Erro carregando avisos:', e); setAvisos([]); }
 
-        try {
-            let q4 = supabase.from('configuracoes').select('valor').eq('chave', 'gestor_phone');
-            if (q4 && typeof q4.limit === 'function') q4 = q4.limit(1);
-            const { data: cfg } = await q4;
-            if (cfg && cfg.length > 0) setGestorPhone(cfg[0].valor); else setGestorPhone(null);
-        } catch (e) { console.warn('Erro carregando configuracoes:', e); setGestorPhone(null); }
+        // carregamento de configuracoes do gestor removido (v149 rollback)
 
         try {
+            function normalizeAddr(s) {
+                if (!s) return '';
+                try {
+                    return String(s)
+                        .normalize('NFD')
+                        .replace(/\p{Diacritic}/gu, '')
+                        .replace(/[.(),;:\/\\#\-]/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .toLowerCase();
+                } catch (e) {
+                    return String(s).toLowerCase();
+                }
+            }
+
             let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
-            // Exclude archived entries from recent history as well
-            if (q5 && typeof q5.not === 'function') q5 = q5.not('status', 'eq', 'arquivado');
-            if (q5 && typeof q5.order === 'function') q5 = q5.order('id', { ascending: false });
-            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(200);
+            // Include entries of all statuses (do not filter by 'arquivado')
+            // Order by most recent first
+            if (q5 && typeof q5.order === 'function') q5 = q5.order('created_at', { ascending: false });
+            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(500);
             const { data: recent, error: recentErr } = await q5;
-            if (recentErr) { console.warn('carregarDados: erro ao buscar histórico', recentErr); setRecentList([]); }
-            else if (recent) {
+            if (recentErr) {
+                console.warn('carregarDados: erro ao buscar histórico', recentErr);
+                setRecentList([]);
+            } else if (recent && Array.isArray(recent)) {
                 const seen = new Set();
                 const unique = [];
                 for (const r of recent) {
-                    const key = (r.cliente || '').trim().toLowerCase();
-                    if (!key) continue;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    unique.push({ cliente: r.cliente, endereco: r.endereco });
+                    try {
+                        const addrKey = normalizeAddr(r.endereco || '');
+                        if (!addrKey) continue;
+                        if (seen.has(addrKey)) continue; // keep first (most recent)
+                        seen.add(addrKey);
+                        unique.push({ cliente: r.cliente || '', endereco: r.endereco || '' });
+                    } catch (err) { /* ignore row error */ }
                 }
                 setRecentList(unique);
             } else {
@@ -1729,6 +1741,7 @@ function App() {
             try {
                 const rec = payload.new || payload.record || null;
                 if (!rec) return;
+                // Notificações por WhatsApp ao gestor removidas (v149 rollback)
                 if (rec.motorista_id) {
                     const st = String(rec.status || '').trim().toLowerCase();
                     if (payload.event === 'INSERT' || (st === 'pendente' || st === 'em_rota' || st === 'recolha')) {
@@ -2143,11 +2156,11 @@ function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <div style={{ textAlign: 'right', fontSize: '12px' }}>
                         <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {gestorLocation}</div>
-                        <div style={{ opacity: 0.6 }}>Contato: {gestorPhone || '5548996525008'}</div>
+                        <div style={{ opacity: 0.6 }}>Contato: 5548996525008</div>
                     </div>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
-                        <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: {nomeGestor || 'Administrador'}</div>
+                        <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: Administrador</div>
                     </div>
                 </div>
             </header>
@@ -2397,39 +2410,7 @@ function App() {
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
                         <h2 style={{ marginTop: 0 }}>Motoristas Cadastrados</h2>
 
-                        {/* Configurações da Central (v146) */}
-                        <div style={{ marginBottom: '18px', display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                                <label style={{ fontWeight: 700, color: theme.textMain, marginRight: 8 }}>Configurações da Central</label>
-                                <input
-                                    value={gestorPhone || ''}
-                                    onChange={(e) => setGestorPhone(String(e.target.value))}
-                                    placeholder="Telefone da central"
-                                    style={{ padding: '10px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', minWidth: 220, flex: 1, boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.2)', background: theme.input || '#071226', color: theme.textMain }}
-                                />
-                                <button
-                                    onClick={async () => {
-                                        try {
-                                            const phone = String(gestorPhone || '').trim();
-                                            if (!phone) return alert('Informe um telefone válido.');
-                                            if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes.');
-                                            // Try update existing key
-                                            const { data: updated, error: updErr } = await supabase.from('configuracoes').update({ valor: phone }).eq('chave', 'gestor_phone');
-                                            if (updErr) console.warn('saveGestorPhone: update error', updErr);
-                                            if (!updated || (Array.isArray(updated) && updated.length === 0)) {
-                                                // insert if not present
-                                                try {
-                                                    const { data: ins, error: insErr } = await supabase.from('configuracoes').insert([{ chave: 'gestor_phone', valor: phone }]);
-                                                    if (insErr) console.warn('saveGestorPhone: insert error', insErr);
-                                                } catch (e) { console.warn('saveGestorPhone insert exception', e); }
-                                            }
-                                            try { alert('✅ Central de notificações atualizada!'); } catch (e) { }
-                                        } catch (e) { console.warn('saveGestorPhone exception', e); alert('Falha ao salvar.'); }
-                                    }}
-                                    style={{ padding: '10px 12px', borderRadius: 10, background: '#06b6d4', border: 'none', color: '#022c43', fontWeight: 700, cursor: 'pointer', boxShadow: theme.shadow, marginLeft: 8 }}
-                                >Salvar Contato</button>
-                            </div>
-                        </div>
+                        {/* campo de telefone do gestor removido (v149 rollback) */}
 
                         {/* Central de Comunicados (seletivo) */}
                         <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
