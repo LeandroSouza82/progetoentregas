@@ -2268,9 +2268,29 @@ function App() {
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                         <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: Administrador</div>
-                        <button onClick={async () => {
-                            try { await supabase.auth.signOut(); } catch (e) { console.error('signOut failed', e); }
-                            try { window.location.href = '/login'; } catch (e) { try { window.location.href = '/'; } catch (err) { /* ignore */ } }
+                        <button type="button" onClick={async (e) => {
+                            try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (err) { }
+                            try {
+                                // Sign out from Supabase
+                                try { await supabase.auth.signOut(); } catch (e) { console.error('signOut failed', e); }
+
+                                // Clear local/session storage to forget gestor identity
+                                try { if (typeof window !== 'undefined' && window.localStorage) window.localStorage.clear(); } catch (err) { }
+                                try { if (typeof window !== 'undefined' && window.sessionStorage) window.sessionStorage.clear(); } catch (err) { }
+
+                                // Replace page with final message so user cannot see the app anymore
+                                try {
+                                    if (typeof document !== 'undefined' && document.body) {
+                                        document.title = 'Sessão Encerrada';
+                                        document.body.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#071228;color:#fff;font-family:Inter, sans-serif;"><div style="text-align:center;padding:24px"><h1 style="font-size:20px;margin-bottom:12px">Sessão Encerrada</h1><p style="opacity:0.9">Sessão Encerrada. Feche esta aba.</p></div></div>';
+                                    } else if (typeof window !== 'undefined') {
+                                        try { window.location.href = 'about:blank'; } catch (err) { /* ignore */ }
+                                    }
+                                } catch (err) { try { window.location.href = 'about:blank'; } catch (e) { /* ignore */ } }
+                            } catch (e) {
+                                console.error('Erro no processo de logout', e);
+                                try { window.location.href = 'about:blank'; } catch (err) { /* ignore */ }
+                            }
                         }} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', background: 'transparent', color: theme.headerText, cursor: 'pointer', fontWeight: 700 }}>Sair</button>
                     </div>
                 </div>
