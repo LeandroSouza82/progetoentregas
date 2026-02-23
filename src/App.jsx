@@ -417,6 +417,8 @@ function App() {
             let q = supabase.from('entregas').select('*');
             // Exclude archived entries from any load
             if (q && typeof q.not === 'function') q = q.not('status', 'eq', 'arquivado');
+            // Exclude completed/failed so map and pending list stay light
+            if (q && typeof q.not === 'function') q = q.not('status', 'in', '(concluido,falha)');
             if (orString && typeof q.or === 'function') q = q.or(orString);
             if (q && typeof q.order === 'function') q = q.order('ordem_logistica', { ascending: true });
             const { data: entregasPend, error: entregasErr } = await q;
@@ -468,6 +470,8 @@ function App() {
             let q2 = supabase.from('entregas').select('*');
             // Exclude archived entries
             if (q2 && typeof q2.not === 'function') q2 = q2.not('status', 'eq', 'arquivado');
+            // Exclude completed/failed from polyline assembly to keep processing light
+            if (q2 && typeof q2.not === 'function') q2 = q2.not('status', 'in', '(concluido,falha)');
             if (orStringPoly && typeof q2.or === 'function') q2 = q2.or(orStringPoly);
             const { data: todas } = await q2;
             setTotalEntregas((todas || []).length);
@@ -1996,12 +2000,25 @@ function App() {
             payload.lat = (coords && Number.isFinite(Number(coords.lat))) ? Number(coords.lat) : 0;
             payload.lng = (coords && Number.isFinite(Number(coords.lng))) ? Number(coords.lng) : 0;
 
-            const { error } = await supabase.from('entregas').insert([payload]);
+            const { data: inserted, error } = await supabase.from('entregas').insert([payload]).select();
             if (error) {
                 console.error('Erro ao salvar no banco:', error);
                 alert('Erro ao salvar no banco: ' + (error.message || String(error)));
                 return;
             }
+
+            // Inserção bem sucedida: preferimos mostrar apenas este novo pedido no mapa (limpar visual anterior)
+            try {
+                const newPedido = Array.isArray(inserted) && inserted.length > 0 ? inserted[0] : null;
+                if (newPedido) {
+                    // Atualiza pedidos pendentes apenas com o novo pedido para evitar poluição do mapa
+                    try { setPedidosPendentes([newPedido]); } catch (e) { /* ignore */ }
+                    // Salvar tracked id na sessão para manter referência caso outras funções dependam disso
+                    try { if (typeof window !== 'undefined' && window.sessionStorage) window.sessionStorage.setItem('v10_tracked_entregas', JSON.stringify([String(newPedido.id)])); } catch (e) { }
+                    // Garantir que mapCleared esteja falso para que entregas passadas não substituam
+                    try { setMapCleared(false); } catch (e) { }
+                }
+            } catch (e) { /* ignore */ }
 
             // Clear fields immediately after success and focus Nome do Cliente
             setNomeCliente('');
@@ -2012,8 +2029,6 @@ function App() {
 
             // center map on newly added carga when coords available
             try { if (coords && Number.isFinite(Number(coords.lat)) && Number.isFinite(Number(coords.lng))) setMapFocusCoords({ lat: Number(coords.lat), lng: Number(coords.lng) }); } catch (e) { }
-
-            try { await carregarDados(); } catch (e) { /* ignore */ }
 
             if (!coords) {
                 try { alert('Carga adicionada — coordenadas não encontradas (marcada como pendente para correção).'); } catch (e) { }
@@ -2350,7 +2365,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica clearMap={mapCleared} entregas={mapCleared ? [] : pedidosPendentes} frota={frota} height={500} mobile={false} focusCoords={mapFocusCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
+                                            <MapaLogistica darkMode={darkMode} clearMap={mapCleared} entregas={mapCleared ? [] : pedidosPendentes} frota={frota} height={500} mobile={false} focusCoords={mapFocusCoords} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} />
                                         </ErrorBoundary>
                                     )
                                 }

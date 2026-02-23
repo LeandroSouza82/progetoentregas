@@ -571,15 +571,38 @@ export default function AppMotorista() {
             try {
                 const driverId = loggedIn?.id || null;
                 if (!driverId) return;
-                // avoid sending identical coords repeatedly
+                // new behavior: send only if moved >5m OR at least every 10s
                 const prev = prevCoordsRef.current || { lat: null, lng: null };
                 const latN = Number(lat), lngN = Number(lng);
-                if (Number.isFinite(prev.lat) && Number.isFinite(prev.lng) && prev.lat === latN && prev.lng === lngN) return;
-                // throttle sends to at most once per 5s
+                if (!(Number.isFinite(latN) && Number.isFinite(lngN))) return;
+                // ignore invalid 0,0
+                if (latN === 0 && lngN === 0) return;
+
                 const now = Date.now();
-                if (now - (lastSentRef.current || 0) < 5000) return;
+                let movedMeters = Infinity;
+                if (Number.isFinite(prev.lat) && Number.isFinite(prev.lng)) {
+                    try {
+                        const R = 6371000;
+                        const toRad = v => v * Math.PI / 180;
+                        const dLat = toRad(latN - prev.lat);
+                        const dLon = toRad(lngN - prev.lng);
+                        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(prev.lat)) * Math.cos(toRad(latN)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                        movedMeters = R * c;
+                    } catch (e) { movedMeters = Infinity; }
+                }
+
+                const timeSinceLast = now - (lastSentRef.current || 0);
+                if (movedMeters < 5 && timeSinceLast < 10000) {
+                    // do not send if moved less than 5m and not yet 10s
+                    return;
+                }
+
+                // update lastSent and prev coords
                 lastSentRef.current = now;
                 prevCoordsRef.current = { lat: latN, lng: lngN };
+
+                // finally send
                 await supabase.from('motoristas').update({ lat: latN, lng: lngN, ultima_atualizacao: new Date().toISOString() }).eq('id', driverId);
             } catch (e) {
                 console.warn('[motorista] Falha ao enviar posição para Supabase:', e && e.message ? e.message : e);

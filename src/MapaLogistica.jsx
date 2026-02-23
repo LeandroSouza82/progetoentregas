@@ -17,10 +17,12 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, clearMap = false }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, clearMap = false, darkMode = undefined }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
+    // timestamp quando uma atualização inválida foi recebida (id -> ms)
+    const lastInvalidTimeRef = useRef(new Map());
     // cache último ângulo de cada motorista (id -> angulo)
     const lastAnglesRef = useRef(new Map());
     // timestamp of last DB GPS update per motorista (ms)
@@ -80,9 +82,19 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // ❌ TRAVA FÍSICA: Filtrar coordenadas inválidas (0,0) ou nulas
     const entregaMarkers = React.useMemo(() => {
         try {
-            // include all entregas from DB so historic & all-status points render
-            // (don't restrict by status here; filtering by valid coords happens later)
-            const list = (localEntregas || []).filter(e => e);
+            // include only relevant entregas: exclude those with status 'Concluído' or 'falha'
+            const list = (localEntregas || []).filter(e => {
+                if (!e) return false;
+                try {
+                    const st = String(e.status || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+                    if (st === 'concluido' || st === 'falha') return false;
+                } catch (err) {
+                    // If normalization fails, do a safe lowercase compare as fallback
+                    const sf = String(e.status || '').toLowerCase();
+                    if (sf.includes('concl') || sf.includes('falha')) return false;
+                }
+                return true;
+            });
             return list.map(e => ({
                 id: e.id,
                 lat: Number(e.lat),
@@ -118,39 +130,77 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         (frota || []).forEach(m => {
             if (!m || !m.id) return;
 
-            // ✅ Força a exclusão se o status não for 'true' (string ou boolean)
             const isOnline = String(m.esta_online) === 'true';
 
-            if (isOnline && m.lat && m.lng) {
-                const latN = Number(m.lat);
-                const lngN = Number(m.lng);
+            const hasCoords = (m.lat != null && m.lng != null);
+            // treat string '0' or numeric 0 as invalid
+            const latN = hasCoords ? Number(m.lat) : null;
+            const lngN = hasCoords ? Number(m.lng) : null;
 
-                if (Number.isFinite(latN) && latN !== 0 && isValidSC(latN, lngN)) {
-                    // compute angle based on previous coords (if available) before updating cache
-                    try {
-                        const prev = lastCoordsRef.current.get(m.id);
-                        let ang = lastAnglesRef.current.get(m.id) || 0;
-                        if (prev && prev.lat != null && prev.lng != null && (prev.lat !== latN || prev.lng !== lngN)) {
-                            ang = calcularAngulo(prev.lat, prev.lng, latN, lngN);
-                            lastAnglesRef.current.set(m.id, ang);
-                        }
-                    } catch (e) { /* ignore */ }
-                    // Atualiza cache apenas de quem está online de fato
-                    const prev = lastCoordsRef.current.get(m.id);
-                    lastCoordsRef.current.set(m.id, { lat: latN, lng: lngN });
-                    // record DB update timestamp only when coords changed
-                    try {
-                        if (!prev || prev.lat !== latN || prev.lng !== lngN) {
-                            lastGpsUpdateRef.current.set(m.id, Date.now());
-                            // ensure there is a displayed position entry
-                            if (!lastDisplayedRef.current.get(m.id)) lastDisplayedRef.current.set(m.id, { lat: latN, lng: lngN });
-                        }
-                    } catch (e) { /* ignore */ }
-                    out.push({ id: m.id, lat: latN, lng: lngN, title: m.nome || 'Motorista', online: true });
+            // If online and coords present, validate and update cache
+            if (isOnline && hasCoords && Number.isFinite(latN) && Number.isFinite(lngN) && !(latN === 0 && lngN === 0)) {
+                // Ignore coords way outside expected bounds
+                if (!isValidSC(latN, lngN)) {
+                    // mark invalid time but keep last known for up to 30s
+                    if (!lastInvalidTimeRef.current.has(m.id)) lastInvalidTimeRef.current.set(m.id, Date.now());
+                    return;
                 }
+
+                // noise filter: ignore impossible jumps (e.g., >500km between prev and new)
+                const prevCoords = lastCoordsRef.current.get(m.id);
+                if (prevCoords && prevCoords.lat != null && prevCoords.lng != null) {
+                    try {
+                        const dist = distanceMeters({ lat: prevCoords.lat, lng: prevCoords.lng }, { lat: latN, lng: lngN });
+                        if (dist > 500000) {
+                            // ignore this noisy update, keep previous coords
+                            console.warn(`Ignored noisy jump for motorista ${m.id}: ${Math.round(dist)}m`);
+                            // mark invalid time but keep last known for up to 30s
+                            if (!lastInvalidTimeRef.current.has(m.id)) lastInvalidTimeRef.current.set(m.id, Date.now());
+                            return;
+                        }
+                    } catch (e) { /* ignore */ }
+                }
+
+                // compute angle based on previous coords (if available) before updating cache
+                try {
+                    const prevAngRef = lastCoordsRef.current.get(m.id);
+                    let ang = lastAnglesRef.current.get(m.id) || 0;
+                    if (prevAngRef && prevAngRef.lat != null && prevAngRef.lng != null && (prevAngRef.lat !== latN || prevAngRef.lng !== lngN)) {
+                        ang = calcularAngulo(prevAngRef.lat, prevAngRef.lng, latN, lngN);
+                        lastAnglesRef.current.set(m.id, ang);
+                    }
+                } catch (e) { /* ignore */ }
+
+                const prevCoords2 = lastCoordsRef.current.get(m.id);
+                lastCoordsRef.current.set(m.id, { lat: latN, lng: lngN });
+                // record DB update timestamp only when coords changed
+                try {
+                    if (!prevCoords2 || prevCoords2.lat !== latN || prevCoords2.lng !== lngN) {
+                        lastGpsUpdateRef.current.set(m.id, Date.now());
+                        if (!lastDisplayedRef.current.get(m.id)) lastDisplayedRef.current.set(m.id, { lat: latN, lng: lngN });
+                    }
+                } catch (e) { /* ignore */ }
+                // clear any invalid marker timestamp
+                if (lastInvalidTimeRef.current.has(m.id)) lastInvalidTimeRef.current.delete(m.id);
+                out.push({ id: m.id, lat: latN, lng: lngN, title: m.nome || 'Motorista', online: true });
             } else {
-                // Se deslogou ou ficou offline, garante que sumiu do cache
-                lastCoordsRef.current.delete(m.id);
+                // If coords are missing or driver offline, do NOT immediately delete last known coords.
+                const prevKnown = lastCoordsRef.current.get(m.id);
+                if (prevKnown) {
+                    const invalidSince = lastInvalidTimeRef.current.get(m.id) || Date.now();
+                    if (!lastInvalidTimeRef.current.has(m.id)) lastInvalidTimeRef.current.set(m.id, invalidSince);
+                    const age = Date.now() - invalidSince;
+                    if (age <= 30000) {
+                        // keep displaying last known for up to 30s
+                        out.push({ id: m.id, lat: prevKnown.lat, lng: prevKnown.lng, title: m.nome || 'Motorista', online: false });
+                    } else {
+                        // expired: remove cache entry
+                        lastCoordsRef.current.delete(m.id);
+                        lastAnglesRef.current.delete(m.id);
+                        lastDisplayedRef.current.delete(m.id);
+                        lastInvalidTimeRef.current.delete(m.id);
+                    }
+                }
             }
         });
         return out;
@@ -279,7 +329,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         const safeName = esc(nome);
         // usar caminho absoluto root para /moto.png (garante consistência de deploy)
         const motoSrc = '/moto.png';
-                const html = `
+        const html = `
     <div style="width:60px;height:80px;position:relative;display:block;pointer-events:auto;">
         <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);display:flex;align-items:flex-end;justify-content:center;">
             <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1; bottom: 6px;">
@@ -288,7 +338,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             <div style="position:absolute;top:-20px;background:rgba(0,0,0,0.8);color:white;padding:2px 8px;border-radius:10px;font-size:11px;white-space:nowrap;z-index:3;">${safeName}</div>
         </div>
     </div>`;
-                return L.divIcon({ html, className: 'moto-icon-limpo', iconSize: [60, 80], iconAnchor: [30, 80] });
+        return L.divIcon({ html, className: 'moto-icon-limpo', iconSize: [60, 80], iconAnchor: [30, 80] });
     }
 
     function getGestorIcon() {
@@ -550,7 +600,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                                 if (!coords || coords.length < 2) return null;
                                 // Ensure lat/lng pairs
                                 const latlngs = coords.map(c => Array.isArray(c) ? [Number(c[0]), Number(c[1])] : c);
-                                if (mapMode === 'dark') {
+                                // Determine theme: prefer explicit `darkMode` prop when provided,
+                                // otherwise fallback to internal `mapMode` (token-based).
+                                const isDark = (typeof darkMode === 'boolean') ? darkMode : (mapMode === 'dark');
+
+                                if (isDark) {
                                     return (
                                         <React.Fragment key={`route-${ri}`}>
                                             <Polyline positions={latlngs} pathOptions={{ color: '#ffffff', weight: 10, opacity: 0.12 }} />
@@ -558,6 +612,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                                         </React.Fragment>
                                     );
                                 }
+                                // Light mode: ensure polyline color is black per request
                                 return <Polyline key={`route-${ri}`} positions={latlngs} pathOptions={{ color: '#000000', weight: 4, opacity: 0.8 }} />;
                             });
                         } catch (e) { return null; }
@@ -572,6 +627,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                                 key={'v10-marker-' + m.id}
                                 position={[Number(disp.lat), Number(disp.lng)]}
                                 icon={getV10MotoIcon(true, lastAnglesRef.current.get(m.id) || 0, m.title)}
+                                zIndexOffset={2000}
                             />
                         );
                     })}
