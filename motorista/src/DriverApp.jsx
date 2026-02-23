@@ -202,7 +202,12 @@ export default function AppMotorista() {
         if (orFilter) {
             try {
                 // STRICT SEQUENTIAL: aguarda o update completar antes de signOut
-                const { data, error } = await supabase.from('motoristas').update({ esta_online: false }).or(orFilter).select();
+                // Zera coordenadas e timestamp de última localização para remover motorista do mapa imediatamente
+                const { data, error } = await supabase
+                    .from('motoristas')
+                    .update({ esta_online: false, latitude: null, longitude: null, ultima_localizacao: null })
+                    .or(orFilter)
+                    .select();
                 if (error) {
                     console.error('Erro ao avisar o banco (update retornou erro):', error);
                 }

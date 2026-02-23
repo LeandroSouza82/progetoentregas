@@ -2,6 +2,34 @@ import React, { useState } from 'react';
 import './Login.css';
 import { supabase } from '../supabaseClient';
 
+// Logout seguro: limpa coordenadas do motorista (se houver sessão) antes de efetuar signOut
+async function safeSignOutClearLocation() {
+    try {
+        let userId = null;
+        if (supabase && supabase.auth && typeof supabase.auth.getSession === 'function') {
+            try {
+                const sres = await supabase.auth.getSession();
+                userId = sres?.data?.session?.user?.id || null;
+            } catch (e) { userId = null; }
+        }
+
+        if (userId) {
+            const { data, error } = await supabase.from('motoristas').update({ latitude: null, longitude: null, lat: null, lng: null, ultima_atualizacao: new Date() }).eq('id', userId).select();
+            if (error) {
+                console.error('safeSignOutClearLocation: erro ao limpar localização por id', error);
+                return false; // Não prosseguir com signOut se o update falhar
+            }
+        }
+
+        // Se não houver userId, prosseguir com signOut normalmente
+        try { await supabase.auth.signOut(); } catch (e) { console.warn('safeSignOutClearLocation: signOut falhou', e); }
+        return true;
+    } catch (e) {
+        console.warn('safeSignOutClearLocation: falha inesperada', e);
+        return false;
+    }
+}
+
 const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
     const [fullName, setFullName] = useState('');
     const [email, setEmail] = useState('');
@@ -43,9 +71,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
                     try { localStorage.setItem('signup_email_prefill', email.trim()); } catch (e) { }
                     // Garantir que não haja sessão ativa após o cadastro (bloquear login automático)
                     try {
-                        if (supabase && supabase.auth && typeof supabase.auth.signOut === 'function') {
-                            await supabase.auth.signOut();
-                        }
+                        await safeSignOutClearLocation();
                     } catch (e) { console.warn('Falha ao deslogar automaticamente após cadastro (quota):', e); }
 
                     setLoading(false);
@@ -64,9 +90,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
             try { localStorage.setItem('signup_email_prefill', email.trim()); } catch (e) { }
             // Garantir que não haja sessão ativa após o cadastro (bloquear login automático)
             try {
-                if (supabase && supabase.auth && typeof supabase.auth.signOut === 'function') {
-                    await supabase.auth.signOut();
-                }
+                await safeSignOutClearLocation();
             } catch (e) { console.warn('Falha ao deslogar automaticamente após cadastro:', e); }
 
             setLoading(false);
@@ -91,9 +115,7 @@ const Cadastro = ({ onCadastroSuccess, onVoltarLogin }) => {
             if (verifyError) throw verifyError;
             // Verificação concluída. Garantir que o usuário NÃO seja mantido logado automaticamente.
             try {
-                if (supabase && supabase.auth && typeof supabase.auth.signOut === 'function') {
-                    await supabase.auth.signOut();
-                }
+                await safeSignOutClearLocation();
             } catch (e) { console.warn('Falha ao deslogar automaticamente após verificação OTP:', e); }
 
             setLoading(false);

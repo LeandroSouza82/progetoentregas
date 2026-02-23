@@ -348,8 +348,8 @@ function App() {
             } else {
                 const normalized = (motoristas || []).map(m => ({
                     ...m,
-                    lat: m.lat != null ? Number(String(m.lat).trim()) : m.lat,
-                    lng: m.lng != null ? Number(String(m.lng).trim()) : m.lng
+                    lat: (m.lat != null ? m.lat : (m.latitude != null ? m.latitude : null)) != null ? Number(String(m.lat != null ? m.lat : (m.latitude != null ? m.latitude : '')).trim()) : null,
+                    lng: (m.lng != null ? m.lng : (m.longitude != null ? m.longitude : null)) != null ? Number(String(m.lng != null ? m.lng : (m.longitude != null ? m.longitude : '')).trim()) : null
                 }));
 
                 const merged = (function (prev) {
@@ -367,8 +367,10 @@ function App() {
                     }
                 })(lastFrotaRef.current || []);
 
-                setFrota(merged);
-                lastFrotaRef.current = merged;
+                // Filtrar para exibir no Dashboard apenas motoristas com latitude disponível
+                const filtered = (merged || []).filter(m => m && m.lat != null);
+                setFrota(filtered);
+                lastFrotaRef.current = filtered;
                 if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
                 try { retryCountRef.current = 0; } catch (err) { }
             }
@@ -2275,6 +2277,26 @@ function App() {
                         <button type="button" onClick={async (e) => {
                             try { if (e && typeof e.preventDefault === 'function') e.preventDefault(); } catch (err) { }
                             try {
+                                // Attempt to clear motorista coordinates BEFORE signOut (if a user session exists)
+                                try {
+                                    let userId = null;
+                                    if (supabase && supabase.auth && typeof supabase.auth.getSession === 'function') {
+                                        try {
+                                            const sres = await supabase.auth.getSession();
+                                            userId = sres?.data?.session?.user?.id || null;
+                                        } catch (err) { userId = null; }
+                                    }
+                                    if (userId) {
+                                        const { data: updData, error: updErr } = await supabase.from('motoristas').update({ latitude: null, longitude: null, lat: null, lng: null, ultima_atualizacao: new Date() }).eq('id', userId).select();
+                                        if (updErr) {
+                                            console.error('Erro ao limpar localização do motorista antes do signOut', updErr);
+                                            return; // Não prosseguir com signOut se o update falhar para este user
+                                        }
+                                    }
+                                } catch (err) {
+                                    console.error('Falha ao tentar limpar localização antes do signOut', err);
+                                }
+
                                 // Sign out from Supabase
                                 try { await supabase.auth.signOut(); } catch (e) { console.error('signOut failed', e); }
 
