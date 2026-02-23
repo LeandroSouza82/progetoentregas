@@ -52,20 +52,40 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         // support payload.new (insert/update), payload.old (delete) and payload.record
                         const rec = payload.new || payload.record || payload.old || null;
                         if (!rec) return;
+
+                        // Normalize status and ignore concluded/failure deliveries
+                        let st = '';
+                        try { st = String(rec.status || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim(); } catch (err) { st = String(rec.status || '').toLowerCase(); }
+
+                        // If the incoming record is concluded or failed, remove it from local list
+                        if (st === 'concluido' || st === 'falha') {
+                            try {
+                                setLocalEntregas(prev => {
+                                    const idx = (prev || []).findIndex(p => p && p.id === rec.id);
+                                    if (idx === -1) return prev;
+                                    const cp = [...prev]; cp.splice(idx, 1); return cp;
+                                });
+                            } catch (e) { /* ignore */ }
+                            return;
+                        }
+
+                        // Otherwise insert or update the local list
                         setLocalEntregas(prev => {
-                            const i = prev.findIndex(p => p && p.id === rec.id);
-                            // if deleted (no new), remove from list when necessary
-                            if (payload.event === 'DELETE' || (payload.old && !payload.new)) {
-                                if (i === -1) return prev;
-                                const cp = [...prev]; cp.splice(i, 1); return cp;
-                            }
-                            if (i === -1) {
-                                // not found: append (new insert) or just return prev
-                                return [...prev, rec];
-                            }
-                            const copy = [...prev];
-                            copy[i] = { ...copy[i], ...rec };
-                            return copy;
+                            try {
+                                const i = (prev || []).findIndex(p => p && p.id === rec.id);
+                                // if deleted (no new), remove from list when necessary
+                                if (payload.event === 'DELETE' || (payload.old && !payload.new)) {
+                                    if (i === -1) return prev;
+                                    const cp = [...prev]; cp.splice(i, 1); return cp;
+                                }
+                                if (i === -1) {
+                                    // not found: append (new insert)
+                                    return [...(prev || []), rec];
+                                }
+                                const copy = [...prev];
+                                copy[i] = { ...copy[i], ...rec };
+                                return copy;
+                            } catch (e) { return prev || []; }
                         });
                     } catch (e) { /* ignore */ }
                 });
