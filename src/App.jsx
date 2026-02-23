@@ -1907,6 +1907,75 @@ function App() {
         return () => { try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
     }, [recalcRotaForMotorista]);
 
+    // Realtime: atualizar lista da Central de Despacho (entregas/pedidosPendentes)
+    useEffect(() => {
+        if (!HAS_SUPABASE_CREDENTIALS) return;
+
+        const handleListEvent = (payload) => {
+            try {
+                const rec = payload.new || payload.record || payload;
+                if (!rec || !rec.id) return;
+
+                const st = String(rec.status || '').toLowerCase();
+
+                // Always keep `entregas` (runtime set used for polylines, counts)
+                setEntregas(prev => {
+                    try {
+                        const exists = (prev || []).find(p => p && p.id === rec.id);
+                        let next;
+                        if (payload.event === 'DELETE') {
+                            next = (prev || []).filter(p => p && p.id !== rec.id);
+                        } else if (exists) {
+                            next = (prev || []).map(p => p && p.id === rec.id ? { ...p, ...rec } : p);
+                        } else {
+                            next = [...(prev || []), rec];
+                        }
+                        try { setTotalEntregas(next.length); } catch (e) { }
+                        return next;
+                    } catch (e) { return prev; }
+                });
+
+                // Maintain pedidosPendentes with simple filter: only pendente/em_rota and not arquivado/concluido/falha
+                if (payload.event === 'DELETE') {
+                    setPedidosPendentes(prev => (prev || []).filter(p => p && p.id !== rec.id));
+                    return;
+                }
+
+                if (st === 'arquivado' || st === 'concluido' || st === 'falha') {
+                    setPedidosPendentes(prev => (prev || []).filter(p => p && p.id !== rec.id));
+                    return;
+                }
+
+                if (st === 'pendente' || st === 'em_rota') {
+                    setPedidosPendentes(prev => {
+                        try {
+                            const exists = (prev || []).find(p => p && p.id === rec.id);
+                            let next;
+                            if (exists) next = (prev || []).map(p => p && p.id === rec.id ? { ...p, ...rec } : p);
+                            else next = [...(prev || []), rec];
+                            // keep ordering by ordem_logistica when available
+                            return next.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0));
+                        } catch (e) { return prev || []; }
+                    });
+                }
+            } catch (e) { console.warn('Realtime entregas handler error:', e); }
+        };
+
+        if (supabase && typeof supabase.channel === 'function') {
+            try {
+                const chan = supabase.channel('entregas-listener')
+                    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, handleListEvent)
+                    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, handleListEvent)
+                    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'entregas' }, handleListEvent)
+                    .subscribe();
+
+                return () => { try { supabase.removeChannel(chan); } catch (e) { chan.unsubscribe && chan.unsubscribe(); } };
+            } catch (e) { console.warn('Erro criando canal realtime para entregas:', e); }
+        }
+
+        return undefined;
+    }, []);
+
     // NOTE: v34 — removidos efeitos que resetavam `canSendRoute` automaticamente.
     // O botão permanece verde após persistência até envio manual pelo gestor.
 
