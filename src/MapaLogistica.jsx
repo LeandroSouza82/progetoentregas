@@ -161,15 +161,35 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     } catch (e) { /* ignore */ }
                 }
 
-                // compute angle based on previous coords (if available) before updating cache
+                // --- INÍCIO DA CORREÇÃO DE ROTAÇÃO ---
                 try {
-                    const prevAngRef = lastCoordsRef.current.get(m.id);
-                    let ang = lastAnglesRef.current.get(m.id) || 0;
-                    if (prevAngRef && prevAngRef.lat != null && prevAngRef.lng != null && (prevAngRef.lat !== latN || prevAngRef.lng !== lngN)) {
-                        ang = calcularAngulo(prevAngRef.lat, prevAngRef.lng, latN, lngN);
-                        lastAnglesRef.current.set(m.id, ang);
+                    const id = m.id;
+                    const prevCoords = lastCoordsRef.current.get(id);
+                    let currentAngle = lastAnglesRef.current.get(id) || 0;
+
+                    // 1. Prioridade para o Heading (bússola real) enviado pelo dispositivo
+                    if (m.heading !== undefined && m.heading !== null && m.heading !== -1) {
+                        currentAngle = Number(m.heading);
                     }
-                } catch (e) { /* ignore */ }
+                    // 2. Cálculo por vetor apenas se houver deslocamento significativo (> 5 metros)
+                    else if (prevCoords && prevCoords.lat != null && prevCoords.lng != null) {
+                        const dist = distanceMeters(
+                            { lat: prevCoords.lat, lng: prevCoords.lng },
+                            { lat: latN, lng: lngN }
+                        );
+
+                        // Bloqueia atualização de ângulo se a moto estiver parada ou com GPS oscilando
+                        if (dist > 5) {
+                            currentAngle = calcularAngulo(prevCoords.lat, prevCoords.lng, latN, lngN);
+                        }
+                    }
+
+                    // 3. Salva no cache de ângulos para persistência visual
+                    lastAnglesRef.current.set(id, currentAngle);
+                } catch (error) {
+                    console.error("Falha no cálculo de rotação do motorista:", error);
+                }
+                // --- FIM DA CORREÇÃO DE ROTAÇÃO ---
 
                 const prevCoords2 = lastCoordsRef.current.get(m.id);
                 lastCoordsRef.current.set(m.id, { lat: latN, lng: lngN });
