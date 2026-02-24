@@ -17,6 +17,23 @@ export default function App() {
 
     useEffect(() => { fetchEntregas(); }, []);
 
+    // Escuta em tempo real no COMPONENTE PAI (App.jsx)
+    useEffect(() => {
+        const channel = supabase.channel('global-entregas')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, (payload) => {
+                console.log('Nova entrega recebida no App:', payload.new);
+                setEntregas(prev => {
+                    const current = Array.isArray(prev) ? prev : [];
+                    const exists = current.some(e => e && e.id === payload.new.id);
+                    if (exists) return current;
+                    return [payload.new, ...current];
+                });
+            })
+            .subscribe();
+
+        return () => { try { supabase.removeChannel(channel); } catch (e) { try { channel.unsubscribe && channel.unsubscribe(); } catch (e2) { } } };
+    }, []);
+
     const calcularDistancia = (pA, pB) =>
         Math.sqrt(Math.pow(pB.lat - pA.lat, 2) + Math.pow(pB.lng - pA.lng, 2));
 

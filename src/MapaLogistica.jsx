@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersControl, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersControl, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import polyline from 'polyline';
 import { supabase } from './supabaseClient';
 import createCustomPinIcon from './CustomPin.jsx';
+// Import opcional do Mapbox React (aliased para evitar conflitos com react-leaflet)
+// Disponibiliza `MapboxMap`, `MapboxMarker` e `MapboxPopup` se você quiser usar Mapbox GL React
+import MapboxMap, { Marker as MapboxMarker, Popup as MapboxPopup } from 'react-map-gl';
 
 const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
 
@@ -17,7 +20,7 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, clearMap = false, darkMode = undefined }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, rotaCoordenadas = [], clearMap = false, darkMode = undefined }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -35,100 +38,111 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // map visual mode: 'dark' or 'light' — affects polyline styling
     const [mapMode, setMapMode] = useState(token && token.length > 0 ? 'dark' : 'light');
 
+    // --- MEMÓRIA DO PINO CLICADO ---
+    // removido: usamos popups por hover em vez de estado selecionado
+
     // Local copy of entregas so the map can react to realtime updates
-    const [localEntregas, setLocalEntregas] = useState(entregas || []);
-    useEffect(() => setLocalEntregas(entregas || []), [entregas]);
+    // 1. Mudança de Array para Objeto para travar o estado por ID
+    const [localEntregas, setLocalEntregas] = useState({});
 
     // control visual clearing of pins (does not delete from DB)
     const [showPins, setShowPins] = useState(true);
     useEffect(() => setShowPins(!clearMap), [clearMap]);
 
-    // subscribe to Supabase realtime updates for `entregas` to reflect status changes immediately
+    // subscribe to Supabase realtime updates for `entregas` using object-by-id state
+    useEffect(() => {
+        const channel = supabase
+            .channel('realtime-entregas-final')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
+                try {
+                    const { eventType, new: newRec, old: oldRec } = payload;
+                    const rec = newRec || oldRec;
+                    if (!rec) return;
+
+                    const status = String(rec.status || '').toLowerCase();
+                    const deveSair = status.includes('conclu') || status.includes('falha');
+
+                    setLocalEntregas(prev => {
+                        const copy = { ...(prev || {}) };
+                        if (eventType === 'DELETE' || deveSair) {
+                            delete copy[rec.id];
+                            return copy;
+                        }
+                        // Adiciona ou atualiza sem tocar nos outros IDs
+                        copy[rec.id] = rec;
+                        return copy;
+                    });
+                } catch (e) { /* ignore */ }
+            })
+            .subscribe();
+
+        return () => { try { supabase.removeChannel(channel); } catch (e) { try { channel.unsubscribe && channel.unsubscribe(); } catch (e2) { } } };
+    }, []);
+
+    // 2. Converter para Array para o resto do código não quebrar (mantemos localEntregas para realtime)
+    const entregasArray = useMemo(() => Object.values(localEntregas || {}), [localEntregas]);
+
+    // INTERVENÇÃO: sincroniza a prop `entregas` recebida do App com o estado local
     useEffect(() => {
         try {
-            const channel = supabase.channel('public:entregas')
-                .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
-                    try {
-                        // support payload.new (insert/update), payload.old (delete) and payload.record
-                        const rec = payload.new || payload.record || payload.old || null;
-                        if (!rec) return;
-
-                        // Normalize status and ignore concluded/failure deliveries
-                        let st = '';
-                        try { st = String(rec.status || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim(); } catch (err) { st = String(rec.status || '').toLowerCase(); }
-
-                        // If the incoming record is concluded or failed, remove it from local list
-                        if (st === 'concluido' || st === 'falha') {
-                            try {
-                                setLocalEntregas(prev => {
-                                    const idx = (prev || []).findIndex(p => p && p.id === rec.id);
-                                    if (idx === -1) return prev;
-                                    const cp = [...prev]; cp.splice(idx, 1); return cp;
-                                });
-                            } catch (e) { /* ignore */ }
-                            return;
-                        }
-
-                        // Otherwise insert or update the local list
-                        setLocalEntregas(prev => {
-                            try {
-                                const i = (prev || []).findIndex(p => p && p.id === rec.id);
-                                // if deleted (no new), remove from list when necessary
-                                if (payload.event === 'DELETE' || (payload.old && !payload.new)) {
-                                    if (i === -1) return prev;
-                                    const cp = [...prev]; cp.splice(i, 1); return cp;
-                                }
-                                if (i === -1) {
-                                    // not found: append (new insert)
-                                    return [...(prev || []), rec];
-                                }
-                                const copy = [...prev];
-                                copy[i] = { ...copy[i], ...rec };
-                                return copy;
-                            } catch (e) { return prev || []; }
-                        });
-                    } catch (e) { /* ignore */ }
-                });
-            // subscribe
-            channel.subscribe?.();
-            return () => {
-                try { channel.unsubscribe?.(); supabase.removeChannel?.(channel); } catch (e) { }
-            };
+            if (!entregas || !Array.isArray(entregas) || entregas.length === 0) return;
+            const novo = {};
+            entregas.forEach(e => { if (e && e.id != null) novo[e.id] = e; });
+            setLocalEntregas(prev => {
+                // Only replace if different to avoid unnecessary renders
+                try {
+                    const keysPrev = Object.keys(prev || {});
+                    const keysNew = Object.keys(novo || {});
+                    if (keysPrev.length === keysNew.length && keysNew.every(k => prev && prev[k] && prev[k].id === novo[k].id)) return prev;
+                } catch (e) { }
+                return novo;
+            });
         } catch (e) { /* ignore */ }
-    }, []);
+    }, [entregas]);
 
     // build marker lists
     // Memoize markers to avoid re-computation each render
-    // ❌ TRAVA FÍSICA: Filtrar coordenadas inválidas (0,0) ou nulas
+    // Use `entregas` prop as authoritative source for pins (App.jsx passes formatted list)
     const entregaMarkers = React.useMemo(() => {
         try {
-            // include only relevant entregas: exclude those with status 'Concluído' or 'falha'
-            const list = (localEntregas || []).filter(e => {
-                if (!e) return false;
-                try {
-                    const st = String(e.status || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
-                    if (st === 'concluido' || st === 'falha') return false;
-                } catch (err) {
-                    // If normalization fails, do a safe lowercase compare as fallback
-                    const sf = String(e.status || '').toLowerCase();
-                    if (sf.includes('concl') || sf.includes('falha')) return false;
-                }
-                return true;
+            const allowedTipos = new Set(['entrega', 'recolha', 'outros', 'outro']);
+
+            // Pegamos todos os dados brutos e filtramos apenas o que foi 'deletado/arquivado'
+            const list = (entregas || []).filter(e => {
+                const s = String(e.status || '').trim().toLowerCase();
+                // GARANTIA: Mantém visível Pendente, Em Rota, Concluído e Falha.
+                // Só remove se o gestor tiver apertado o botão que limpa (muda para arquivado)
+                return s !== 'arquivado';
             });
-            return list.map(e => ({
-                id: e.id,
-                lat: Number(e.lat),
-                lng: Number(e.lng),
-                endereco: e.endereco || e.address || '',
-                cliente: e.cliente,
-                tipo: e.tipo,
-                status: e.status,
-                obs: e.obs || e.observacoes || '',
-                ordem_logistica: e.ordem_logistica,
-                tipo_recebedor: e.tipo_recebedor
-            })).filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0));
-        } catch (e) { return []; }
-    }, [localEntregas]);
+
+            console.log("📍 [MEMO] Processando marcadores ativos:", list.length);
+
+            return list.map(e => {
+                const lat = parseFloat(e.lat);
+                const lng = parseFloat(e.lng);
+
+                // Validação rigorosa de coordenadas para não quebrar o mapa
+                if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
+
+                const tipoRaw = String(e.tipo || '').trim().toLowerCase();
+                const tipoFinal = allowedTipos.has(tipoRaw) ? tipoRaw : 'outros';
+
+                return {
+                    ...e, // Mantém todas as propriedades originais do banco
+                    id: e.id,
+                    lat,
+                    lng,
+                    endereco: e.endereco || e.address || '',
+                    status: String(e.status || 'pendente').toLowerCase(), // Normaliza status
+                    tipo: tipoFinal
+                };
+            }).filter(Boolean); // Remove os nulos (sem coordenadas)
+        } catch (err) {
+            console.error("❌ Erro no useMemo entregaMarkers:", err);
+            return [];
+        }
+        // IMPORTANTE: Removi o motoristaDaRota da dependência para os pinos não sumirem ao trocar de motorista
+    }, [entregas]);
 
     // Show any passed fleet items that have valid SC coords and are online & recent
     // Nota: atualização síncrona do cache será feita dentro do useMemo de frotaMarkers
@@ -200,7 +214,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
                         // Bloqueia atualização de ângulo se a moto estiver parada ou com GPS oscilando
                         if (dist > 5) {
-                            currentAngle = calcularAngulo(prevCoords.lat, prevCoords.lng, latN, lngN);
+                            currentAngle = calcularAngulo(prevCoords, { lat: latN, lng: lngN });
                         }
                     }
 
@@ -354,14 +368,38 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         }
     };
 
+    // Local getMarkerIcon (case-insensitive) — same rules used in App.jsx
+    function getMarkerIcon(status, tipo) {
+        try {
+            const statusNormalizado = String(status || '').trim().toLowerCase();
+            const tipoNormalizado = String(tipo || '').trim().toLowerCase();
+
+            if (statusNormalizado === 'entregue') return '#10b981'; // verde
+            if (statusNormalizado === 'falha') return '#ef4444'; // vermelho
+
+            if (tipoNormalizado === 'recolha') return '#fb923c'; // laranja
+            if (tipoNormalizado === 'entrega') return '#2563eb'; // azul
+            if (tipoNormalizado === 'outros' || tipoNormalizado === 'outro') return '#a78bfa'; // lilás
+
+            return '#2563eb';
+        } catch (e) {
+            return '#2563eb';
+        }
+    }
+
     // Função para calcular o ângulo (bearing) entre dois pontos
-    const calcularAngulo = (lat1, lon1, lat2, lon2) => {
-        const dLon = (lon2 - lon1) * (Math.PI / 180);
-        const y = Math.sin(dLon) * Math.cos(lat2 * (Math.PI / 180));
-        const x = Math.cos(lat1 * (Math.PI / 180)) * Math.sin(lat2 * (Math.PI / 180)) -
-            Math.sin(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.cos(dLon);
-        return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
-    };
+    // Padrão seguro: aceitar objetos { lat, lng } e garantir retorno em [0,360)
+    function calcularAngulo(p1, p2) {
+        try {
+            if (!p1 || !p2) return 0;
+            const dLon = (p2.lng - p1.lng) * Math.PI / 180;
+            const y = Math.sin(dLon) * Math.cos(p2.lat * Math.PI / 180);
+            const x = Math.cos(p1.lat * Math.PI / 180) * Math.sin(p2.lat * Math.PI / 180) -
+                Math.sin(p1.lat * Math.PI / 180) * Math.cos(p2.lat * Math.PI / 180) * Math.cos(dLon);
+            let brng = Math.atan2(y, x) * 180 / Math.PI;
+            return (brng + 360) % 360;
+        } catch (e) { return 0; }
+    }
 
     // Gera o ícone da moto limpo: usa estrutura específica com aura, imagem e nome do motorista
     function getV10MotoIcon(online, angulo = 0, nome = '') {
@@ -372,10 +410,13 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         const html = `
     <div style="width:60px;height:80px;position:relative;display:block;pointer-events:auto;">
         <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);display:flex;align-items:flex-end;justify-content:center;">
-            <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1; bottom: 6px;">
+            <div style="position: absolute; width: 45px; height: 45px; background: rgba(255, 0, 0, 0.4); border-radius: 50%; filter: blur(4px); z-index: 1; bottom: 6px;"></div>
+
+            <!-- Container rotacionável: aplica transform + transition aqui para suavizar a rotação -->
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:2;transform:rotate(${angulo}deg);transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);">
+                <img src="${motoSrc}" style="width:50px;height:50px;display:block;" />
+                <div style="margin-top:4px;background:rgba(0,0,0,0.8);color:white;padding:2px 8px;border-radius:10px;font-size:11px;white-space:nowrap;">${safeName}</div>
             </div>
-            <img src="${motoSrc}" style="width:50px;height:50px;transform:rotate(${angulo}deg);z-index:2;" />
-            <div style="position:absolute;top:-20px;background:rgba(0,0,0,0.8);color:white;padding:2px 8px;border-radius:10px;font-size:11px;white-space:nowrap;z-index:3;">${safeName}</div>
         </div>
     </div>`;
         return L.divIcon({ html, className: 'moto-icon-limpo', iconSize: [60, 80], iconAnchor: [30, 80] });
@@ -507,6 +548,48 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         return null;
     }
 
+    function AutoFitBounds({ gestorPos, entregas }) {
+        const map = useMap();
+
+        // Usamos o window.MAP_JA_FOCOU para que, mesmo que o componente recarregue,
+        // a memória do foco persista fora do ciclo de vida do React.
+        useEffect(() => {
+            if (!map || window.MAP_JA_FOCOU) return;
+
+            const points = [];
+            const gLat = Array.isArray(gestorPos) ? gestorPos[0] : gestorPos?.lat;
+            const gLng = Array.isArray(gestorPos) ? gestorPos[1] : gestorPos?.lng;
+
+            if (Number.isFinite(parseFloat(gLat)) && Number.isFinite(parseFloat(gLng))) {
+                points.push([parseFloat(gLat), parseFloat(gLng)]);
+            }
+
+            if (Array.isArray(entregas) && entregas.length > 0) {
+                entregas.forEach(p => {
+                    const lat = parseFloat(p.lat);
+                    const lng = parseFloat(p.lng);
+                    if (Number.isFinite(lat) && Number.isFinite(lng)) points.push([lat, lng]);
+                });
+            }
+
+            // Só faz o zoom se tivermos pontos E se as entregas já tiverem carregado do banco
+            if (points.length > 1) {
+                try {
+                    if (typeof map.flyToBounds === 'function') {
+                        map.flyToBounds(points, { padding: [80, 80], maxZoom: 15 });
+                    } else {
+                        map.fitBounds(points, { padding: [80, 80], maxZoom: 15 });
+                    }
+                    window.MAP_JA_FOCOU = true; // Trava global: o mapa não mexe mais sozinho até você dar F5
+                } catch (err) {
+                    console.error('Erro ao ajustar bordas:', err);
+                }
+            }
+        }, [map, gestorPos, entregas]);
+
+        return null;
+    }
+
     // Listen for LayersControl base layer change to toggle mapMode
     useEffect(() => {
         try {
@@ -539,158 +622,29 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
     }, []);
 
-    const mapInner = useMemo(() => {
+    const processedRuntimePolylines = useMemo(() => {
         try {
-            const mapboxUrl = token && token.length > 0
-                ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
-                : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
-            const initialCenter = [computedCenter.lat, computedCenter.lng];
+            if (!runtimePolylines || (typeof runtimePolylines === 'object' && Object.keys(runtimePolylines).length === 0)) return [];
+            const items = Array.isArray(runtimePolylines) ? runtimePolylines : (typeof runtimePolylines === 'object' && runtimePolylines !== null ? Object.values(runtimePolylines) : [runtimePolylines]);
+            const out = items.map(r => {
+                try {
+                    const coords = decodePolyline(r) || [];
+                    const latlngs = (coords || []).map(c => Array.isArray(c) ? [Number(c[0]), Number(c[1])] : c).filter(p => p && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+                    return (latlngs && latlngs.length >= 2) ? latlngs : null;
+                } catch (e) { return null; }
+            }).filter(Boolean);
+            return out;
+        } catch (e) { return []; }
+    }, [runtimePolylines]);
 
-            return (
-                <MapContainer center={initialCenter} zoom={12} style={mapStyle} whenCreated={handleLoad}>
-                    <Geolocate />
-                    {token ? (
-                        <LayersControl position="topright">
-                            <LayersControl.BaseLayer name="Modo Noturno" checked>
-                                <TileLayer
-                                    url={`https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`}
-                                    attribution={'© Mapbox'}
-                                    tileSize={512}
-                                    zoomOffset={-1}
-                                    maxZoom={20}
-                                />
-                            </LayersControl.BaseLayer>
-                            <LayersControl.BaseLayer name="Modo Rua">
-                                <TileLayer
-                                    url={`https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/tiles/{z}/{x}/{y}?access_token=${token}`}
-                                    attribution={'© Mapbox'}
-                                    tileSize={512}
-                                    zoomOffset={-1}
-                                    maxZoom={20}
-                                    detectRetina={true}
-                                    opacity={1}
-                                />
-                            </LayersControl.BaseLayer>
-                        </LayersControl>
-                    ) : (
-                        <TileLayer url={mapboxUrl} attribution={'© OpenStreetMap contributors'} tileSize={256} zoomOffset={0} />
-                    )}
+    // removed processedRotaCoordenadas to avoid noisy logs and fixed test data being rendered
 
-                    {/* Delivery markers: show pendente and em_rota */}
-                    {showPins && entregaMarkers.map((p, idx) => {
-                        const tipo = normalizeText(p.tipo || '');
-                        const status = normalizeText(p.status || '');
-                        // V138: prioritize status -> delivered/finalized (green), failure (red)
-                        // otherwise color by tipo (entrega=blue, recolha=orange). Default to lilac only if unknown
-                        let color = '#a855f7'; // default lilás (Outros)
-                        if (status.includes('entreg') || status.includes('conclu')) {
-                            color = '#22c55e';
-                        } else if (status.includes('falha')) {
-                            color = '#ef4444';
-                        } else if (tipo.includes('entrega')) {
-                            color = '#2563eb';
-                        } else if (tipo.includes('recolha')) {
-                            color = '#f97316';
-                        } else {
-                            color = '#a855f7';
-                        }
-                        const numero = (p.ordem_logistica != null && p.ordem_logistica !== '') ? p.ordem_logistica : (idx + 1);
-                        const row = {
-                            ...p,
-                            status: p.status != null ? p.status : '',
-                            motivo_nao_entrega: p.motivo_nao_entrega || p.motivo_falha || p.motivo || '',
-                            recebedor: p.recebedor || '',
-                            horario_conclusao: p.horario_conclusao || '',
-                            data_conclusao: p.data_conclusao || ''
-                        };
+    /* INTERVENÇÃO: Mapa Estabilizado (Removido useMemo que destruía o MapContainer) */
 
-                        // determine tipo label based on pin color (unchanged colors)
-                        let tipoLabel = 'Entrega';
-                        if (color === '#f97316') tipoLabel = 'Recolha';
-                        else if (color === '#a855f7') tipoLabel = 'Outros';
-
-                        // status string shown raw (fallback to placeholder)
-                        const statusText = row.status && String(row.status).trim() !== '' ? row.status : 'Desconhecido';
-                        const stNorm = normalizeText(row.status);
-
-                        // motivo fallback
-                        const motivoText = row.motivo_nao_entrega || row.tipo_recebedor || 'Motivo não informado';
-
-                        return (
-                            <Marker key={`entrega-${p.id || idx}`} position={[Number(p.lat), Number(p.lng)]} icon={createCustomPinIcon(color, numero, p.status)}>
-                                <Popup className="delivery-popup">
-                                    <div style={{ fontWeight: 800 }}>{row.cliente || 'Sem cliente'}</div>
-                                    <div style={{ marginTop: 6 }}><strong>Endereço:</strong> {row.endereco || ''}</div>
-                                    <div><strong>Tipo:</strong> {tipoLabel}</div>
-                                    <p><strong>Status:</strong> {statusText}</p>
-                                    <p><strong>Horário:</strong> {row.horario_conclusao ? new Date(row.horario_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : (row.data_conclusao ? new Date(row.data_conclusao).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : '---')}</p>
-                                    {stNorm.includes('falha') && <p><strong>Motivo:</strong> {motivoText}</p>}
-                                </Popup>
-                            </Marker>
-                        );
-                    })}
-
-                    {/* Route polylines: responsive to map mode (dark -> white with glow, light -> black) */}
-                    {(() => {
-                        try {
-                            if (!runtimePolylines) return null;
-                            const items = Array.isArray(runtimePolylines) ? runtimePolylines : (typeof runtimePolylines === 'object' && runtimePolylines !== null ? Object.values(runtimePolylines) : [runtimePolylines]);
-                            return items.map((r, ri) => {
-                                const coords = decodePolyline(r) || [];
-                                if (!coords || coords.length < 2) return null;
-                                // Ensure lat/lng pairs
-                                const latlngs = coords.map(c => Array.isArray(c) ? [Number(c[0]), Number(c[1])] : c);
-                                // Determine theme: prefer explicit `darkMode` prop when provided,
-                                // otherwise fallback to internal `mapMode` (token-based).
-                                const isDark = (typeof darkMode === 'boolean') ? darkMode : (mapMode === 'dark');
-
-                                if (isDark) {
-                                    return (
-                                        <React.Fragment key={`route-${ri}`}>
-                                            <Polyline positions={latlngs} pathOptions={{ color: '#ffffff', weight: 10, opacity: 0.12 }} />
-                                            <Polyline positions={latlngs} pathOptions={{ color: '#ffffff', weight: 4, opacity: 0.8 }} />
-                                        </React.Fragment>
-                                    );
-                                }
-                                // Light mode: ensure polyline color is black per request
-                                return <Polyline key={`route-${ri}`} positions={latlngs} pathOptions={{ color: '#000000', weight: 4, opacity: 0.8 }} />;
-                            });
-                        } catch (e) { return null; }
-                    })()}
-
-                    {/* Frota (drivers) markers */}
-                    {frotaMarkers.map(m => {
-                        const target = lastCoordsRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
-                        const disp = lastDisplayedRef.current.get(m.id) || target;
-                        return (
-                            <Marker
-                                key={'v10-marker-' + m.id}
-                                position={[Number(disp.lat), Number(disp.lng)]}
-                                icon={getV10MotoIcon(true, lastAnglesRef.current.get(m.id) || 0, m.title)}
-                                zIndexOffset={2000}
-                            />
-                        );
-                    })}
-
-                    {/* Gestor (you) marker */}
-                    {gestorPos && (
-                        <Marker position={gestorPos} icon={getGestorIcon()}>
-                            <Popup>Você está aqui</Popup>
-                        </Marker>
-                    )}
-                    {/* Focus marker disabled for deliveries — kept only for manual testing */}
-                    {focusMarker && (
-                        <Marker position={[focusMarker.lat, focusMarker.lng]} icon={createPinIcon('search', 'selected', null)}>
-                            <Popup>Destino selecionado</Popup>
-                        </Marker>
-                    )}
-                </MapContainer>
-            );
-        } catch (e) {
-            console.warn('Leaflet temporariamente indisponível (map render)', e);
-            return <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>Carregando Mapa...</div>;
-        }
-    }, [mapStyle, computedCenter, frotaMarkers, localEntregas, showPins, mapMode, runtimePolylines]);
+    // 1. Defina a URL do Tile fora para evitar recálculos
+    const mapboxUrl = token && token.length > 0
+        ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
+        : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
 
     const handleCenterClick = () => {
         try {
@@ -700,7 +654,6 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 map.flyTo(gestorPos, 15);
                 hasAutoCenteredRef.current = true;
             } else {
-                // try to re-locate and center
                 try { map.locate({ setView: true, maxZoom: 15 }); } catch (e) { }
             }
         } catch (e) { /* ignore */ }
@@ -708,9 +661,118 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     return (
         <div style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
-            {mapInner}
-            <button onClick={handleCenterClick} title="Minha localização" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1500, background: '#ffffffcc', border: 'none', padding: 8, borderRadius: 8, cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a4 4 0 100 8 4 4 0 000-8z" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M17.7 6.3l1.4-1.4M4.9 19.1l1.4-1.4" stroke="#0f172a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            <MapContainer
+                center={[-27.6, -48.6]}
+                zoom={13}
+                scrollWheelZoom={true}
+                dragging={true}
+                trackResize={true}
+                zoomAnimation={true}
+                fadeAnimation={true}
+                markerZoomAnimation={true}
+                style={{ width: '100%', height: '100%' }}
+                whenReady={(mapInstance) => { mapRef.current = mapInstance.target; }}
+            >
+                <Geolocate />
+
+                {/* Ajusta automaticamente os bounds quando entregas ou gestor mudam */}
+                <AutoFitBounds gestorPos={gestorPos} entregas={entregaMarkers} />
+
+                <TileLayer
+                    url={mapboxUrl}
+                    attribution={'© Mapbox © OSM'}
+                    tileSize={token ? 512 : 256}
+                    zoomOffset={token ? -1 : 0}
+                />
+
+                {/* Marcadores de Entregas (hover -> popup) */}
+                {showPins && entregaMarkers.map((p, idx) => (
+                    <Marker
+                        key={`entrega-${p.id}`}
+                        position={[parseFloat(p.lat), parseFloat(p.lng)]}
+                        icon={createCustomPinIcon(
+                            getMarkerIcon(p.status, p.tipo),
+                            idx + 1,
+                            p.status
+                        )}
+                        eventHandlers={{
+                            mouseover: (e) => e.target.openPopup(),
+                            mouseout: (e) => e.target.closePopup()
+                        }}
+                    >
+                        <Popup
+                            className="delivery-popup custom-leaflet-popup"
+                            closeButton={false}
+                            autoPan={false}
+                        >
+                            <div className="flex flex-col min-w-[220px] max-w-[280px] p-1 font-sans text-gray-800">
+
+                                <div className="border-b border-gray-200 pb-2 mb-2">
+                                    <h3 className="text-sm font-bold truncate" title={p.cliente}>
+                                        {p.cliente || 'Cliente não identificado'}
+                                    </h3>
+                                    <p className="text-[10px] text-gray-500 font-mono">
+                                        Pedido #{(p.id && String(p.id).substring(0, 8)) || p.id}
+                                    </p>
+                                </div>
+                                <div className="mb-3">
+                                    <p className="text-xs leading-relaxed text-gray-600">
+                                        <span className="font-semibold text-gray-700">📍 Local:</span> {p.endereco}
+                                    </p>
+                                </div>
+                                <div className="flex items-center justify-between mt-auto">
+                                    <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Status Operacional</span>
+                                    <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded text-white shadow-sm
+                                    ${p.status === 'pendente' ? 'bg-gray-400' : ''}
+                                    ${p.status === 'em_rota' ? 'bg-blue-500' : ''}
+                                    ${(p.status === 'concluido' || p.status === 'entregue') ? 'bg-green-500' : ''}
+                                    ${p.status === 'falha' ? 'bg-red-500' : ''}
+                                `}>
+                                        {(p.status || '').replace('_', ' ')}
+                                    </span>
+                                </div>
+                            </div>
+                        </Popup>
+                    </Marker>
+                ))}
+
+                {/* popup condicional removido: usamos Hover Popups dentro de cada Marker */}
+
+                {/* Marcadores da Frota (Motos) */}
+                {frotaMarkers.map(m => {
+                    // Busca a posição atual (suavizada pelo seu ref de display)
+                    const disp = lastDisplayedRef.current.get(m.id) || { lat: m.lat, lng: m.lng };
+
+                    // Pega o ângulo atual guardado
+                    let currentAngle = lastAnglesRef.current.get(m.id) || 0;
+
+                    // Se a moto se moveu, o sistema deve atualizar o ângulo baseado no trajeto
+                    // Isso evita que a moto "teleporte" de direção
+                    return (
+                        <Marker
+                            key={'v10-marker-' + m.id}
+                            position={[parseFloat(disp.lat), parseFloat(disp.lng)]}
+                            icon={getV10MotoIcon(true, (m.heading || 0), (m.nome || m.title))}
+                            zIndexOffset={2000}
+                            className="moto-smooth-move"
+                        />
+                    );
+                })}
+
+                {/* Sua posição (Gestor) */}
+                {gestorPos && (
+                    <Marker position={[parseFloat(gestorPos[0]), parseFloat(gestorPos[1])]} icon={getGestorIcon()}>
+                        <Popup>Você está aqui</Popup>
+                    </Marker>
+                )}
+            </MapContainer>
+
+            {/* Botão de Centralizar */}
+            <button
+                onClick={handleCenterClick}
+                style={{ position: 'absolute', top: 12, right: 12, zIndex: 1500, background: '#fff', border: 'none', padding: 8, borderRadius: 8, cursor: 'pointer', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}
+            >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0f172a" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M12 2v2m0 16v2M4 12H2m20 0h-2" /></svg>
             </button>
         </div>
     );

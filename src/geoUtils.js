@@ -707,6 +707,156 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
     }
 }
 
+// Busca simplificada e robusta conforme solicitado pelo time — utilidade geral
+export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
+    try {
+        if (!enderecoBruto || !String(enderecoBruto).trim()) return null;
+
+        // 1. Limpeza: Remove complementos, mas preserva números de endereço
+        let query = String(enderecoBruto)
+            .replace(/\b(casa|fundos|apto|apartamento|bloco|ao lado de|n°|num|numero)\b/gi, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+
+        // 2. Inteligência de Localidade: Evita duplicar a cidade
+        const defaultCity = 'São José, SC, Brasil';
+        if (!query.toLowerCase().includes('são josé') && !query.toLowerCase().includes('sao jose')) {
+            query = `${query}, ${defaultCity}`;
+        }
+
+        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
+        if (!MAPBOX_TOKEN) {
+            console.warn('buscarCoordenadasMelhoradas: VITE_MAPBOX_TOKEN não está definido');
+            return null;
+        }
+
+        // 3. Parâmetros de Alta Precisão
+        const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json`);
+        url.searchParams.append('access_token', MAPBOX_TOKEN);
+        url.searchParams.append('proximity', '-48.61,-27.59'); // Foco na sua região
+        url.searchParams.append('country', 'br');
+        url.searchParams.append('types', 'address,poi');
+        url.searchParams.append('language', 'pt');
+        url.searchParams.append('autocomplete', 'true'); // Ajuda com erros de digitação
+        url.searchParams.append('fuzzyMatch', 'true');   // CORRIGE: "Aveida" -> "Avenida"
+        url.searchParams.append('limit', '1');
+
+        const resp = await fetch(url.toString());
+        if (!resp || !resp.ok) return null;
+        const data = await resp.json();
+
+        if (data && data.features && data.features.length > 0) {
+            const feat = data.features[0];
+            const [lng, lat] = feat.center || [];
+            const precisao = typeof feat.relevance === 'number' ? feat.relevance : (feat.properties && feat.properties.accuracy) || 0;
+
+            if (precisao < 0.8) {
+                console.warn('⚠️ Endereço com baixa precisão:', query, 'precisão:', precisao);
+            }
+
+            return {
+                lat,
+                lng,
+                precisao,
+                place_name: feat.place_name,
+                context: feat.context || null
+            };
+        }
+
+        return null;
+    } catch (error) {
+        console.error('Erro na geocodificação buscarCoordenadasMelhoradas:', error);
+        return null;
+    }
+};
+
+/**
+ * Wrapper que tenta `geocodeMapbox` primeiro e cai para `buscarCoordenadasMelhoradas` como fallback.
+ * @param {string} endereco - Endereço bruto
+ * @param {object} opts - Opcional: { bounds, proximity }
+ * @returns {Promise<object|null>} Objeto unificado: { lat, lng, display_name, precisao, context }
+ */
+export async function buscarCoordenadasComFallback(endereco, opts = {}) {
+    try {
+        if (!endereco || !String(endereco).trim()) return null;
+
+        // 1) Primeiro tentar o fluxo completo e agressivo do geocodeMapbox (ele já aplica heurísticas)
+        try {
+            const gm = await geocodeMapbox(endereco, opts.bounds || null, opts.proximity || null);
+            if (gm && (gm.lat != null && gm.lng != null)) {
+                // Normalizar retorno para incluir 'precisao' e 'display_name' quando possível
+                return {
+                    lat: gm.lat,
+                    lng: gm.lng,
+                    display_name: gm.display_name || gm.place_name || null,
+                    precisao: gm.precisao || gm.precision || null,
+                    context: gm.context || null
+                };
+            }
+        } catch (e) {
+            console.warn('buscarCoordenadasComFallback: geocodeMapbox falhou, tentando fallback otimizado', e);
+        }
+
+        // 2) Fallback para a versão otimizada e tolerante
+        try {
+            const fb = await buscarCoordenadasMelhoradas(endereco);
+            if (fb && (fb.lat != null && fb.lng != null)) {
+                return {
+                    lat: fb.lat,
+                    lng: fb.lng,
+                    display_name: fb.place_name || null,
+                    precisao: fb.precisao || null,
+                    context: fb.context || null
+                };
+            }
+        } catch (e) {
+            console.warn('buscarCoordenadasComFallback: buscarCoordenadasMelhoradas falhou', e);
+        }
+
+        return null;
+    } catch (err) {
+        console.error('Erro em buscarCoordenadasComFallback:', err);
+        return null;
+    }
+}
+
+// Wrapper consolidado para uso no App.jsx: tenta a versão estrita e cai para a versão melhorada
+export const obterCoordenadasSeguras = async (endereco) => {
+    try {
+        if (!endereco || !String(endereco).trim()) return null;
+
+        // Tentativa 1: Função original/estrita
+        let resultado = null;
+        try {
+            resultado = await geocodeMapbox(endereco);
+        } catch (e) {
+            console.warn('obterCoordenadasSeguras: geocodeMapbox lançou erro', e);
+            resultado = null;
+        }
+
+        // Se falhou ou a precisão for ruim (ex: menor que 0.8), aciona a "equipe de resgate"
+        const precisao = resultado && (resultado.precisao || resultado.precision || resultado.relevance || null);
+        const precisaFallback = !resultado || !(resultado.lat != null && resultado.lng != null) || (typeof precisao === 'number' && precisao < 0.8);
+
+        if (precisaFallback) {
+            console.log(`🔄 [GEO] Busca exata falhou ou imprecisa para "${endereco}". Acionando busca melhorada (Fuzzy)...`);
+            try {
+                const resultadoMelhorado = await buscarCoordenadasMelhoradas(endereco);
+                if (resultadoMelhorado && resultadoMelhorado.lat != null && resultadoMelhorado.lng != null) {
+                    resultado = resultadoMelhorado;
+                }
+            } catch (e) {
+                console.warn('obterCoordenadasSeguras: buscarCoordenadasMelhoradas lançou erro', e);
+            }
+        }
+
+        return resultado;
+    } catch (error) {
+        console.error('❌ Erro no wrapper de coordenadas:', error);
+        return null;
+    }
+};
+
 /**
  * Mapbox Search Box / Autosuggest API - Retorna sugestões de endereços conforme o usuário digita
  * @param {string} query - Texto digitado pelo usuário (mínimo 3 caracteres)
@@ -1122,43 +1272,40 @@ export async function searchNominatim(query, bounds = null) {
  * @param {object} options - { includeReturnTo?: {lat,lng} }
  * @returns {Promise<{ coordsLatLng: Array, distanceMeters: number, durationSec: number, geometry: object }|null>}
  */
-export async function getRouteGeometry(origin, orderedPoints = [], options = {}) {
+// Versão otimizada conforme solicitado: aceita `heading` e usa `driving-traffic`.
+export const getRouteGeometry = async (origin, destination, heading = null) => {
+    const MAPBOX_TOKEN = process.env.VITE_MAPBOX_TOKEN;
+    if (!MAPBOX_TOKEN) return null;
+    if (!origin || !destination) return null;
+
+    // Coordenadas no formato lng,lat
+    const coords = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
+
+    // Bearings: primeiro valor é o ângulo da moto, segundo valor é margem de erro
+    const bearingsParam = heading !== null ? `&bearings=${Math.round(heading)},45;` : '';
+
+    // Usar driving-traffic para tempos mais realistas
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${coords}?alternatives=false&geometries=geojson&overview=full${bearingsParam}&access_token=${MAPBOX_TOKEN}`;
+
     try {
-        const MAPBOX_TOKEN = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_MAPBOX_TOKEN) ? import.meta.env.VITE_MAPBOX_TOKEN : null;
-        if (!MAPBOX_TOKEN) return null;
-        if (!origin || !Array.isArray(orderedPoints) || orderedPoints.length === 0) return null;
+        const response = await fetch(url);
+        if (!response || !response.ok) return null;
+        const data = await response.json();
 
-        // Build coordinate string: origin -> waypoints -> optional return
-        const coordsArr = [];
-        coordsArr.push(`${Number(origin.lng)},${Number(origin.lat)}`);
-        for (const p of orderedPoints) {
-            if (!p || p.lat == null || p.lng == null) continue;
-            coordsArr.push(`${Number(p.lng)},${Number(p.lat)}`);
-        }
-        if (options && options.includeReturnTo && options.includeReturnTo.lat != null && options.includeReturnTo.lng != null) {
-            coordsArr.push(`${Number(options.includeReturnTo.lng)},${Number(options.includeReturnTo.lat)}`);
-        }
+        if (!data.routes || data.routes.length === 0) return null;
 
-        const coordsStr = coordsArr.join(';');
-        const base = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordsStr}`;
-        const params = `?geometries=geojson&overview=full&annotations=distance,duration&access_token=${MAPBOX_TOKEN}`;
-        const url = base + params;
-        const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
-        if (!resp || !resp.ok) return null;
-        const jd = await resp.json();
-        if (!jd || !jd.routes || jd.routes.length === 0) return null;
-        const route = jd.routes[0];
-        const geometry = route.geometry || null; // geojson LineString
-        const distanceMeters = typeof route.distance === 'number' ? route.distance : null;
-        const durationSec = typeof route.duration === 'number' ? route.duration : null;
-        // geometry.coordinates are [lng,lat], convert to [lat,lng]
-        const coordsLatLng = (geometry && Array.isArray(geometry.coordinates)) ? geometry.coordinates.map(c => [Number(c[1]), Number(c[0])]) : [];
-        return { coordsLatLng, distanceMeters, durationSec, geometry };
-    } catch (e) {
-        console.error('getRouteGeometry failed:', e);
+        const route = data.routes[0];
+        return {
+            coordsLatLng: (route.geometry && Array.isArray(route.geometry.coordinates)) ? route.geometry.coordinates.map(c => [c[1], c[0]]) : [],
+            distanceMeters: route.distance,
+            durationSec: route.duration,
+            geometry: route.geometry
+        };
+    } catch (error) {
+        console.error('Erro na rota Mapbox:', error);
         return null;
     }
-}
+};
 
 /**
  * Busca uma rota otimizada usando OSRM (Open Source Routing Machine)
