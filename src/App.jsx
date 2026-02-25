@@ -39,6 +39,65 @@ const darkTheme = {
     shadow: '0 6px 18px rgba(0,0,0,0.6)'
 };
 
+// Função utilitária: gera e baixa CSV compatível com Excel BR (ponto-e-vírgula + BOM)
+export const baixarRelatorioCSV = (entregas) => {
+    const cabecalhos = [
+        "ID da Ordem",
+        "Cliente",
+        "Endereço Completo",
+        "Tipo de Serviço",
+        "Status",
+        "Data",
+        "Horário",
+        "Recebedor",
+        "Motivo (Se não entregue)",
+        "Observações"
+    ];
+
+    const linhas = (Array.isArray(entregas) ? entregas : []).map(entrega => {
+        let dataFormatada = "";
+        let horarioFormatado = "";
+        const dataBruta = entrega.data_entrega || entrega.created_at;
+        if (dataBruta) {
+            const dataObj = new Date(dataBruta);
+            if (!isNaN(dataObj.getTime())) {
+                dataFormatada = dataObj.toLocaleDateString('pt-BR');
+                horarioFormatado = dataObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            }
+        }
+
+        const dadosLinha = [
+            entrega.id || "",
+            entrega.cliente || "",
+            entrega.endereco || "",
+            entrega.tipo || "",
+            entrega.status || "",
+            dataFormatada,
+            horarioFormatado,
+            entrega.recebedor || "",
+            entrega.motivo_nao_entrega || "",
+            entrega.observacoes || ""
+        ];
+
+        return dadosLinha.map(campo => {
+            const textoLimpo = String(campo == null ? '' : campo).replace(/"/g, '""').replace(/\n/g, ' ');
+            return `"${textoLimpo}"`;
+        }).join(';');
+    });
+
+    const csvContent = cabecalhos.join(';') + "\n" + linhas.join("\n");
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const dataHoje = new Date().toLocaleDateString('pt-BR').replace(/\//g, '-');
+    link.setAttribute('download', `Relatorio_Entregas_${dataHoje}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+};
+
 // Reusable inline styles used across the app (moved to top to avoid hoisting issues)
 const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', outline: 'none', fontSize: '14px' };
 const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
@@ -3069,26 +3128,18 @@ function App() {
                                                         if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível exportar.');
                                                         const { data, error } = await supabase.from('entregas').select('*');
                                                         if (error) throw error;
-                                                        // Convert to CSV
                                                         const rows = Array.isArray(data) ? data : [];
                                                         if (rows.length === 0) {
                                                             try { alert('Não há entregas para exportar.'); } catch (e) { }
                                                             return;
                                                         }
-                                                        const keys = Object.keys(rows[0]);
-                                                        const csv = [keys.join(',')].concat(rows.map(r => keys.map(k => {
-                                                            const v = r[k] == null ? '' : String(r[k]).replace(/"/g, '""');
-                                                            return `"${v}"`;
-                                                        }).join(','))).join('\n');
-                                                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                                                        const url = URL.createObjectURL(blob);
-                                                        const a = document.createElement('a');
-                                                        a.href = url;
-                                                        a.download = `backup_entregas_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
-                                                        document.body.appendChild(a);
-                                                        a.click();
-                                                        a.remove();
-                                                        URL.revokeObjectURL(url);
+                                                        // Usar função compartilhada para gerar CSV compatível com Excel BR
+                                                        try {
+                                                            baixarRelatorioCSV(rows);
+                                                        } catch (errCsv) {
+                                                            console.error('Erro gerando CSV via baixarRelatorioCSV', errCsv);
+                                                            throw errCsv;
+                                                        }
                                                     } catch (e) {
                                                         console.error('Erro exportando CSV', e);
                                                         try { alert('Falha ao exportar backup: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
