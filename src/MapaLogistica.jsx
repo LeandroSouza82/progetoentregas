@@ -700,36 +700,17 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                             mouseout: (e) => e.target.closePopup()
                         }}
                     >
-                        <Popup
-                            className="delivery-popup custom-leaflet-popup"
-                            closeButton={false}
-                            autoPan={false}
-                        >
-                            <div className="flex flex-col min-w-[220px] max-w-[280px] p-1 font-sans text-gray-800">
-
-                                <div className="border-b border-gray-200 pb-2 mb-2">
-                                    <h3 className="text-sm font-bold truncate" title={p.cliente}>
-                                        {p.cliente || 'Cliente não identificado'}
-                                    </h3>
-                                    <p className="text-[10px] text-gray-500 font-mono">
-                                        Pedido #{(p.id && String(p.id).substring(0, 8)) || p.id}
-                                    </p>
-                                </div>
-                                <div className="mb-3">
-                                    <p className="text-xs leading-relaxed text-gray-600">
-                                        <span className="font-semibold text-gray-700">📍 Local:</span> {p.endereco}
-                                    </p>
-                                </div>
-                                <div className="flex items-center justify-between mt-auto">
-                                    <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Status Operacional</span>
-                                    <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded text-white shadow-sm
-                                    ${p.status === 'pendente' ? 'bg-gray-400' : ''}
-                                    ${p.status === 'em_rota' ? 'bg-blue-500' : ''}
-                                    ${(p.status === 'concluido' || p.status === 'entregue') ? 'bg-green-500' : ''}
-                                    ${p.status === 'falha' ? 'bg-red-500' : ''}
-                                `}>
-                                        {(p.status || '').replace('_', ' ')}
-                                    </span>
+                        <Popup className="delivery-popup custom-leaflet-popup" closeButton={false} autoPan={false}>
+                            <div style={{ fontFamily: 'Arial', minWidth: 140 }}>
+                                <strong>{p.cliente || 'Cliente não identificado'}</strong>
+                                <div style={{ margin: '5px 0' }}>📍 {p.endereco}</div>
+                                <div>
+                                    {p.status === 'entregue'
+                                        ? 'Status: ✅ Concluído'
+                                        : (p.status === 'falha' || p.status === 'cancelado')
+                                            ? 'Status: ❌ Falha'
+                                            : 'Status: ⏳ Em rota'
+                                    }
                                 </div>
                             </div>
                         </Popup>
