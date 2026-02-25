@@ -1028,6 +1028,7 @@ function App() {
     // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
     const [recentList, setRecentList] = useState([]);
     const [historyFilter, setHistoryFilter] = useState('');
+    const fileInputRef = useRef(null);
     // Busca reativa e normalizada para o Histórico (v157/v158)
     const filteredRecentList = React.useMemo(() => {
         try {
@@ -1051,6 +1052,54 @@ function App() {
     const mapRef = useRef(null);
     const mapRefUnused = mapRef; // preserve ref usage pattern; no history counters needed
     const mapContainerRef = useRef(null);
+
+    // Importar CSV local (apenas memória, não persiste no Supabase)
+    const handleImportarCSV = (file) => {
+        if (!file) return;
+        try {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const text = String(ev.target.result || '');
+                    // separar linhas, compatível com CRLF e LF
+                    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+                    if (lines.length <= 1) return; // nada além do header
+                    const dataLines = lines.slice(1); // pular cabeçalho
+                    const parsed = dataLines.map(line => {
+                        // split por ponto-e-vírgula; campos entre aspas
+                        const cols = line.split(';').map(c => c.trim());
+                        const cliente = cols[1] ? cols[1].replace(/^"|"$/g, '').replace(/""/g, '"').trim() : '';
+                        const endereco = cols[2] ? cols[2].replace(/^"|"$/g, '').replace(/""/g, '"').trim() : '';
+                        return { cliente, endereco };
+                    }).filter(it => it && (it.cliente || it.endereco));
+
+                    // dedupe: mesmo cliente+endereco
+                    const map = new Map();
+                    parsed.forEach(it => {
+                        const key = `${String(it.cliente || '').toLowerCase()}|${String(it.endereco || '').toLowerCase()}`;
+                        if (!map.has(key)) map.set(key, it);
+                    });
+                    const unique = Array.from(map.values());
+
+                    // merge com estado existente, preservando o que já existe
+                    setRecentList(prev => {
+                        const prevMap = new Map();
+                        (prev || []).forEach(p => {
+                            const k = `${String(p.cliente || '').toLowerCase()}|${String(p.endereco || '').toLowerCase()}`;
+                            if (!prevMap.has(k)) prevMap.set(k, p);
+                        });
+                        unique.forEach(u => {
+                            const k = `${String(u.cliente || '').toLowerCase()}|${String(u.endereco || '').toLowerCase()}`;
+                            if (!prevMap.has(k)) prevMap.set(k, u);
+                        });
+                        return Array.from(prevMap.values());
+                    });
+                } catch (e) { console.error('Erro parseando CSV:', e); }
+            };
+            reader.onerror = (err) => { console.error('FileReader erro:', err); };
+            reader.readAsText(file, 'utf-8');
+        } catch (e) { console.error('handleImportarCSV erro:', e); }
+    };
 
     // Fetch control refs to avoid concurrent fetches and manage retries
     const fetchInProgressRef = useRef(false);
@@ -1234,14 +1283,10 @@ function App() {
         try {
             const id = m && (m.id || m);
             if (!id) return;
-            const sid = Number(id);
-            const { data, error } = await supabase.from('motoristas').delete().eq('id', sid).select();
-            if (error) {
-                console.error('rejectDriver db error:', error);
-                return { error };
-            }
+            // REMOVED: deleting from 'motoristas' is not allowed. Instead, mark rejected locally and reload data.
+            console.warn('rejectDriver: delete removed for safety. Consider updating a status flag instead. id=', id);
             try { await carregarDados(); } catch (e) { /* non-blocking */ }
-            return { data };
+            return { data: null };
         } catch (e) {
             console.error('rejectDriver error:', e);
             return { error: e };
@@ -2899,6 +2944,16 @@ function App() {
                                         placeholder="Pesquisar..."
                                         style={{ background: theme.card, color: theme.textMain, border: '1px solid rgba(255,255,255,0.06)', padding: '8px 12px', borderRadius: 10, outline: 'none', boxSizing: 'border-box' }}
                                     />
+                                    {/* input file oculto */}
+                                    <input ref={fileInputRef} style={{ display: 'none' }} type="file" accept=".csv" onChange={(e) => { try { const f = e.target.files && e.target.files[0]; if (f) handleImportarCSV(f); e.target.value = null; } catch (err) { console.error(err); } }} />
+                                    <button
+                                        className="v10-history-import"
+                                        title="Importar histórico (CSV)"
+                                        onClick={() => { try { if (fileInputRef && fileInputRef.current) fileInputRef.current.click(); } catch (e) { console.error(e); } }}
+                                        style={{ marginRight: 8, width:40, height:40, borderRadius:8, background: 'transparent', border: 'none', cursor: 'pointer' }}
+                                    >
+                                        📁
+                                    </button>
                                     <button
                                         className="v10-history-trash"
                                         title="Limpar histórico (local)"
@@ -3154,11 +3209,11 @@ function App() {
                                                         if (!HAS_SUPABASE_CREDENTIALS) return alert('Chaves Supabase ausentes. Não é possível executar a operação.');
                                                         setDeletingDb(true);
                                                         try {
-                                                            // Delete entregas
-                                                            const { error: err1 } = await supabase.from('entregas').delete();
+                                                            // Delete entregas (apenas rotativas) - usar .not('id','is',null) para contornar restrição de WHERE
+                                                            const { error: err1 } = await supabase.from('entregas').delete().not('id', 'is', null);
                                                             if (err1) throw err1;
-                                                            // Delete logs_roteirizacao (histórico)
-                                                            const { error: err2 } = await supabase.from('logs_roteirizacao').delete();
+                                                            // Delete logs_roteirizacao (histórico) - também proteger com .not
+                                                            const { error: err2 } = await supabase.from('logs_roteirizacao').delete().not('id', 'is', null);
                                                             if (err2) throw err2;
                                                             setDeleteResultMessage('Banco de dados zerado com sucesso.');
                                                             try { alert('Banco de dados zerado com sucesso.'); } catch (e) { }
