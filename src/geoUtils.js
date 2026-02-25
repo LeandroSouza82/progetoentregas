@@ -1,6 +1,38 @@
 // ===== UTILIDADES GEOGRÁFICAS (SEM APIS EXTERNAS) =====
 // Funções matemáticas para cálculo de distância e otimização de rotas
 
+export const limparEnderecoParaMapbox = (enderecoBruto) => {
+    if (!enderecoBruto) return "";
+
+    let enderecoLimpo = enderecoBruto;
+
+    // 1. Corrige vírgulas sem espaço (transforma "Jurere,Florianopolis" em "Jurere, Florianopolis")
+    enderecoLimpo = enderecoLimpo.replace(/,/g, ", ");
+
+    // 2. O BISTURI: Remove apenas "nº", "n°", "n." ou as palavras "numero"/"num"
+    // Isso tira a palavra inteira se existir:
+    enderecoLimpo = enderecoLimpo.replace(/\b(n[úu]mero|num)\b/gi, "");
+    // Isso tira a letra 'n' SOMENTE se estiver colada com o símbolo de grau ou ponto:
+    enderecoLimpo = enderecoLimpo.replace(/n[°º.]/gi, "");
+
+    // 3. Remove complementos irrelevantes para o mapa
+    enderecoLimpo = enderecoLimpo.replace(/\b(casa|ap|apto|apartamento|fundos|bloco|bl)\b/gi, "");
+
+    // 4. Remove hífens que confundem a API
+    enderecoLimpo = enderecoLimpo.replace(/-/g, " ");
+
+    // 5. Remove caracteres especiais estranhos, deixando só o que importa
+    enderecoLimpo = enderecoLimpo.replace(/[^\w\s,À-ÿ]/gi, " ");
+
+    // 6. Limpeza final de vírgulas e espaços soltos
+    enderecoLimpo = enderecoLimpo.replace(/,\s*,/g, ","); // Remove vírgula dupla
+    enderecoLimpo = enderecoLimpo.replace(/^\s*,\s*/, ""); // Tira vírgula perdida no começo
+    enderecoLimpo = enderecoLimpo.replace(/\s*,\s*$/, ""); // Tira vírgula perdida no final
+
+    // 7. Limpa os espaços duplos
+    return enderecoLimpo.replace(/\s+/g, " ").trim();
+};
+
 /**
  * Calcula a distância entre dois pontos usando a fórmula de Haversine
  * @param {number} lat1 - Latitude do ponto 1
@@ -165,7 +197,6 @@ function cleanAndAssembleAddressForCity(rawAddress, cityName) {
     if (!rawAddress) return null;
     // remover símbolos como n°, nº, N°, # e parênteses vazios; normalizar espaços
     let s = String(rawAddress || '')
-        .replace(/n\s*[º°]?/ig, '')
         .replace(/\bno\.\b/ig, '')
         .replace(/#/g, '')
         .replace(/\(\s*\)/g, '')
@@ -234,7 +265,7 @@ async function tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_
     for (const cand of candidates) {
         try {
             for (const t of preferTypes) {
-                const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(cand)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=${t}&language=pt&limit=1`;
+                const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(cand))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=${t}&language=pt&limit=1`;
                 console.log('[GEO fuzzy] tentando:', url);
                 const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
                 if (!resp || !resp.ok) continue;
@@ -258,6 +289,16 @@ async function tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_
  * @returns {Promise<object|null>} { lat, lng, display_name } ou null
  */
 export async function geocodeMapbox(address, bounds = null, proximity = null) {
+    // 🛑 Aplicar filtro logo na porta de entrada para evitar 422 e requisições desnecessárias
+    try {
+        const addressEntryClean = limparEnderecoParaMapbox(address);
+        console.log(`🚀 [GEO] Iniciando busca com endereço limpo: ${addressEntryClean}`);
+        address = addressEntryClean;
+    } catch (e) {
+        // se a limpeza falhar por algum motivo, continuar com o valor original
+        console.warn('[GEO] limpeza inicial falhou, usando endereço original', e);
+    }
+
     if (!address || address.trim().length < 3) return null;
 
     try {
@@ -267,10 +308,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         try {
             // LIMPEZA INICIAL REFORÇADA: remover símbolos comuns que atrapalham o geocoding
             let raw = String(address || '');
-            // remover n°, nº, N°, #, travessões e similares, e colapsar espaços
-            raw = raw.replace(/n\s*[º°]/ig, ' ')
-                .replace(/nº/ig, ' ')
-                .replace(/[–—−]/g, ' ')
+            // remover travessões, # e colapsar espaços (remoção de 'nº' delegada à função de limpeza central)
+            raw = raw.replace(/[–—−]/g, ' ')
                 .replace(/#/g, ' ')
                 .replace(/\s{2,}/g, ' ')
                 .trim();
@@ -285,7 +324,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                     const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
                     const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
                     const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
-                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(fixedNj)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(fixedNj))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
                     const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
                     if (resp && resp.ok) {
                         const jd = await resp.json();
@@ -311,7 +350,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                     const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
                     const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
                     const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
-                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(fixedMorro)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(fixedMorro))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
                     const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
                     if (resp && resp.ok) {
                         const jd = await resp.json();
@@ -334,7 +373,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                     const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
                     const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
                     const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
-                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(fixed)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(fixed))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
                     const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
                     if (resp && resp.ok) {
                         const jd = await resp.json();
@@ -373,15 +412,26 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             // usar proximity central da cidade (lng,lat)
             const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
 
+            // 🧹 1. Limpar e encodar o endereço UMA VEZ com segurança
+            const queryLimpa = limparEnderecoParaMapbox(input);
+
+            // 🛡️ Trava de segurança contra Erro 422: se sobrar vazio, nem envia
+            if (!queryLimpa || queryLimpa.trim() === "") {
+                console.warn(`[GEO v33] ❌ Busca abortada: Endereço vazio após a limpeza (original: "${input}")`);
+                return null;
+            }
+
+            const encodedQuery = encodeURIComponent(queryLimpa);
+
             // bbox restrito em torno do centro da cidade (aprox. ~6km raio)
             const d = 0.06;
             const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
             const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
 
-            console.log('[GEO v33] Cidade detectada (FORÇADA):', strictCity, 'input:', input, 'proximity:', proximityParam, 'bbox:', bbox);
+            console.log('[GEO v33] Cidade detectada (FORÇADA):', strictCity, '| Query Limpa:', queryLimpa, '| bbox:', bbox);
 
             // 1) Tentar types=address
-            const urlAddr = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(input)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=3`;
+            const urlAddr = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedQuery}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=3`;
             console.log('[GEO v33] URL (address):', urlAddr);
             const resp1 = await fetch(urlAddr, { headers: { 'Accept': 'application/json' } });
             if (resp1 && resp1.ok) {
@@ -391,15 +441,20 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                 for (const r of feats) {
                     if (resultBelongsToCity(r, strictCity)) {
                         const lng = r.center[0], lat = r.center[1];
-                        console.log('[GEO v33] Encontrado endereço em cidade correta (address):', { lat, lng });
+                        console.log('[GEO v33] ✅ Encontrado endereço em cidade correta (address):', { lat, lng });
                         return { lat, lng, display_name: r.place_name || input };
                     }
                 }
             }
 
             // 2) tentar tipos=street (centro da via) dentro da mesma bbox
-            const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(input)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=street&language=pt&limit=5`;
-            console.log('[GEO v33] URL (street):', urlStreet);
+            // O Mapbox rejeita números quando a busca é estritamente types=street.
+            // Vamos remover os dígitos da query limpa apenas para essa URL.
+            const querySemNumerosParaRua = queryLimpa.replace(/\d+/g, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').trim();
+            const encodedStreetQuery = encodeURIComponent(querySemNumerosParaRua);
+
+            const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedStreetQuery}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=street&language=pt&limit=5`;
+            console.log('[GEO v33] URL (street sem números):', urlStreet);
             const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
             if (resp2 && resp2.ok) {
                 const d2 = await resp2.json();
@@ -407,7 +462,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                 for (const r of feats2) {
                     if (resultBelongsToCity(r, strictCity)) {
                         const lng = r.center[0], lat = r.center[1];
-                        console.log('[GEO v33] Encontrado street em cidade correta:', { lat, lng });
+                        console.log('[GEO v33] ✅ Encontrado street em cidade correta:', { lat, lng });
                         return { lat, lng, display_name: r.place_name || input };
                     }
                 }
@@ -480,7 +535,10 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         // Remover parênteses e caracteres especiais desnecessários, manter apenas letras, números, vírgulas, espaços e hífens
         addressClean = addressClean.replace(/\(.*?\)/g, '').replace(/[^0-9A-Za-zÀ-ÿ, \-]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-        console.log('🧹 Mapbox - Endereço limpo:', addressClean);
+        // Aplicar limpeza adicional centralizada antes de enviar ao Mapbox
+        const enderecoFiltrado = limparEnderecoParaMapbox(addressClean);
+        console.log(`🧹 Endereço limpo: de "${addressClean}" para "${enderecoFiltrado}"`);
+        addressClean = enderecoFiltrado;
 
         // v54: PRÉ-BUSCA DE CEP (se o gestor não informou um CEP, tentar obter postcode via Mapbox)
         let foundPostcode = null;
@@ -488,7 +546,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             const cepRegex = /(\d{5}-\d{3}|\d{8})/;
             if (!cepRegex.test(addressClean)) {
                 // tentar buscar postcode por types=postcode usando o termo limpo
-                const postcodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?access_token=${MAPBOX_TOKEN}&bbox=${bbox}&proximity=${proximityParam}&types=postcode&language=pt&limit=1`;
+                const postcodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(addressClean))}.json?access_token=${MAPBOX_TOKEN}&bbox=${bbox}&proximity=${proximityParam}&types=postcode&language=pt&limit=1`;
                 console.log('[GEO v54] Tentando obter CEP via Mapbox (postcode lookup):', postcodeUrl);
                 try {
                     const respPc = await fetch(postcodeUrl, { headers: { 'Accept': 'application/json' } });
@@ -532,7 +590,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                 if (!cityForSearch && (lowerAddrLocal.indexOf('ingleses') !== -1 || lowerAddrLocal.indexOf('feiticeiras') !== -1)) cityForSearch = 'Florianópolis';
 
                 const searchWithCep = `${streetOnly}${numberToken ? (', ' + numberToken) : ''}, ${foundPostcode}${cityForSearch ? (', ' + cityForSearch + ', SC, Brasil') : ''}`;
-                const urlCep = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(searchWithCep)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                const urlCep = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(searchWithCep))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
                 console.log('[GEO v54] Reconsultando com CEP para precisão:', searchWithCep, urlCep);
                 try {
                     const respCep = await fetch(urlCep, { headers: { 'Accept': 'application/json' } });
@@ -561,7 +619,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             }
         } catch (e) { }
 
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(addressClean))}.json?` +
             `access_token=${MAPBOX_TOKEN}` +
             `&proximity=${proximityParam}` +
             `&bbox=${bbox}` +
@@ -605,17 +663,24 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 
         // fallback street
         if (!result) {
-            const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressClean)}.json?` +
-                `access_token=${MAPBOX_TOKEN}` +
-                `&proximity=${proximityParam}` +
-                `&bbox=${bbox}` +
-                `&types=street` +
-                `&language=pt` +
-                `&limit=1`;
-            const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
-            if (resp2 && resp2.ok) {
-                const data2 = await resp2.json();
-                if (data2 && data2.features && data2.features.length > 0) result = data2.features[0];
+            // Para buscas estritas por rua, remover números para evitar Erro 422
+            const queryStreetFallback = limparEnderecoParaMapbox(addressClean).replace(/\d+/g, '').replace(/,\s*,/g, ',').replace(/^\s*,\s*/, '').trim();
+            if (queryStreetFallback && queryStreetFallback.length > 0) {
+                const encodedStreetFallback = encodeURIComponent(queryStreetFallback);
+                const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedStreetFallback}.json?` +
+                    `access_token=${MAPBOX_TOKEN}` +
+                    `&proximity=${proximityParam}` +
+                    `&bbox=${bbox}` +
+                    `&types=street` +
+                    `&language=pt` +
+                    `&limit=1`;
+                const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
+                if (resp2 && resp2.ok) {
+                    const data2 = await resp2.json();
+                    if (data2 && data2.features && data2.features.length > 0) result = data2.features[0];
+                }
+            } else {
+                console.warn('[GEO] fallback street abortado: query vazia após remoção de números');
             }
             // Se ainda não encontramos resultado, tentar fuzzy candidates (relaxado)
             if (!result) {
@@ -667,7 +732,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 
                     if (simpleQuery && simpleQuery.length > 5) {
                         try {
-                            const urlSimple = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(simpleQuery)}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
+                            const urlSimple = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(simpleQuery))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
                             console.log('[GEO v162-fallback] Tentando busca simplificada:', simpleQuery, urlSimple);
                             const respSimple = await fetch(urlSimple, { headers: { 'Accept': 'application/json' } });
                             if (respSimple && respSimple.ok) {
@@ -730,8 +795,13 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
             return null;
         }
 
+        // Aplicar limpeza centralizada antes de enviar ao Mapbox (mesma função usada no fluxo principal)
+        const enderecoFiltradoMelhorado = limparEnderecoParaMapbox(query);
+        console.log(`🧹 Endereço limpo (melhoradas): de "${query}" para "${enderecoFiltradoMelhorado}"`);
+        query = enderecoFiltradoMelhorado;
+
         // 3. Parâmetros de Alta Precisão
-        const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json`);
+        const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(query))}.json`);
         url.searchParams.append('access_token', MAPBOX_TOKEN);
         url.searchParams.append('proximity', '-48.61,-27.59'); // Foco na sua região
         url.searchParams.append('country', 'br');
@@ -898,7 +968,7 @@ export async function searchMapbox(query, bounds = null) {
             .trim();
 
         // Permitir street também para garantir centro da via quando número não existir
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(queryClean)}.json?` +
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(queryClean))}.json?` +
             `access_token=${MAPBOX_TOKEN}` +
             `&proximity=${proximity}` +
             `&bbox=${bbox}` +
