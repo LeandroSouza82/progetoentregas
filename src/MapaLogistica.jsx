@@ -20,7 +20,7 @@ const isValidSC = (lat, lng) => {
     return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
 };
 
-function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, rotaCoordenadas = [], clearMap = false, darkMode = undefined }) {
+function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, rotaCoordenadas = [], clearMap = false, darkMode = undefined, rotaOrdenadaState = [] }) {
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -686,36 +686,53 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 />
 
                 {/* Marcadores de Entregas (hover -> popup) */}
-                {showPins && entregaMarkers.map((p, idx) => (
-                    <Marker
-                        key={`entrega-${p.id}`}
-                        position={[parseFloat(p.lat), parseFloat(p.lng)]}
-                        icon={createCustomPinIcon(
-                            getMarkerIcon(p.status, p.tipo),
-                            idx + 1,
-                            p.status
-                        )}
-                        eventHandlers={{
-                            mouseover: (e) => e.target.openPopup(),
-                            mouseout: (e) => e.target.closePopup()
-                        }}
-                    >
-                        <Popup className="delivery-popup custom-leaflet-popup" closeButton={false} autoPan={false}>
-                            <div style={{ fontFamily: 'Arial', minWidth: 140 }}>
-                                <strong>{p.cliente || 'Cliente não identificado'}</strong>
-                                <div style={{ margin: '5px 0' }}>📍 {p.endereco}</div>
-                                <div>
-                                    {p.status === 'entregue'
-                                        ? 'Status: ✅ Concluído'
-                                        : (p.status === 'falha' || p.status === 'cancelado')
-                                            ? 'Status: ❌ Falha'
-                                            : 'Status: ⏳ Em rota'
-                                    }
+                {showPins && entregaMarkers.map((p, idx) => {
+                    // LÓGICA DE PRIORIDADE PARA O NÚMERO DO PINO
+                    let numeroExibido = idx + 1;
+
+                    // 1. Prioridade Máxima: A rota que acabou de ser calculada pelo botão Reorganizar
+                    if (typeof rotaOrdenadaState !== 'undefined' && rotaOrdenadaState?.length > 0) {
+                        const foundInRota = rotaOrdenadaState.findIndex(r => r.id === p.id);
+                        if (foundInRota !== -1) {
+                            numeroExibido = foundInRota + 1;
+                        }
+                    }
+                    // 2. Segunda Prioridade: A ordem que já está salva no banco (caso não tenha reorganizado agora)
+                    else if (p.ordem !== null && p.ordem !== undefined && p.ordem !== 0) {
+                        numeroExibido = p.ordem;
+                    }
+
+                    return (
+                        <Marker
+                            key={`entrega-${p.id}`}
+                            position={[parseFloat(p.lat), parseFloat(p.lng)]}
+                            icon={createCustomPinIcon(
+                                getMarkerIcon(p.status, p.tipo),
+                                numeroExibido, // O número agora é dinâmico e inteligente
+                                p.status
+                            )}
+                            eventHandlers={{
+                                mouseover: (e) => e.target.openPopup(),
+                                mouseout: (e) => e.target.closePopup()
+                            }}
+                        >
+                            <Popup className="delivery-popup custom-leaflet-popup" closeButton={false} autoPan={false}>
+                                <div style={{ fontFamily: 'Arial', minWidth: 140 }}>
+                                    <strong>{p.cliente || 'Cliente não identificado'}</strong>
+                                    <div style={{ margin: '5px 0' }}>📍 {p.endereco}</div>
+                                    <div>
+                                        {p.status === 'entregue'
+                                            ? 'Status: ✅ Concluído'
+                                            : (p.status === 'falha' || p.status === 'cancelado')
+                                                ? 'Status: ❌ Falha'
+                                                : 'Status: ⏳ Em rota'
+                                        }
+                                    </div>
                                 </div>
-                            </div>
-                        </Popup>
-                    </Marker>
-                ))}
+                            </Popup>
+                        </Marker>
+                    );
+                })}
 
                 {/* popup condicional removido: usamos Hover Popups dentro de cada Marker */}
 

@@ -5,8 +5,6 @@ import MapaLogistica from './MapaLogistica';
 import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 
-const UUID_LEANDRO = '447bb6e6-2086-421b-9e49-00c0d8d1c2c8';
-
 // Safety: enable Supabase-backed flows during local debugging
 const HAS_SUPABASE_CREDENTIALS = true;
 
@@ -234,31 +232,12 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
 }
 // mapa dinamicamente importado para prevenir que falhas no build do pacote quebrem o app
 function App() {
-    // Identificador fixo por conveniência (fallback)
-    const UUID_LEANDRO = '447bb6e6-2086-421b-9e49-00c0d8d1c2c8';
+    const [rotaPronta, setRotaPronta] = useState(false);
+    const [rotaOrdenadaState, setRotaOrdenadaState] = useState([]);
 
-    // Função auxiliar para garantir que o UUID seja encontrado
-    const buscarIdentificadorLeandro = async () => {
-        try {
-            console.log("🔍 Buscando UUID dinâmico no banco...");
-            const { data, error } = await supabase
-                .from('motoristas')
-                .select('id')
-                .ilike('nome', 'Leandro')
-                .single();
+    // NOTE: modal-driven motorista selection was removed in favor of an inline `<select>`.
 
-            if (data?.id) {
-                console.log("✅ UUID recuperado do banco:", data.id);
-                return String(data.id);
-            }
-
-            console.warn("⚠️ Registro não encontrado no banco, usando constante fixa.");
-            return UUID_LEANDRO;
-        } catch (e) {
-            console.error("❌ Erro na busca, usando constante fixa como fallback.");
-            return UUID_LEANDRO;
-        }
-    };
+    // NOTE: one-click dispatch function removed — flow now: reorganizar -> selecionar motorista -> enviar rota
     const [mapsLib, setMapsLib] = useState(null);
     const [mapsLoadError, setMapsLoadError] = useState(false);
     const [loadingFrota, setLoadingFrota] = useState(false);
@@ -354,7 +333,7 @@ function App() {
         setLoadingFrota(true);
 
         // preserve selected/send state during an ongoing optimization
-        const __prevSelectedMotorista = selectedMotoristaRef.current || selectedMotorista;
+        const __prevSelectedMotorista = motoristaSelecionadoIdRef.current || motoristaSelecionadoId;
         const __prevCanSend = canSendMotoristaIdRef.current;
 
         try {
@@ -611,7 +590,7 @@ function App() {
         // If a routing/optimization or processing is in progress, restore selected driver / canSend state
         try {
             if (routingInProgressRef.current || isProcessingRef.current) {
-                try { if (__prevSelectedMotorista) setSelectedMotorista(__prevSelectedMotorista); } catch (e) { }
+                try { if (__prevSelectedMotorista) setMotoristaSelecionadoId(__prevSelectedMotorista); } catch (e) { }
                 try { if (typeof __prevCanSend !== 'undefined') setCanSendMotoristaId(__prevCanSend); } catch (e) { }
             }
         } catch (e) { }
@@ -776,10 +755,7 @@ function App() {
     const inputIdleTimerRef = useRef(null);
     const pendingRecalcRef = useRef(new Set());
     const [pendingRecalcCount, setPendingRecalcCount] = useState(0);
-    const [selectedMotorista, setSelectedMotorista] = useState(null);
-    const [showDriverSelect, setShowDriverSelect] = useState(false);
-    const [canSendRoute, setCanSendRoute] = useState(false);
-    const [canSendMotoristaId, setCanSendMotoristaId] = useState(null);
+
     const [runtimePolylines, setRuntimePolylines] = useState({});
     const [dataRotaCoordenadas, setDataRotaCoordenadas] = useState([]);
 
@@ -1026,7 +1002,27 @@ function App() {
     }); // <-- Properly close useEffect here
 
     // Google Maps integration removed for this project — we rely on Leaflet/Mapbox.
-    const [recentList, setRecentList] = useState([]);
+    const [recentList, setRecentList] = useState(() => {
+        try {
+            const historicoSalvo = localStorage.getItem('meu_historico_clientes_csv');
+            if (historicoSalvo) {
+                return JSON.parse(historicoSalvo);
+            }
+        } catch (error) {
+            console.error('Erro ao ler histórico do localStorage', error);
+        }
+        return [];
+    });
+
+    // Vigia: Salva no localStorage toda vez que o recentList for atualizado
+    useEffect(() => {
+        try {
+            localStorage.setItem('meu_historico_clientes_csv', JSON.stringify(recentList));
+        } catch (error) {
+            console.error('Erro ao salvar histórico no localStorage', error);
+        }
+    }, [recentList]);
+
     const [historyFilter, setHistoryFilter] = useState('');
     const fileInputRef = useRef(null);
     // Busca reativa e normalizada para o Histórico (v157/v158)
@@ -1109,7 +1105,7 @@ function App() {
     const isUpdatingRef = useRef(false);
     const canSendMotoristaIdRef = useRef(null);
     const isProcessingRef = useRef(false);
-    const selectedMotoristaRef = useRef(null);
+    const motoristaSelecionadoIdRef = useRef(null);
     const retryCountRef = useRef(0); // counts consecutive retry attempts to avoid infinite loops
     const routingInProgressRef = useRef(false); // prevents concurrent heavy route computations
     const lastRouteCacheRef = useRef(new Map()); // cache per motoristaId => { hash, result, timestamp }
@@ -2079,9 +2075,12 @@ function App() {
             // pegar posição atual do motorista Leandro do banco
             let origem = mapCenterRef.current || DEFAULT_MAP_CENTER;
             try {
-                const { data, error } = await supabase.from('motoristas').select('lat,lng').eq('id', UUID_LEANDRO).single();
-                if (!error && data && data.lat != null && data.lng != null) {
-                    origem = { lat: Number(data.lat), lng: Number(data.lng) };
+                const alvo = motoristaSelecionadoId;
+                if (alvo) {
+                    const { data, error } = await supabase.from('motoristas').select('lat,lng').eq('id', alvo).single();
+                    if (!error && data && data.lat != null && data.lng != null) {
+                        origem = { lat: Number(data.lat), lng: Number(data.lng) };
+                    }
                 }
             } catch (e) { /* ignore and use map center */ }
 
@@ -2100,9 +2099,19 @@ function App() {
                 const dests = pendentes.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }));
                 let durations = await getRoadDistances(origem, dests);
 
-                // fallback para Haversine se Mapbox falhar
+                // 1. Fallback total: Se a API falhou miseravelmente (array vazio ou tamanho errado)
                 if (!durations || durations.length !== dests.length) {
-                    durations = dests.map(d => haversineKm(origem, d) * 1000); // meters as fallback proxy
+                    durations = dests.map(d => haversineKm(origem, d) * 1000);
+                } else {
+                    // 2. Fallback cirúrgico: Intercepta os "Infinity" (Erro 422 ou Unroutable)
+                    // Se o Mapbox não achou rua pro ponto, ele devolve Infinity.
+                    // Nós substituímos pela linha reta para ele não ir pro final da fila!
+                    durations = durations.map((dur, idx) => {
+                        if (dur === Infinity) {
+                            return haversineKm(origem, dests[idx]) * 1000;
+                        }
+                        return dur;
+                    });
                 }
 
                 // encontrar índice mínimo válido
@@ -2318,12 +2327,26 @@ function App() {
         const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
         if (!parsedId || isNaN(parsedId)) {
             console.warn('excluirPedido: id inválido', id);
-            return () => {
-                try { supabase.removeChannel && supabase.removeChannel(channel); } catch (e) { /* ignore */ }
-            };
+            return;
         }
+
+        // 1. ATUALIZAÇÃO OTIMISTA: Remove o card da tela IMEDIATAMENTE (snappy feel)
+        setPedidosPendentes(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
+        try {
+            setEntregas(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
+        } catch (e) { /* ignore */ }
+
+        // 2. Apaga do banco de dados (Supabase)
         const { error } = await supabase.from('entregas').delete().eq('id', parsedId);
-        if (!error) carregarDados();
+
+        // 3. Em background, garante que tudo fique sincronizado
+        if (!error) {
+            try { carregarDados(); } catch (e) { }
+        } else {
+            console.error('Erro ao excluir pedido:', error);
+            // Se falhar no banco, recarrega para restaurar o card na tela
+            try { carregarDados(); } catch (e) { }
+        }
     };
 
     const dispararRota = async () => {
@@ -2355,8 +2378,8 @@ function App() {
                         const nome = best.nome || best.title || best.name || String(best.id);
                         const confirmMsg = `Motorista ${nome} selecionado por proximidade. Confirmar?`;
                         if (!window.confirm(confirmMsg)) {
-                            // usuário cancelou: abrir modal para seleção manual
-                            setShowDriverSelect(true);
+                            // usuário cancelou: não prosseguir automaticamente
+                            setPodeEnviar(false);
                             return;
                         }
                     } catch (e) { /* ignore confirm issues */ }
@@ -2370,14 +2393,12 @@ function App() {
         } catch (e) { console.warn('dispararRota: auto-select failed', e); }
 
         // Fallback: abrir modal para seleção manual
-        setShowDriverSelect(true);
+        setPodeEnviar(false);
     };
 
     // Assign a selected driver: optimize route and update each entrega to 'em_rota' with motorista_id e ordem
     const assignDriver = async (driver) => {
-        // allow caller to omit driver and use selectedMotorista from state
-        if ((!driver || !driver.id) && selectedMotorista) driver = selectedMotorista;
-        const selectedDriver = driver || selectedMotorista || null;
+        const selectedDriver = driver || null;
         if (!selectedDriver?.id) {
             console.error('Erro: Nenhum motorista selecionado');
             return;
@@ -2445,8 +2466,7 @@ function App() {
                         try { await carregarDados(); } catch (e) { /* ignore */ }
                         try { setPedidosPendentes([]); } catch (e) { /* ignore */ }
                         try { routingInProgressRef.current = false; } catch (e) { /* ignore */ }
-                        setShowDriverSelect(false);
-                        setSelectedMotorista(null);
+
                     }
                 } catch (err) {
                     updErr = err;
@@ -2466,7 +2486,7 @@ function App() {
         } finally {
             // Limpeza de estados residuais
             setShowDriverSelect(false);
-            setSelectedMotorista(null);
+            setMotoristaSelecionadoId(null);
             setDispatchLoading(false);
             isUpdatingRef.current = false;
         }
@@ -2476,39 +2496,27 @@ function App() {
     const handleReorganizarRota = async () => {
         setIsCalculating(true);
         try {
-            // 1. Tenta banco, senão usa constante
-            const uuidAlvo = await buscarIdentificadorLeandro();
-
-            // Salva para o envio posterior
-            try { if (typeof window !== 'undefined' && window.localStorage) localStorage.setItem('v10_uuid_seguranca', uuidAlvo); } catch (e) { }
-            setMotoristaSelecionadoId(uuidAlvo);
-
-            // 2. Busca entregas vinculadas a esse UUID
-            const { data: entregasAtuais, error } = await supabase
-                .from('entregas')
-                .select('id')
-                .eq('motorista_id', uuidAlvo)
-                .in('status', ['pendente', 'em_rota']);
-
-            if (error) throw error;
-
-            if (entregasAtuais && entregasAtuais.length > 0) {
-                // 3. Grava a nova ordem logística
-                const updates = entregasAtuais.map((ent, i) =>
-                    supabase.from('entregas').update({ ordem_logistica: i + 1 }).eq('id', ent.id)
-                );
-                await Promise.all(updates);
-                // apply local update so the UI shows the new ordem_logistica immediately
-                try { applyLocalEntregasUpdates(entregasAtuais.map((ent, i) => ({ id: ent.id, ordem_logistica: Number(i + 1) }))); } catch (e) { /* ignore */ }
-                alert(`Sucesso: ${entregasAtuais.length} cargas organizadas para Leandro.`);
-            } else {
-                alert("Nenhuma carga pendente encontrada para o seu usuário.");
+            // require a motorista to be selected in the inline select before reorganizing
+            if (!motoristaSelecionadoId) {
+                try { alert('Por favor selecione o motorista para esta rota antes de reorganizar.'); } catch (e) { }
+                return;
             }
 
-            await carregarDados();
-        } catch (err) {
-            console.error("Erro na reorganização:", err);
-            alert("Erro ao organizar rota.");
+            // Reordena a fila usando o algoritmo inteligente (Vizinho Mais Próximo)
+            const rotaOrdenada = await organizarRotaInteligente();
+            if (!rotaOrdenada || rotaOrdenada.length === 0) {
+                try { alert('Nenhuma entrega elegível para organizar.'); } catch (e) { }
+                return;
+            }
+
+            // Armazena rota e habilita envio
+            setRotaOrdenadaState(rotaOrdenada);
+            setRotaPronta(true);
+            try { alert('✅ Rota organizada com sucesso!'); } catch (e) { }
+            setPodeEnviar(true);
+        } catch (e) {
+            console.error('Erro ao reorganizar rota:', e);
+            try { alert('Erro ao organizar rota.'); } catch (er) { }
         } finally {
             setIsCalculating(false);
         }
@@ -2560,21 +2568,29 @@ function App() {
 
     const handleEnviarRota = async () => {
         console.log("🚀 [ENVIO] Iniciando despacho inteligente e persistência de ordem...");
-
         setIsSending(true);
         try {
-            // ordenar entregas usando o algoritmo inteligente (Mapbox Matrix + NN)
-            const rotaOrdenada = await organizarRotaInteligente();
-
-            if (!rotaOrdenada || rotaOrdenada.length === 0) {
-                alert('Não há entregas elegíveis para ordenar/enviar.');
+            // pré-condições: rota organizada e motorista selecionado via select
+            if (!rotaPronta || !podeEnviar) {
+                try { alert('A rota precisa estar organizada antes de enviar.'); } catch (e) { }
+                return;
+            }
+            if (!motoristaSelecionadoId) {
+                try { alert('Selecione o motorista para esta rota antes de enviar.'); } catch (e) { }
                 return;
             }
 
-            // Persistir ordem no Supabase usando motorista Leandro (foco do prompt)
+            const rotaOrdenada = rotaOrdenadaState || [];
+            if (!rotaOrdenada || rotaOrdenada.length === 0) {
+                try { alert('Nenhuma rota organizada disponível. Execute Reorganizar Rota primeiro.'); } catch (e) { }
+                return;
+            }
+
+            const motoristaAlvo = motoristaSelecionadoId;
+
             const promessas = rotaOrdenada.map((item, idx) => {
                 const payload = {
-                    motorista_id: UUID_LEANDRO,
+                    motorista_id: String(motoristaAlvo),
                     status: 'em_rota',
                     ordem_entrega: Number(idx + 1),
                     ordem_logistica: Number(idx + 1)
@@ -2583,27 +2599,25 @@ function App() {
             });
 
             const resultados = await Promise.all(promessas);
-            // Log de confirmação por índice
             resultados.forEach(r => {
                 try {
-                    if (r && r.res && !r.res.error) {
-                        console.log('✅ Ordem gravada para o celular:', Number(r.idx + 1));
-                    } else {
-                        console.warn('❗ Falha ao gravar ordem para índice', r && r.idx, r && r.res && r.res.error);
-                    }
-                } catch (e) { /* ignore individual log errors */ }
+                    if (r && r.res && !r.res.error) console.log('✅ Ordem gravada para o índice:', Number(r.idx + 1));
+                    else console.warn('❗ Falha ao gravar ordem para índice', r && r.idx, r && r.res && r.res.error);
+                } catch (e) { }
             });
 
-            // Update local state for the ordered route so UI reflects em_rota immediately
             try {
-                const updatesLocal = (rotaOrdenada || []).map((item, idx) => ({ id: item.id, status: 'em_rota', ordem_entrega: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: UUID_LEANDRO }));
+                const updatesLocal = (rotaOrdenada || []).map((item, idx) => ({ id: item.id, status: 'em_rota', ordem_entrega: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: String(motoristaAlvo) }));
                 applyLocalEntregasUpdates(updatesLocal);
-            } catch (e) { /* ignore */ }
+            } catch (e) { }
 
-            alert('✅ Ordem persistida; rota atribuída a Leandro.');
+            // Reset segurança após envio
+            setRotaPronta(false);
+            setRotaOrdenadaState([]);
+            setPodeEnviar(false);
 
+            try { alert('✅ Ordem persistida; rota atribuída ao motorista selecionado.'); } catch (e) { }
             try { await carregarDados(); } catch (e) { console.error('carregarDados erro pós envio', e); }
-
         } catch (e) {
             console.error('Erro no envio:', e);
             try { alert('Erro ao gravar no banco: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
@@ -2618,34 +2632,7 @@ function App() {
     const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
     const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
 
-    // Handler used by DriverSelectModal: either dispatch or re-optimize depending on mode
-    async function handleDriverSelect(m) {
-        if (!m || !m.id) return;
-        if (driverSelectMode === 'dispatch') {
-            return assignDriver(m);
-        }
-        // reoptimize path for selected driver (no send)
-        setDispatchLoading(true);
-        try {
-            // clear cached route UI and indicators
-            try { if (routePolylineRef.current) { routePolylineRef.current.setMap(null); routePolylineRef.current = null; } } catch (e) { }
-            try { setDraftPreview([]); setEstimatedDistanceKm(null); setEstimatedTimeSec(null); setEstimatedTimeText(null); } catch (e) { }
-
-            const midNum = Number(m.id);
-            await recalcRotaForMotorista(String(m.id));
-            try { pendingRecalcRef.current.delete(String(m.id)); setPendingRecalcCount(pendingRecalcRef.current.size); } catch (e) { }
-            // mark that the route for this motorista is ready to be sent
-            try { const midNum = Number(m.id); setCanSendMotoristaId(midNum); canSendMotoristaIdRef.current = midNum; } catch (e) { }
-            // close modal and show success feedback after persistence
-            try { setShowDriverSelect(false); } catch (e) { }
-            try { alert('✅ Rota re-otimizada e gravada para ' + (m.nome || 'motorista') + '.'); } catch (e) { }
-        } catch (e) {
-            console.warn('handleDriverSelect (reopt) failed:', e);
-            try { alert('Falha na re-otimização: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
-        } finally {
-            setDispatchLoading(false);
-        }
-    }
+    // Driver modal handler removed — selection now handled inline via the header select
 
     // Se estivermos na página de aprovação (/aprovar), renderiza a tela exclusiva
     try {
@@ -2808,7 +2795,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica darkMode={darkMode} clearMap={false} entregas={entregasMap} frota={frota} height={500} mobile={false} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} rotaCoordenadas={rotaCoordenadas} />
+                                            <MapaLogistica darkMode={darkMode} clearMap={false} entregas={entregasMap} frota={frota} height={500} mobile={false} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} rotaCoordenadas={rotaCoordenadas} rotaOrdenadaState={rotaOrdenadaState} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2827,7 +2814,28 @@ function App() {
                         <div style={{ background: theme.card, borderRadius: '16px', padding: '18px', boxShadow: theme.shadow, height: '500px', display: 'flex', flexDirection: 'column', position: 'relative' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', marginBottom: 8, gap: 8 }}>
                                 <button onClick={() => limparMarcadores()} style={{ padding: '10px', background: 'rgba(15,23,42,0.85)', color: '#fff', borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', fontWeight: 800 }} title="Limpar Mapa">🧹 Limpar Mapa</button>
-                                <button onClick={() => carregarDados({ forceAll: true })} style={{ padding: '10px', background: '#0b6b4a', color: '#fff', borderRadius: 10, border: '1px solid rgba(0,0,0,0.12)', cursor: 'pointer', fontWeight: 800 }} title="Recarregar Mapa">🔄 Recarregar Mapa</button>
+                                <button
+                                    onClick={() => {
+                                        try {
+                                            if (!entregasMap || entregasMap.length === 0) {
+                                                alert('O mapa está limpo. Não há pontos ou rotas para recarregar no momento.');
+                                                return;
+                                            }
+                                        } catch (e) {
+                                            console.warn('Verificação de pontos do mapa falhou', e);
+                                        }
+
+                                        // lógica original de recarregar
+                                        try {
+                                            if (typeof carregarDados === 'function') carregarDados({ forceAll: true });
+                                            alert('Pontos recarregados e atualizados com sucesso!');
+                                        } catch (e) {
+                                            console.warn('Falha ao recarregar o mapa', e);
+                                        }
+                                    }}
+                                    style={{ padding: '10px', background: '#0b6b4a', color: '#fff', borderRadius: 10, border: '1px solid rgba(0,0,0,0.12)', cursor: 'pointer', fontWeight: 800 }}
+                                    title="Recarregar Mapa"
+                                >🔄 Recarregar Mapa</button>
                             </div>
                             <h3 style={{ marginTop: 20, color: theme.textMain }}>Status da Operação</h3>
                             {motoristaDaRota ? (
@@ -2950,7 +2958,7 @@ function App() {
                                         className="v10-history-import"
                                         title="Importar histórico (CSV)"
                                         onClick={() => { try { if (fileInputRef && fileInputRef.current) fileInputRef.current.click(); } catch (e) { console.error(e); } }}
-                                        style={{ marginRight: 8, width:40, height:40, borderRadius:8, background: 'transparent', border: 'none', cursor: 'pointer' }}
+                                        style={{ marginRight: 8, width: 40, height: 40, borderRadius: 8, background: 'transparent', border: 'none', cursor: 'pointer' }}
                                     >
                                         📁
                                     </button>
@@ -2998,23 +3006,59 @@ function App() {
                 {/* CENTRAL DE DESPACHO */}
                 {abaAtiva === 'Central de Despacho' && (
                     <div style={{ background: theme.card, padding: '30px', borderRadius: '16px', boxShadow: theme.shadow }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-                            <h2>Fila de Preparação</h2>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <div>
-                                        Distância Estimada:
-                                        <span style={{ color: theme.primary, marginLeft: '5px' }}>
-                                            {estimatedDistanceKm ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando...' : 'Pronto')}
-                                        </span>
-                                    </div>
-                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '16px' }}>📜</button>
+                        <style>{`
+                        .v10-driver-select{ -webkit-appearance:none; -moz-appearance:none; appearance:none; width:200px; max-width:160px; height:56px; padding:0 16px; border-radius:12px; background-color:#374151; color:#ffffff; font-weight:800 !important; font-size:1.25rem !important; border:2px solid #3b82f6; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='white'><path d='M5.23 7.21a.75.75 0 011.06.02L10 10.939l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z'/></svg>"); background-repeat:no-repeat; background-position: right 12px center; background-size:18px; box-sizing:border-box; cursor:pointer; }
+                        .v10-driver-select:focus{ outline:none; box-shadow:0 0 0 4px rgba(59,130,246,0.12); border-color:#60a5fa; }
+                        .v10-driver-select option{ font-weight:800; font-size:1rem; }
+                        `}</style>
+                        {/* --- INÍCIO DO CABEÇALHO (DIVIDIDO EM DUAS LINHAS) --- */}
+                        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: '32px', paddingBottom: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+
+                            {/* LINHA SUPERIOR: Seletor (Esquerda) e Título (Centro) */}
+                            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '24px' }}>
+
+                                {/* Esquerda: Seletor de Motorista */}
+                                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, alignItems: 'flex-start' }}>
+                                    <label style={{ color: theme.textLight, fontWeight: '700', marginBottom: '6px', fontSize: '14px' }}>Selecionar Motorista:</label>
+                                    <select
+                                        value={motoristaSelecionadoId || ''}
+                                        onChange={(e) => { setMotoristaSelecionadoId(e.target.value || null); setPodeEnviar(false); }}
+                                        className="v10-driver-select"
+                                        style={{ height: '48px', fontSize: '15px', cursor: 'pointer', width: '220px' }}
+                                    >
+                                        <option value="">Selecione...</option>
+                                        {(frota || []).filter(m => m && (m.esta_online === true || String(m.esta_online) === 'true')).map(m => (
+                                            <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Centro: Título */}
+                                <div style={{ display: 'flex', flex: 1, justifyContent: 'center' }}>
+                                    <h2 style={{ margin: 0, color: theme.textMain, fontSize: '24px', fontWeight: 800 }}>Fila de Preparação</h2>
+                                </div>
+
+                                {/* Direita: Vazio (Apenas para empurrar o título perfeitamente para o centro) */}
+                                <div style={{ flex: 1 }}></div>
+                            </div>
+
+                            {/* LINHA INFERIOR: Distância (Esquerda) e Botões (Direita) */}
+                            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+
+                                {/* Esquerda: Distância Estimada */}
+                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
+                                    <span>Distância Estimada:</span>
+                                    <span style={{ color: theme.primary, fontSize: '16px' }}>
+                                        {estimatedDistanceKm ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando...' : 'Pronto')}
+                                    </span>
+                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '18px', marginLeft: '4px' }}>📜</button>
+
                                     {showLogsPopover && (
-                                        <div style={{ position: 'absolute', right: '32px', top: '120px', background: theme.card, color: theme.textMain, padding: '10px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200 }}>
+                                        <div style={{ position: 'absolute', left: '40px', top: '180px', background: theme.card, color: theme.textMain, padding: '15px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200, border: '1px solid rgba(255,255,255,0.1)' }}>
                                             <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
                                             {logsHistory?.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
                                                 logsHistory?.map((l, i) => (
-                                                    <div key={i} style={{ padding: '6px 0', borderBottom: i < (logsHistory?.length || 0) - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                                                    <div key={i} style={{ padding: '8px 0', borderBottom: i < (logsHistory?.length || 0) - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
                                                         <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
                                                         <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
                                                     </div>
@@ -3023,46 +3067,58 @@ function App() {
                                         </div>
                                     )}
                                 </div>
-                                <div style={{ display: 'flex', gap: '8px' }}>
+
+                                {/* Direita: Botões */}
+                                <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '24px' }}>
                                     <button
-                                        onClick={async () => {
-                                            try {
-                                                await handleReorganizarRota();
-                                                return;
-                                            } catch (e) { /* ignore */ }
-                                            setDriverSelectMode('reopt'); setShowDriverSelect(true);
-                                        }}
+                                        onClick={handleReorganizarRota}
                                         disabled={isCalculating}
-                                        style={{ ...btnStyle('#fbbf24'), width: 'auto' }}
+                                        style={{
+                                            backgroundColor: '#fbbf24',
+                                            color: '#000',
+                                            padding: '14px 28px',
+                                            borderRadius: '8px',
+                                            border: 'none',
+                                            fontWeight: '800',
+                                            fontSize: '14px',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            whiteSpace: 'nowrap',
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
+                                        }}
                                     >
                                         {isCalculating ? 'Processando...' : '🔄 REORGANIZAR ROTA'}
                                         {pendingRecalcCount > 0 && (
-                                            <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 6px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
+                                            <span style={{ marginLeft: '8px', background: '#ef4444', color: '#fff', borderRadius: '10px', padding: '2px 8px', fontSize: '12px', fontWeight: 700 }}>{pendingRecalcCount}</span>
                                         )}
                                     </button>
-                                    {/* botão Enviar separado: controla habilitação via `podeEnviar` e `isSending` */}
+
                                     <button
-                                        disabled={false}
-                                        onClick={(e) => {
-                                            console.log("🚀 BOTÃO CLICADO! Chamando handleEnviarRota...");
-                                            handleEnviarRota(e);
-                                        }}
+                                        disabled={!(podeEnviar && rotaPronta && motoristaSelecionadoId)}
+                                        onClick={(e) => { handleEnviarRota(e); }}
                                         style={{
-                                            backgroundColor: '#28a745',
+                                            backgroundColor: (podeEnviar && rotaPronta && motoristaSelecionadoId) ? '#16a34a' : '#4b5563',
                                             color: 'white',
-                                            cursor: 'pointer',
-                                            padding: '10px 20px',
-                                            borderRadius: '5px',
+                                            cursor: (podeEnviar && rotaPronta && motoristaSelecionadoId) ? 'pointer' : 'not-allowed',
+                                            padding: '14px 28px',
+                                            borderRadius: '8px',
                                             border: 'none',
                                             fontWeight: 'bold',
-                                            opacity: 1
+                                            fontSize: '14px',
+                                            opacity: (podeEnviar && rotaPronta && motoristaSelecionadoId) ? 1 : 0.6,
+                                            whiteSpace: 'nowrap',
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
                                         }}
                                     >
                                         {isSending ? "ENVIANDO..." : "ENVIAR ROTA"}
                                     </button>
                                 </div>
+
                             </div>
+
                         </div>
+                        {/* --- FIM DO CABEÇALHO --- */}
                         {(!pedidosPendentes || pedidosPendentes.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
                                 {pedidosPendentes?.filter(e => String(e.status || '').trim().toLowerCase() === 'pendente').map(p => {
@@ -3335,7 +3391,7 @@ function App() {
                                 </thead>
                                 <tbody>
                                     {motoristasPendentes?.map(m => (
-                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setSelectedMotorista(mm)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
+                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setMotoristaSelecionadoId(mm.id)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
                                     ))}
                                 </tbody>
                             </table>
@@ -3345,19 +3401,7 @@ function App() {
 
             </main>
 
-            {/* Driver selection modal (componente minimalista) */}
-
-
-            <DriverSelectModal
-                visible={showDriverSelect}
-                onClose={() => { setShowDriverSelect(false); setSelectedMotorista(null); }}
-                frota={frota}
-                onSelect={handleDriverSelect}
-                driverSelectMode={driverSelectMode}
-                setSelectedMotorista={setSelectedMotorista}
-                theme={theme}
-                loading={dispatchLoading}
-            />
+            {/* Driver selection is now inline; modal-based selection removed. */}
         </div>
     );
 
@@ -3376,60 +3420,7 @@ function App() {
 
     // inputStyle and btnStyle moved to top-level to avoid ReferenceError
 
-    // Modal minimalista para seleção de motorista online
-    function DriverSelectModal({ visible, onClose, frota = [], onSelect, theme, loading = false, setSelectedMotorista = null, driverSelectMode = 'dispatch' }) {
-        const [localSelected, setLocalSelected] = useState(null);
-        useEffect(() => { if (!visible) setLocalSelected(null); }, [visible]);
-        if (!visible) return null;
-        const online = (frota || []).filter(m => m.esta_online === true);
-
-        const handleSelect = async (m) => {
-            if (loading) return; // bloqueia se já estiver enviando
-            setLocalSelected(m.id);
-            try { if (setSelectedMotorista) setSelectedMotorista(m); } catch (e) { }
-            try {
-                await onSelect(m);
-            } catch (err) {
-                try { alert('Falha ao executar ação: ' + (err && err.message ? err.message : String(err))); } catch (e) { /* ignore */ }
-            } finally {
-                // garante limpeza do estado local e fecha modal sem travar a UI
-                try { setLocalSelected(null); } catch (e) { }
-                try { onClose(); } catch (e) { }
-            }
-        };
-
-        const actionLabel = driverSelectMode === 'reopt' ? 'REORGANIZAR ROTA' : 'ENVIAR ROTA';
-
-        return (
-            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
-                <div style={{ width: '480px', maxWidth: '94%', background: theme.card, color: theme.textMain, borderRadius: '10px', padding: '16px', boxShadow: theme.shadow }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                        <h3 style={{ margin: 0 }}>Escolha um motorista</h3>
-                        <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#ffffff', opacity: 1 }}>✕</button>
-                    </div>
-                    <div style={{ maxHeight: '58vh', overflow: 'auto' }}>
-                        {online.length === 0 ? (
-                            <div style={{ padding: '12px', color: theme.textLight }}>Nenhum motorista online no momento.</div>
-                        ) : (
-                            online?.map(m => (
-                                <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 8px', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                                    <div style={{ flex: 1 }}>
-                                        <button disabled={loading} onClick={() => handleSelect(m)} style={{ background: 'transparent', border: 'none', textAlign: 'left', cursor: loading ? 'wait' : 'pointer', padding: 0 }}>
-                                            <div style={{ fontWeight: 700, color: '#ffffff' }}>{m.nome}</div>
-                                            <div style={{ fontSize: '12px', color: theme.textLight }}>{m.veiculo || ''}</div>
-                                        </button>
-                                    </div>
-                                    <div>
-                                        <button disabled={loading} onClick={() => handleSelect(m)} style={{ ...btnStyle(theme.primary), width: '140px' }}>{loading ? (driverSelectMode === 'reopt' ? 'Processando...' : 'Enviando...') : actionLabel}</button>
-                                    </div>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                </div>
-            </div>
-        );
-    }
+    // DriverSelectModal removed: selection is now inline via header select
 
 } // <-- Close App component
 
