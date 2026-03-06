@@ -2,35 +2,89 @@
 // Funções matemáticas para cálculo de distância e otimização de rotas
 
 export const limparEnderecoParaMapbox = (enderecoBruto) => {
-    if (!enderecoBruto) return "";
+    if (!enderecoBruto) return '';
 
-    let enderecoLimpo = enderecoBruto;
+    // 1. Remove termos que confundem o Mapbox
+    let texto = String(enderecoBruto)
+        .replace(/ - Palhoça.*/gi, '')
+        .replace(/Palhoça, SC, Brasil/gi, '')
+        .replace(/Florianópolis, SC, Brasil/gi, '')
+        .replace(/São José, SC, Brasil/gi, '');
 
-    // 1. Corrige vírgulas sem espaço (transforma "Jurere,Florianopolis" em "Jurere, Florianopolis")
-    enderecoLimpo = enderecoLimpo.replace(/,/g, ", ");
+    // 2. Limpa espaços extras, vírgulas duplicadas e retorna
+    return texto
+        .replace(/, ,/g, ',')
+        .replace(/,,/g, ',')
+        .replace(/\s+/g, ' ')
+        .replace(/,$/, '')
+        .trim();
+};
 
-    // 2. O BISTURI: Remove apenas "nº", "n°", "n." ou as palavras "numero"/"num"
-    // Isso tira a palavra inteira se existir:
-    enderecoLimpo = enderecoLimpo.replace(/\b(n[úu]mero|num)\b/gi, "");
-    // Isso tira a letra 'n' SOMENTE se estiver colada com o símbolo de grau ou ponto:
-    enderecoLimpo = enderecoLimpo.replace(/n[°º.]/gi, "");
+// Exportada: monta a query curta/limpa enviada ao Mapbox (evita repetir bairro)
+export const montarQueryMapbox = (enderecoBruto) => {
+    if (!enderecoBruto) return '';
 
-    // 3. Remove complementos irrelevantes para o mapa
-    enderecoLimpo = enderecoLimpo.replace(/\b(casa|ap|apto|apartamento|fundos|bloco|bl)\b/gi, "");
+    // 1. Limpeza inicial
+    let d = enderecoBruto.replace(/Rua Avenida/gi, 'Avenida').trim();
+    let textoMinusculo = d.toLowerCase();
 
-    // 4. Remove hífens que confundem a API
-    enderecoLimpo = enderecoLimpo.replace(/-/g, " ");
+    // 2. DETECTOR DE CIDADES (A Peneira de Região)
+    let cidadeDetectada = 'Palhoça'; // Cidade padrão
 
-    // 5. Remove caracteres especiais estranhos, deixando só o que importa
-    enderecoLimpo = enderecoLimpo.replace(/[^\w\s,À-ÿ]/gi, " ");
+    if (textoMinusculo.includes('fpolis') || textoMinusculo.includes('florianopolis') || textoMinusculo.includes('florianópolis')) {
+        cidadeDetectada = 'Florianópolis';
+    } else if (textoMinusculo.includes('sao jose') || textoMinusculo.includes('são josé')) {
+        cidadeDetectada = 'São José';
+    } else if (textoMinusculo.includes('biguacu') || textoMinusculo.includes('biguaçu')) {
+        cidadeDetectada = 'Biguaçu';
+    } else if (textoMinusculo.includes('santo amaro')) {
+        cidadeDetectada = 'Santo Amaro da Imperatriz';
+    }
 
-    // 6. Limpeza final de vírgulas e espaços soltos
-    enderecoLimpo = enderecoLimpo.replace(/,\s*,/g, ","); // Remove vírgula dupla
-    enderecoLimpo = enderecoLimpo.replace(/^\s*,\s*/, ""); // Tira vírgula perdida no começo
-    enderecoLimpo = enderecoLimpo.replace(/\s*,\s*$/, ""); // Tira vírgula perdida no final
+    // 3. SEPARAÇÃO DE RUA E NÚMERO
+    let partes = d.split(/[,\-]/).map(p => p.trim());
+    const rua = partes[0] || '';
+    let numero = '';
 
-    // 7. Limpa os espaços duplos
-    return enderecoLimpo.replace(/\s+/g, " ").trim();
+    if (partes[1] && /\d/.test(partes[1])) {
+        numero = partes[1].split(' ')[0];
+    }
+
+    // 4. MONTAGEM DA QUERY (Sempre com o estado SC e Brasil para não ter erro)
+    const queryFinal = `${rua}, ${numero}, ${cidadeDetectada}, SC, Brasil`
+        .replace(/ ,/g, ',')
+        .replace(/,,/g, ',')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    console.log(`🎯 [GEO REGIONAL] Cidade: ${cidadeDetectada} | Query: ${queryFinal}`);
+    return queryFinal;
+};
+
+// Formata um endereço para busca estrita no Mapbox: Rua+Número, Cidade, Estado, Brasil
+export const formatarEnderecoParaBusca = (enderecoBruto) => {
+    if (!enderecoBruto) return '';
+
+    // 1. Remove "Rua Avenida" (deixa só um ou outro se vierem juntos)
+    let d = enderecoBruto.replace(/Rua Avenida/gi, 'Avenida');
+
+    // 2. Divide pelas vírgulas ou traços
+    let partes = d.split(/[,\-]/).map(p => p.trim()).filter(Boolean);
+
+    // 3. Pegamos a PRIMEIRA parte (Rua + Número) e ignoramos o resto (Bairro)
+    // Se o endereço for "Avenida Pedra Branca, 95, Pedra Branca",
+    // partes[0] será "Avenida Pedra Branca" e partes[1] será "95".
+    const rua = partes[0] || '';
+    const numero = partes[1] || '';
+
+    const ruaComNumero = `${rua} ${numero}`.trim();
+    const cidade = "Palhoça";
+    const estado = "SC";
+
+    // A query enviada tem que ser SÓ isso:
+    const queryFinal = `${ruaComNumero}, ${cidade}, ${estado}, Brasil`.replace(/\s+,/g, ',').replace(/\s+/g, ' ').trim();
+
+    return queryFinal;
 };
 
 /**
@@ -231,8 +285,20 @@ function cleanAndAssembleAddressForCity(rawAddress, cityName) {
         street = street.replace(/,\s*$/, '').trim();
     }
 
+    // Remover possíveis segmentos de bairro que possam ter vindo junto ao logradouro
+    try { street = removeNeighborhoodSegments(street); } catch (e) { /* ignore */ }
+
     const assembled = number ? `${street}, ${number} - ${cityName}, SC, Brasil` : `${street} - ${cityName}, SC, Brasil`;
     return assembled;
+}
+
+// Remove segmentos que claramente se referem a bairro/condomínio para evitar ambiguidade
+function removeNeighborhoodSegments(raw) {
+    if (!raw) return raw;
+    const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
+    const blacklist = /\b(bairro|bairro de|jd|jardim|vil(a)?|loteamento|condom[ií]nio|conjunto|setor|quadra)\b/i;
+    const filtered = parts.filter(p => !blacklist.test(p));
+    return filtered.join(', ');
 }
 
 // Gera variações simplificadas do endereço para tentativa fuzzy
@@ -389,6 +455,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             }
         } catch (e) { /* ignore aggressive rule errors */ }
 
+        // Usamos a função exportada `montarQueryMapbox` definida no escopo global acima
+
         // Default operacional amplo
         const defaultBounds = {
             south: -27.900,
@@ -413,7 +481,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
 
             // 🧹 1. Limpar e encodar o endereço UMA VEZ com segurança
-            const queryLimpa = limparEnderecoParaMapbox(input);
+            // Usar montarQueryMapbox para evitar repetir bairro e montar query concisa
+            const queryLimpa = montarQueryMapbox(address);
 
             // 🛡️ Trava de segurança contra Erro 422: se sobrar vazio, nem envia
             if (!queryLimpa || queryLimpa.trim() === "") {
@@ -431,7 +500,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             console.log('[GEO v33] Cidade detectada (FORÇADA):', strictCity, '| Query Limpa:', queryLimpa, '| bbox:', bbox);
 
             // 1) Tentar types=address
-            const urlAddr = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedQuery}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=3`;
+            // Use limit=1 to return the single most probable result (address precision)
+            const urlAddr = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedQuery}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
             console.log('[GEO v33] URL (address):', urlAddr);
             const resp1 = await fetch(urlAddr, { headers: { 'Accept': 'application/json' } });
             if (resp1 && resp1.ok) {
@@ -529,6 +599,19 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             .replace(/\s+/g, ' ')
             .trim();
 
+        // Remover segmentos de bairro/condomínio da query para evitar ambiguidade
+        try {
+            addressClean = removeNeighborhoodSegments(addressClean);
+        } catch (e) { /* ignore */ }
+
+        // Garantir formato: logradouro + número + cidade + estado + Brasil
+        try {
+            if (!strictCity) {
+                const assembled = cleanAndAssembleAddressForCity(addressClean, 'Palhoça');
+                if (assembled) addressClean = assembled;
+            }
+        } catch (e) { /* ignore */ }
+
         // Remover tokens de unidade/prédio e normalizar espaços antes de enviar ao Mapbox
         addressClean = addressClean.replace(/\b(n[º°]?|n\.?|unidade|apt[o]?|apto|bloco|torre|condom[ií]nio|cond\.?|andar|apartamento|ap)\b/ig, '').replace(/\s{2,}/g, ' ').trim();
 
@@ -609,8 +692,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             } catch (e) { /* ignore cep requery issues */ }
         }
 
-        // proximity: usar proximity param se fornecido, senão central Florianópolis
-        let proximityParam = '-48.54,-27.59';
+        // proximity: usar proximity param se fornecido, senão centralizar em Palhoça (prioridade local)
+        let proximityParam = '-48.67,-27.64';
         try {
             if (proximity && typeof proximity === 'object' && proximity.lat != null && proximity.lng != null) {
                 proximityParam = `${Number(proximity.lng)},${Number(proximity.lat)}`;
@@ -803,7 +886,7 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
         // 3. Parâmetros de Alta Precisão
         const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(query))}.json`);
         url.searchParams.append('access_token', MAPBOX_TOKEN);
-        url.searchParams.append('proximity', '-48.61,-27.59'); // Foco na sua região
+        url.searchParams.append('proximity', '-48.67,-27.64'); // Foco na sua região (Palhoça)
         url.searchParams.append('country', 'br');
         url.searchParams.append('types', 'address,poi');
         url.searchParams.append('language', 'pt');
@@ -925,6 +1008,11 @@ export const obterCoordenadasSeguras = async (endereco) => {
         console.error('❌ Erro no wrapper de coordenadas:', error);
         return null;
     }
+};
+
+// Compatibilidade: wrapper simples com nome solicitado "buscarCoordenadas"
+export const buscarCoordenadas = async (endereco) => {
+    return await obterCoordenadasSeguras(endereco);
 };
 
 /**

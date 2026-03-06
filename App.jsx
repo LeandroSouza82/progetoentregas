@@ -12,24 +12,41 @@ export default function App() {
             .from('entregas')
             .select('*')
             .order('ordem_logistica', { ascending: true });
-        if (!error) setEntregas(data);
+        if (error) {
+            console.error('Erro ao carregar entregas:', error);
+            setEntregas([]);
+            return;
+        }
+        // Garantir que a lista nunca seja null/undefined
+        setEntregas(data || []);
     };
 
     useEffect(() => { fetchEntregas(); }, []);
 
     // Escuta em tempo real no COMPONENTE PAI (App.jsx)
     useEffect(() => {
-        const channel = supabase.channel('global-entregas')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, (payload) => {
-                console.log('Nova entrega recebida no App:', payload.new);
-                setEntregas(prev => {
-                    const current = Array.isArray(prev) ? prev : [];
-                    const exists = current.some(e => e && e.id === payload.new.id);
-                    if (exists) return current;
-                    return [payload.new, ...current];
-                });
-            })
-            .subscribe();
+        const channel = supabase.channel('global-entregas');
+
+        channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, (payload) => {
+            console.log('Nova entrega recebida no App:', payload.new);
+            setEntregas(prev => {
+                const current = Array.isArray(prev) ? prev : [];
+                const exists = current.some(e => e && e.id === payload.new.id);
+                if (exists) return current;
+                return [payload.new, ...current];
+            });
+        });
+
+        // UPDATE: merge the updated record into the existing list to avoid disappearing pins
+        channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, (payload) => {
+            console.log('🔄 Mudança detectada!', payload.new);
+            setEntregas(listaAtual => {
+                if (!listaAtual) return [payload.new];
+                return listaAtual.map(pino => pino.id === payload.new.id ? { ...pino, ...payload.new } : pino);
+            });
+        });
+
+        channel.subscribe();
 
         return () => { try { supabase.removeChannel(channel); } catch (e) { try { channel.unsubscribe && channel.unsubscribe(); } catch (e2) { } } };
     }, []);

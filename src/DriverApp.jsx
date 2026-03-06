@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import MapaLogistica from './MapaLogistica';
 import { supabase, buscarTodasEntregas, subscribeToTable, HAS_SUPABASE_CREDENTIALS } from './supabaseClient';
+import { mergeRecordIntoArray } from './entregasUtils';
 
 export default function DriverApp() {
     const [entregas, setEntregas] = useState([]);
@@ -49,7 +50,18 @@ export default function DriverApp() {
         const subs = [];
         try {
             if (typeof subscribeToTable === 'function') {
-                const unsubEnt = subscribeToTable('entregas', ({ data }) => { if (Array.isArray(data)) setEntregas(data); });
+                const unsubEnt = subscribeToTable('entregas', (payload) => {
+                    try {
+                        const data = payload && payload.data ? payload.data : payload;
+                        if (Array.isArray(data)) {
+                            setEntregas(data);
+                            return;
+                        }
+                        // attempt to handle single-record realtime payloads
+                        const rec = (data && (data.new || data.record)) || data;
+                        if (rec && rec.id) setEntregas(prev => mergeRecordIntoArray(prev, rec));
+                    } catch (e) { /* ignore */ }
+                });
                 const unsubFrota = subscribeToTable('motoristas', ({ data }) => { if (Array.isArray(data)) setFrota(data); });
                 if (typeof unsubEnt === 'function') subs.push(unsubEnt);
                 if (typeof unsubFrota === 'function') subs.push(unsubFrota);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient'; // Usar o Supabase real do projeto
 import MapaLogistica from '../../src/MapaLogistica';
+import { mergeRecordIntoArray } from '../../src/entregasUtils';
 import { enviarNotificacaoSW, solicitarPermissaoNotificacao, capturarESalvarPushToken } from './notificationHelper';
 // keep imports minimal for map rendering via MapaLogistica
 
@@ -164,10 +165,22 @@ function InternalMobileApp() {
                         });
                     }
 
-                    console.log('🔄 Recarregando lista completa do banco...');
+                    console.log('🔄 Tratando evento realtime (tentativa de merge local quando aplicável)');
                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-                    // 🔥 FORÇA REFRESH COMPLETO: Busca do banco + atualiza timestamp
+                    // Preferir merge local para UPDATEs para evitar reloading completo
+                    try {
+                        if (payload.event === 'UPDATE' && payload.new) {
+                            const rec = payload.new;
+                            // merge into local entregas state instead of full reload
+                            try { setEntregas(prev => mergeRecordIntoArray(prev, rec)); } catch (e) { }
+                            setLastUpdateTimestamp(Date.now());
+                            return;
+                        }
+                    } catch (e) { /* ignore */ }
+
+                    // Fallback: recarrega a lista completa para inserts/deletes ou se merge falhar
+                    console.log('🔄 Recarregando lista completa do banco (fallback)...');
                     carregarRota(true);
                     setLastUpdateTimestamp(Date.now());
                 }
@@ -411,8 +424,9 @@ function InternalMobileApp() {
         }
     };
 
-    // Função para Finalizar Entrega
-    const finalizarEntrega = async (id) => {
+    // Função para Finalizar Entrega + Envio de relatório via WhatsApp
+    const finalizarEntrega = async (pedido) => {
+        const id = pedido && pedido.id ? pedido.id : pedido;
         if (!window.confirm("Confirmar entrega realizada?")) return;
 
         // IMPORTANTE: Status 'entregue' para o pino ficar verde instantaneamente no Dashboard
@@ -422,9 +436,27 @@ function InternalMobileApp() {
             .eq('id', id);
 
         if (!error) {
-            // Atualizar lista local
-            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'entregue' } : item));
-            alert("✅ Entrega confirmada! O pino no dashboard ficará verde agora.");
+            alert("\u2705 Entrega confirmada! O pino no dashboard ficará verde agora.");
+
+            // 📲 RELATÓRIO VIA WHATSAPP: envia confirmação ao gestor
+            try {
+                const nomeCliente = String((pedido && pedido.cliente) || '').trim();
+
+                const nomeMotorista = (motorista && motorista.nome) || 'Motorista';
+                const recebedor = (pedido && pedido.recebedor) || 'MORADOR';
+                const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                const enderecoFinal = String((pedido && pedido.endereco) || '').trim();
+
+                const textoWhatsApp =
+                    `Status: Sucesso\n` +
+                    `Recebido por: ${recebedor}\n` +
+                    `Cliente: ${nomeCliente} | Endere\u00e7o: ${enderecoFinal} | Motorista: ${nomeMotorista} | Hora: ${hora}`;
+
+                const urlWhatsApp = `https://wa.me/5548996525008?text=${encodeURIComponent(textoWhatsApp)}`;
+                window.open(urlWhatsApp, '_blank');
+            } catch (waErr) {
+                console.warn('finalizarEntrega: falha ao abrir WhatsApp', waErr);
+            }
 
             // Se for a última entrega, o motorista volta a ficar disponível se desejar
             try {
@@ -433,7 +465,7 @@ function InternalMobileApp() {
                 }
             } catch (err) { /* ignore */ }
         } else {
-            alert("Erro ao confirmar entrega. Verifique sua conexão.");
+            alert("Erro ao confirmar entrega. Verifique sua conex\u00e3o.");
         }
     };
 
@@ -453,7 +485,8 @@ function InternalMobileApp() {
             .eq('id', id);
 
         if (!error) {
-            setEntregas(prev => prev.map(item => item.id === id ? { ...item, status: 'falha', motivo_nao_entrega: motivo, recebedor: null, tipo_recebedor: null } : item));
+            // Deixe o Realtime cuidar da atualização local para evitar remover/zerar arrays
+            // (Evita efeitos colaterais como pinos sumindo). O alerta informa o motorista.
             alert("❌ Falha registrada com sucesso. O gestor verá o pino vermelho.");
         } else {
             alert("Erro ao reportar falha: " + error.message);
@@ -716,7 +749,7 @@ function InternalMobileApp() {
 
                                     {/* BOTÃO DE FINALIZAR */}
                                     <button
-                                        onClick={() => finalizarEntrega(tarefaAtual.id)}
+                                        onClick={() => finalizarEntrega(tarefaAtual)}
                                         style={{
                                             width: '100%',
                                             padding: '20px',
@@ -740,21 +773,23 @@ function InternalMobileApp() {
                                     <button
                                         onClick={() => reportarFalha(tarefaAtual.id)}
                                         style={{
+                                            backgroundColor: '#9333ea',
+                                            color: 'white',
+                                            border: '3px solid #000',
+                                            borderRadius: '8px',
+                                            fontWeight: '900',
+                                            fontSize: '11px',
+                                            padding: '8px 10px',
+                                            whiteSpace: 'nowrap',
                                             width: '100%',
-                                            padding: '15px',
-                                            borderRadius: '18px',
-                                            border: 'none',
-                                            background: '#ef4444', // Vermelho alerta
-                                            color: '#fff',
-                                            fontWeight: '700',
-                                            fontSize: '16px',
                                             cursor: 'pointer',
-                                            borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                            borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                            transition: 'background 0.3s'
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '6px'
                                         }}
                                     >
-                                        ❌ FALHA / NÃO ENTREGUE
+                                        TESTE FALHA
                                     </button>
                                 </div>
                             </div>
