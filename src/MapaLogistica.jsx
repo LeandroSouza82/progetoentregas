@@ -45,42 +45,129 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // 1. Mudança de Array para Objeto para travar o estado por ID
     const [localEntregas, setLocalEntregas] = useState({});
 
+    // Atualiza status local sem remover o registro (mantém o pino visível)
+    const atualizarStatusLocal = (id, novoStatus, dadosAdicionais = {}) => {
+        setLocalEntregas(prev => {
+            const copy = { ...(prev || {}) };
+            const existing = copy[id] || {};
+            copy[id] = {
+                ...existing,
+                id,
+                status: String(novoStatus || existing.status || '').toLowerCase(),
+                ...dadosAdicionais
+            };
+            return copy;
+        });
+    };
+
     // control visual clearing of pins (does not delete from DB)
     const [showPins, setShowPins] = useState(true);
     useEffect(() => setShowPins(!clearMap), [clearMap]);
 
     // subscribe to Supabase realtime updates for `entregas` using object-by-id state
     useEffect(() => {
-        const channel = supabase
-            .channel('realtime-entregas-final')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas' }, (payload) => {
-                try {
-                    const { eventType, new: newRec, old: oldRec } = payload;
-                    const rec = newRec || oldRec;
-                    if (!rec) return;
+        const channel = supabase.channel('realtime-entregas-final');
 
-                    const status = String(rec.status || '').toLowerCase();
-                    const deveSair = status.includes('conclu') || status.includes('falha');
+        // INSERT: adiciona o novo pino (se válido)
+        channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'entregas' }, (payload) => {
+            try {
+                const rec = payload.new;
+                if (!rec) return;
+                const marker = normalizeEntregaToMarker(rec);
+                // atualiza localEntregas também
+                setLocalEntregas(prev => ({ ...(prev || {}), [rec.id]: { ...(prev && prev[rec.id] ? prev[rec.id] : {}), ...rec } }));
+                if (!marker) return;
+                setEntregaMarkersState(prev => {
+                    if (prev.findIndex(i => i.id === marker.id) !== -1) return prev;
+                    return [...prev, marker];
+                });
+            } catch (e) { /* ignore */ }
+        });
 
-                    setLocalEntregas(prev => {
-                        const copy = { ...(prev || {}) };
-                        if (eventType === 'DELETE' || deveSair) {
-                            delete copy[rec.id];
-                            return copy;
-                        }
-                        // Adiciona ou atualiza sem tocar nos outros IDs
-                        copy[rec.id] = rec;
-                        return copy;
-                    });
-                } catch (e) { /* ignore */ }
-            })
-            .subscribe();
+        // UPDATE: atualiza somente o item alterado mantendo a ordem
+        channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, (payload) => {
+            try {
+                const rec = payload.new;
+                if (!rec) return;
+                // atualiza localEntregas também (merge)
+                setLocalEntregas(prev => {
+                    const copy = { ...(prev || {}) };
+                    copy[rec.id] = { ...(copy[rec.id] || {}), ...rec };
+                    return copy;
+                });
+
+                setEntregaMarkersState(current => {
+                    const idx = current.findIndex(item => item.id === rec.id);
+                    if (idx !== -1) {
+                        const novaLista = [...current];
+                        const existing = novaLista[idx] || {};
+                        const atualizado = normalizeEntregaToMarker({ ...existing, ...rec }) || { ...existing, ...rec };
+                        novaLista[idx] = { ...novaLista[idx], ...atualizado };
+                        return novaLista;
+                    }
+                    return current;
+                });
+            } catch (e) { /* ignore */ }
+        });
+
+        // DELETE: remove o pino
+        channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'entregas' }, (payload) => {
+            try {
+                const rec = payload.old;
+                if (!rec) return;
+                setLocalEntregas(prev => {
+                    const copy = { ...(prev || {}) };
+                    delete copy[rec.id];
+                    return copy;
+                });
+                setEntregaMarkersState(prev => prev.filter(i => i.id !== rec.id));
+            } catch (e) { /* ignore */ }
+        });
+
+        channel.subscribe();
 
         return () => { try { supabase.removeChannel(channel); } catch (e) { try { channel.unsubscribe && channel.unsubscribe(); } catch (e2) { } } };
     }, []);
 
     // 2. Converter para Array para o resto do código não quebrar (mantemos localEntregas para realtime)
     const entregasArray = useMemo(() => Object.values(localEntregas || {}), [localEntregas]);
+
+    // Estado explícito dos marcadores para permitir updates incrementais (UPDATE em realtime)
+    const [entregaMarkersState, setEntregaMarkersState] = useState([]);
+
+    // Helper para normalizar um registro de entrega em marcador
+    const normalizeEntregaToMarker = (e) => {
+        try {
+            if (!e || e.id == null) return null;
+            const lat = parseFloat(e.lat);
+            const lng = parseFloat(e.lng);
+            if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
+            const allowedTipos = new Set(['entrega', 'recolha', 'outros', 'outro']);
+            const tipoRaw = String(e.tipo || '').trim().toLowerCase();
+            const tipoFinal = allowedTipos.has(tipoRaw) ? tipoRaw : 'outros';
+            return {
+                ...e,
+                id: e.id,
+                lat,
+                lng,
+                endereco: e.endereco || e.address || '',
+                status: String(e.status || 'pendente').toLowerCase(),
+                tipo: tipoFinal
+            };
+        } catch (err) { return null; }
+    };
+
+    // Inicializa/normaliza o estado de marcadores a partir da prop `entregas`
+    useEffect(() => {
+        try {
+            if (!entregas || !Array.isArray(entregas)) return;
+            const list = entregas
+                .filter(e => String(e.status || '').trim().toLowerCase() !== 'arquivado')
+                .map(normalizeEntregaToMarker)
+                .filter(Boolean);
+            setEntregaMarkersState(list);
+        } catch (e) { /* ignore */ }
+    }, [entregas]);
 
     // INTERVENÇÃO: sincroniza a prop `entregas` recebida do App com o estado local
     useEffect(() => {
@@ -100,49 +187,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
     }, [entregas]);
 
-    // build marker lists
-    // Memoize markers to avoid re-computation each render
-    // Use `entregas` prop as authoritative source for pins (App.jsx passes formatted list)
-    const entregaMarkers = React.useMemo(() => {
-        try {
-            const allowedTipos = new Set(['entrega', 'recolha', 'outros', 'outro']);
-
-            // Pegamos todos os dados brutos e filtramos apenas o que foi 'deletado/arquivado'
-            const list = (entregas || []).filter(e => {
-                const s = String(e.status || '').trim().toLowerCase();
-                // GARANTIA: Mantém visível Pendente, Em Rota, Concluído e Falha.
-                // Só remove se o gestor tiver apertado o botão que limpa (muda para arquivado)
-                return s !== 'arquivado';
-            });
-
-            console.log("📍 [MEMO] Processando marcadores ativos:", list.length);
-
-            return list.map(e => {
-                const lat = parseFloat(e.lat);
-                const lng = parseFloat(e.lng);
-
-                // Validação rigorosa de coordenadas para não quebrar o mapa
-                if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return null;
-
-                const tipoRaw = String(e.tipo || '').trim().toLowerCase();
-                const tipoFinal = allowedTipos.has(tipoRaw) ? tipoRaw : 'outros';
-
-                return {
-                    ...e, // Mantém todas as propriedades originais do banco
-                    id: e.id,
-                    lat,
-                    lng,
-                    endereco: e.endereco || e.address || '',
-                    status: String(e.status || 'pendente').toLowerCase(), // Normaliza status
-                    tipo: tipoFinal
-                };
-            }).filter(Boolean); // Remove os nulos (sem coordenadas)
-        } catch (err) {
-            console.error("❌ Erro no useMemo entregaMarkers:", err);
-            return [];
-        }
-        // IMPORTANTE: Removi o motoristaDaRota da dependência para os pinos não sumirem ao trocar de motorista
-    }, [entregas]);
+    // Usa o estado de marcadores gerenciado localmente (inicializado pela prop `entregas`)
+    const entregaMarkers = entregaMarkersState;
 
     // Show any passed fleet items that have valid SC coords and are online & recent
     // Nota: atualização síncrona do cache será feita dentro do useMemo de frotaMarkers
@@ -646,6 +692,17 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
         : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
 
+    // 📍 CORREÇÃO MANUAL: atualiza a coordenada do pino no banco após arrastar
+    const handleArrastarPino = async (e, id) => {
+        try {
+            const { lat, lng } = e.target.getLatLng();
+            await supabase.from('entregas').update({ lat, lng }).eq('id', id);
+            console.log(`📍 Pino ${id} ajustado manualmente para`, { lat, lng });
+        } catch (err) {
+            console.warn('handleArrastarPino: erro ao atualizar coordenada', err);
+        }
+    };
+
     const handleCenterClick = () => {
         try {
             const map = mapRef.current;
@@ -685,48 +742,71 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     zoomOffset={token ? -1 : 0}
                 />
 
-                {/* Marcadores de Entregas (hover -> popup) */}
+                {/* Marcadores de Entregas - HISTÓRICO COMPLETO NO MAPA */}
                 {showPins && entregaMarkers.map((p, idx) => {
-                    // LÓGICA DE PRIORIDADE PARA O NÚMERO DO PINO
-                    let numeroExibido = idx + 1;
+                    const numeroMapa = p.ordem_logistica || idx + 1;
+                    const statusLimpo = String(p.status || '').trim().toLowerCase();
 
-                    // 1. Prioridade Máxima: A rota que acabou de ser calculada pelo botão Reorganizar
-                    if (typeof rotaOrdenadaState !== 'undefined' && rotaOrdenadaState?.length > 0) {
-                        const foundInRota = rotaOrdenadaState.findIndex(r => r.id === p.id);
-                        if (foundInRota !== -1) {
-                            numeroExibido = foundInRota + 1;
-                        }
-                    }
-                    // 2. Segunda Prioridade: A ordem que já está salva no banco (caso não tenha reorganizado agora)
-                    else if (p.ordem !== null && p.ordem !== undefined && p.ordem !== 0) {
-                        numeroExibido = p.ordem;
-                    }
+                    // Função para formatar o horário de Brasília (São Paulo)
+                    const formatarHorarioBrasil = (dataString) => {
+                        if (!dataString) return null;
+                        try {
+                            const data = new Date(dataString);
+                            return data.toLocaleTimeString('pt-BR', {
+                                timeZone: 'America/Sao_Paulo',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            });
+                        } catch (e) { return null; }
+                    };
+
+                    // Só busca o horário se já foi concluído ou se deu falha
+                    const horarioFinal = (statusLimpo === 'entregue' || statusLimpo === 'falha')
+                        ? formatarHorarioBrasil(p.horario_conclusao || p.data_conclusao)
+                        : null;
 
                     return (
                         <Marker
-                            key={`entrega-${p.id}`}
+                            key={`marker-${p.id}`}
                             position={[parseFloat(p.lat), parseFloat(p.lng)]}
                             icon={createCustomPinIcon(
                                 getMarkerIcon(p.status, p.tipo),
-                                numeroExibido, // O número agora é dinâmico e inteligente
+                                numeroMapa,
                                 p.status
                             )}
+                            draggable={statusLimpo === 'pendente'}
                             eventHandlers={{
                                 mouseover: (e) => e.target.openPopup(),
-                                mouseout: (e) => e.target.closePopup()
+                                mouseout: (e) => e.target.closePopup(),
+                                dragend: (e) => handleArrastarPino(e, p.id)
                             }}
                         >
-                            <Popup className="delivery-popup custom-leaflet-popup" closeButton={false} autoPan={false}>
-                                <div style={{ fontFamily: 'Arial', minWidth: 140 }}>
-                                    <strong>{p.cliente || 'Cliente não identificado'}</strong>
-                                    <div style={{ margin: '5px 0' }}>📍 {p.endereco}</div>
-                                    <div>
-                                        {p.status === 'entregue'
-                                            ? 'Status: ✅ Concluído'
-                                            : (p.status === 'falha' || p.status === 'cancelado')
-                                                ? 'Status: ❌ Falha'
-                                                : 'Status: ⏳ Em rota'
+                            <Popup className="custom-leaflet-popup" closeButton={false} autoPan={false}>
+                                <div style={{ fontFamily: 'sans-serif', minWidth: '160px' }}>
+                                    <strong style={{ fontSize: '14px', display: 'block', marginBottom: '4px' }}>{p.cliente || 'Pedido'}</strong>
+
+                                    <div style={{ fontSize: '12px', marginBottom: '2px' }}>
+                                        <b>Status:</b> {
+                                            statusLimpo === 'entregue' ? '✅ Entregue' :
+                                                statusLimpo === 'falha' ? '❌ Falha' : '⏳ Em rota'
                                         }
+                                    </div>
+
+                                    {/* O HORÁRIO SÓ APARECE AQUI SE EXISTIR (FINALIZADOS) */}
+                                    {horarioFinal && (
+                                        <div style={{ fontSize: '11px', color: '#444', fontWeight: 'bold' }}>
+                                            🕒 Finalizado às: {horarioFinal}
+                                        </div>
+                                    )}
+
+                                    {statusLimpo === 'falha' && p.motivo_nao_entrega && (
+                                        <div style={{ fontSize: '11px', color: '#d32f2f', marginTop: '4px' }}>
+                                            <b>Motivo:</b> {p.motivo_nao_entrega}
+                                        </div>
+                                    )}
+
+                                    <div style={{ fontSize: '10px', color: '#888', marginTop: '6px', borderTop: '1px solid #eee', paddingTop: '4px' }}>
+                                        📍 {p.endereco}
                                     </div>
                                 </div>
                             </Popup>

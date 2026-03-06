@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import supabase from './supabaseClient';
+import { mergeRecordIntoArray, removeRecordById } from './entregasUtils';
 
 export default function AppMotorista() {
   const [entregas, setEntregas] = useState([]);
@@ -51,24 +52,18 @@ export default function AppMotorista() {
         channel = supabase.channel(`motorista-${motoristaId}-entregas`)
           .on('postgres_changes', { event: '*', schema: 'public', table: 'entregas', filter: `motorista_id=eq.${motoristaId}` }, (payload) => {
             try {
-              const rec = payload.record;
+              const rec = payload.record || payload.new || payload.old;
               if (!rec) return;
               if (payload.event === 'DELETE') {
-                setEntregas(prev => prev.filter(e => e.id !== rec.id));
+                setEntregas(prev => removeRecordById(prev, rec.id));
                 return;
               }
-              // Only keep deliveries with status 'em_rota'
-              if (rec.status === 'em_rota') {
-                setEntregas(prev => {
-                  const exists = prev.find(p => p.id === rec.id);
-                  let next;
-                  if (exists) next = prev.map(p => p.id === rec.id ? { ...p, ...rec } : p);
-                  else next = [...prev, rec];
-                  // ensure ordering by ordem_logistica if available
-                  return next.slice().sort((a, b) => (Number(a.ordem_logistica) || 0) - (Number(b.ordem_logistica) || 0));
-                });
+              // For updates/inserts: when status is 'em_rota' merge; otherwise remove
+              const status = String(rec.status || '').toLowerCase();
+              if (status === 'em_rota') {
+                setEntregas(prev => mergeRecordIntoArray(prev, rec));
               } else {
-                setEntregas(prev => prev.filter(e => e.id !== rec.id));
+                setEntregas(prev => removeRecordById(prev, rec.id));
               }
             } catch (e) { console.warn('Erro no handler realtime:', e); }
           })
@@ -92,9 +87,6 @@ export default function AppMotorista() {
     try {
       const parsed = id;
       if (!parsed) return;
-      // Optimistic remove: immediately update UI to avoid waiting for network
-      setEntregas(prev => prev.filter(e => e.id !== parsed));
-
       const { error } = await supabase.from('entregas').update({ status: 'concluido' }).eq('id', parsed);
       if (error) {
         console.warn('Erro concluindo entrega (revertendo otimista):', error);

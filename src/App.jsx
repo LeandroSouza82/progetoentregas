@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import supabase, { subscribeToTable } from './supabaseClient';
 import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
-import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras } from './geoUtils';
+import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montarQueryMapbox, buscarCoordenadas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 
 // Safety: enable Supabase-backed flows during local debugging
@@ -73,122 +73,31 @@ export const baixarRelatorioCSV = (entregas) => {
             dataFormatada,
             horarioFormatado,
             entrega.recebedor || "",
-            entrega.motivo_nao_entrega || "",
-            entrega.observacoes || ""
+            entrega.motivo || "",
+            entrega.obs || ""
         ];
 
+        // Retorna a linha CSV, escapando campos com aspas duplas
         return dadosLinha.map(campo => {
-            const textoLimpo = String(campo == null ? '' : campo).replace(/"/g, '""').replace(/\n/g, ' ');
-            return `"${textoLimpo}"`;
+            const val = String(campo || '').replace(/"/g, '""');
+            return `"${val}"`;
         }).join(';');
     });
 
-    const csvContent = cabecalhos.join(';') + "\n" + linhas.join("\n");
-    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    // Monta o CSV final (BOM + cabeçalho + linhas)
+    const csv = '\uFEFF' + [cabecalhos.join(';'), ...linhas].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    const dataHoje = new Date().toLocaleDateString('pt-BR').replace(/\//g, '-');
-    link.setAttribute('download', `Relatorio_Entregas_${dataHoje}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-};
 
-// Reusable inline styles used across the app (moved to top to avoid hoisting issues)
-const inputStyle = { width: '100%', padding: '15px', borderRadius: '8px', border: '1px solid #cbd5e1', outline: 'none', fontSize: '14px' };
-const btnStyle = (bg) => ({ width: '100%', padding: '15px', borderRadius: '8px', border: 'none', background: bg, color: '#fff', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' });
-
-// Otimiza rota usando algoritmo de vizinho mais próximo com "Motorista é a Bússola".
-// - Usa GPS atual do motorista quando `motoristaId` for informado
-// - Filtra apenas entregas com status 'pendente' ou 'em_rota'
-// - Ordena por vizinho mais próximo usando Haversine
-// - Chama `getRouteGeometry` (Mapbox) para obter polyline seguindo ruas
-// - Persiste `ordem_logistica` e `rota_polyline` quando `motoristaId` for fornecido
-async function otimizarRota(origin, lista, motoristaId = null) {
-    try {
-        if (!Array.isArray(lista)) return [];
-
-        // filter to only pending or in-route
-        const allowed = (p) => {
-            try { const s = String(p.status || '').trim().toLowerCase(); return s === 'pendente' || s === 'em_rota'; } catch (e) { return false; }
-        };
-
-        const remaining = (lista || []).filter(p => p && p.lat != null && p.lng != null && allowed(p)).map(p => ({ ...p, lat: Number(p.lat), lng: Number(p.lng) }));
-        if (!remaining.length) return [];
-
-        // determine starting point: prefer motorista current GPS
-        let cur = null;
-        if (motoristaId != null) {
-            try {
-                const { data: mdata, error: merr } = await supabase.from('motoristas').select('lat,lng,esta_online').eq('id', motoristaId).limit(1);
-                if (!merr && mdata && mdata[0] && mdata[0].lat != null && mdata[0].lng != null) {
-                    const m = mdata[0];
-                    // respect online flag when available
-                    if (typeof m.esta_online === 'undefined' || m.esta_online === true) {
-                        cur = { lat: Number(m.lat), lng: Number(m.lng) };
-                    }
-                }
-            } catch (e) { /* ignore, fallback to origin */ }
-        }
-
-        if (!cur) {
-            if (origin && origin.lat != null && origin.lng != null) cur = { lat: Number(origin.lat), lng: Number(origin.lng) };
-            else cur = { lat: remaining[0].lat, lng: remaining[0].lng };
-        }
-
-        // greedy nearest-neighbor (Haversine)
-        const ordered = [];
-        const pool = remaining.slice();
-        while (pool.length) {
-            let bestIdx = 0;
-            let bestDist = Infinity;
-            for (let i = 0; i < pool.length; i++) {
-                try {
-                    const d = haversineKm(cur, { lat: Number(pool[i].lat), lng: Number(pool[i].lng) });
-                    if (d < bestDist) { bestDist = d; bestIdx = i; }
-                } catch (e) { /* ignore bad point */ }
-            }
-            const next = pool.splice(bestIdx, 1)[0];
-            ordered.push(next);
-            cur = { lat: Number(next.lat), lng: Number(next.lng) };
-        }
-
-        // Request Mapbox route geometry (snap-to-roads / street-following)
-        try {
-            const routeGeo = await getRouteGeometry(origin || cur, ordered || [], { includeReturnTo: null });
-            if (routeGeo && routeGeo.geometry) {
-                // persist runtime polyline for motorista if provided
-                if (motoristaId != null) {
-                    try {
-                        const geomStr = JSON.stringify(routeGeo.geometry);
-                        await supabase.from('entregas').update({ rota_polyline: geomStr }).eq('motorista_id', String(motoristaId));
-                    } catch (e) { /* non-fatal */ }
-                }
-            }
-        } catch (err) {
-            // ignore Mapbox failures; return straight ordered list
-        }
-
-        // Persist ordem_logistica updates (non-blocking but attempt it)
-        if (motoristaId != null) {
-            try {
-                const promises = ordered.map((item, i) => {
-                    const id = item && item.id;
-                    if (id == null) return Promise.resolve(null);
-                    // set ordem_logistica, status and motorista_id (motorista_id is TEXT in DB)
-                    return supabase.from('entregas').update({ ordem_logistica: Number(i + 1), status: 'em_rota', motorista_id: String(motoristaId) }).eq('id', Number(id));
-                });
-                await Promise.all(promises);
-            } catch (e) { console.error('otimizarRota: falha ao persistir ordem_logistica', e); }
-        }
-
-        return ordered;
-    } catch (e) {
-        console.warn('otimizarRota erro inesperado', e);
-        return Array.isArray(lista) ? lista.slice().filter(p => p && p.lat != null && p.lng != null) : [];
-    }
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `relatorio_entregas_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 100);
 }
 
 async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = null) {
@@ -300,6 +209,14 @@ function App() {
     // Estados do Supabase
     const [entregas, setEntregas] = useState([]);
     const [pedidosPendentes, setPedidosPendentes] = useState([]);
+    // compat shim: estado para seleções de vagas (se o projeto usar esse nome em outros trechos)
+    const [vagasSelecionadas, setVagasSelecionadas] = useState([]);
+    // estado para controles de marcadores do mapa (visibilidade separada dos cards)
+    const [entregaMarkers, setEntregaMarkers] = useState([]);
+    // helper leve para 'setEntregasMap' — alguns trechos externos chamam esse setter nomeado.
+    const setEntregasMap = (arr) => {
+        try { setEntregas(Array.isArray(arr) ? arr : []); } catch (e) { /* ignore */ }
+    };
     // prepare subset to display on map (only pending or em_rota)
     const entregasParaMapa = useMemo(() => {
         try {
@@ -318,285 +235,52 @@ function App() {
     const [motoristaDaRota, setMotoristaDaRota] = useState(null);
     const [motoristaCidade, setMotoristaCidade] = useState(null);
     const cidadeCacheRef = useRef(new Map());
+
+    // Estilos reutilizáveis básicos para inputs e botões
+    const inputStyle = {
+        width: '100%',
+        padding: '12px',
+        borderRadius: '8px',
+        border: 'none',
+        marginBottom: '15px',
+        backgroundColor: '#fff',
+        color: '#000',
+        fontSize: '16px',
+        boxSizing: 'border-box',
+        display: 'block'
+    };
+    const btnStyle = (bg) => ({ padding: '10px 14px', borderRadius: '6px', border: 'none', background: bg || '#4f46e5', color: '#fff', fontWeight: '700', cursor: 'pointer' });
+    // Controle visual: flag para quando o mapa foi limpo por ação do usuário
     const [mapCleared, setMapCleared] = useState(false);
 
-    const carregarDados = React.useCallback(async (opts = {}) => {
-        const forceAll = opts && opts.forceAll === true;
-        // Ensure any previous frontend clear is undone so pins show
-        setMapCleared(false);
-        // MapaLogistica controls showPins via clearMap prop
-        console.log('🔄 Recarregando pins do banco...' + (forceAll ? ' (forceAll)' : ''));
-
-        // Fetch control refs to avoid concurrent fetches
-        if (fetchInProgressRef.current) return;
-        fetchInProgressRef.current = true;
-        setLoadingFrota(true);
-
-        // preserve selected/send state during an ongoing optimization
-        const __prevSelectedMotorista = motoristaSelecionadoIdRef.current || motoristaSelecionadoId;
-        const __prevCanSend = canSendMotoristaIdRef.current;
-
+    // Atualiza o estado `entregas` garantindo ordenação por `ordem_logistica`.
+    const carregarDados = React.useCallback(async () => {
+        console.log("🔄 [Sincronização Inteligente] Organizando Cards e Mapa...");
         try {
-            let q = supabase.from('motoristas').select('*');
-            if (q && typeof q.order === 'function') q = q.order('id');
-            const { data: motoristas, error: motorErr } = await q;
-            if (motorErr) {
-                console.warn('carregarDados: erro ao buscar motoristas', motorErr);
-                scheduleRetry(5000);
-                setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
-            } else {
-                const normalized = (motoristas || []).map(m => ({
-                    ...m,
-                    lat: (m.lat != null ? m.lat : (m.latitude != null ? m.latitude : null)) != null ? Number(String(m.lat != null ? m.lat : (m.latitude != null ? m.latitude : '')).trim()) : null,
-                    lng: (m.lng != null ? m.lng : (m.longitude != null ? m.longitude : null)) != null ? Number(String(m.lng != null ? m.lng : (m.longitude != null ? m.longitude : '')).trim()) : null
-                }));
-
-                const merged = (function (prev) {
-                    try {
-                        const byId = new Map((prev || []).map(p => [p.id, p]));
-                        return normalized.map(n => {
-                            const existing = byId.get(n.id);
-                            if (existing && Number(existing.lat) === Number(n.lat) && Number(existing.lng) === Number(n.lng) && existing.nome === n.nome) {
-                                return existing;
-                            }
-                            return n;
-                        });
-                    } catch (e) {
-                        return normalized;
-                    }
-                })(lastFrotaRef.current || []);
-
-                // Filtrar para exibir no Dashboard apenas motoristas com latitude disponível
-                const filtered = (merged || []).filter(m => m && m.lat != null);
-                setFrota(filtered);
-                lastFrotaRef.current = filtered;
-                if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
-                try { retryCountRef.current = 0; } catch (err) { }
-            }
-        } catch (e) {
-            console.warn('Erro carregando motoristas:', e);
-            scheduleRetry(5000);
-            setFrota(prev => prev && prev.length ? prev : (lastFrotaRef.current || []));
-        } finally {
-            fetchInProgressRef.current = false;
-            setLoadingFrota(false);
-        }
-
-        try {
-            // Carregar todas as entregas EXCLUINDO apenas as arquivadas — traz concluídos e falhas
+            // 1. Busca TUDO do banco para ter o histórico
             const { data, error } = await supabase
                 .from('entregas')
-                .select('*')
-                .neq('status', 'arquivado')
-                .order('created_at', { ascending: false });
+                .select('*');
 
-            if (error) {
-                console.warn('carregarDados: erro ao buscar entregas', error);
-                setPedidosPendentes([]);
-            } else {
-                console.log('📦 DADOS RECEBIDOS DO BANCO:', data);
-                const list = data || [];
-                // Mostrar tudo que NÃO esteja arquivado (a consulta já filtra), manter concluídos e falhas
-                const entregasFiltradas = Array.isArray(list) ? list : [];
+            if (error) throw error;
 
-                // Padronização forçada: garantir lat/lng e status corretos e remover sem coordenadas
-                const formatados = (entregasFiltradas || []).map(item => ({
-                    ...item,
-                    lat: Number(item && (item.lat ?? item.latitude)),
-                    lng: Number(item && (item.lng ?? item.longitude ?? item.long)),
-                    status: item && item.status ? item.status : 'pendente'
-                })).filter(item => Number.isFinite(item.lat) && Number.isFinite(item.lng));
+            const todasAsEntregas = data || [];
 
-                console.log('Cargas Ativas Encontradas:', formatados.length);
-                // Ordenar por created_at (antigo -> novo) e numerar sequencialmente
-                const sortedByCreated = (formatados || []).slice().sort((a, b) => {
-                    const ta = a && a.created_at ? new Date(a.created_at).getTime() : 0;
-                    const tb = b && b.created_at ? new Date(b.created_at).getTime() : 0;
-                    return ta - tb;
-                });
-                const numbered = (sortedByCreated || []).map((it, idx) => ({ ...it, numero_parada: Number(idx + 1), ordem_exibicao: Number(idx + 1) }));
-                console.log('📍 Pinos prontos para o mapa:', numbered.length);
-                try {
-                    const hash = JSON.stringify((numbered || []).map(i => `${i.id}:${i.lat},${i.lng}`));
-                    if (hash !== lastEntregasHashRef.current) {
-                        lastEntregasHashRef.current = hash;
-                        setPedidosPendentes(numbered);
-                        setEntregas(numbered);
-                    }
-                } catch (e) {
-                    setPedidosPendentes(numbered);
-                    setEntregas(numbered);
-                }
-                retryCountRef.current = 0;
-                // Persist tracked IDs for session memory
-                try {
-                    if (typeof window !== 'undefined' && window.sessionStorage) {
-                        const idsToStore = (numbered || []).map(s => s && s.id).filter(Boolean);
-                        window.sessionStorage.setItem('v10_tracked_entregas', JSON.stringify(idsToStore));
-                    }
-                } catch (e) { }
-                // Gerar array de coordenadas para a Polyline (apenas últimas 10 entregas criadas)
-                try {
-                    const last10 = (numbered || []).slice(-10);
-                    // Ensure ordering by numero_parada (which foi atribuído em ordem de criação)
-                    const renumbered = last10
-                        .map((it, i) => ({ ...it, numero_parada: Number(i + 1) }))
-                        .sort((a, b) => a.numero_parada - b.numero_parada);
-                    // Build rota coords in sequence
-                    const rotaArr = renumbered.map(it => [Number(it.lat), Number(it.lng)]).filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
-                    setDataRotaCoordenadas(rotaArr);
-                    // Also update pedidosPendentes with any new numero_parada values for consistency
-                    try {
-                        setPedidosPendentes(prev => {
-                            if (!Array.isArray(prev)) return prev;
-                            const byId = new Map(renumbered.map(r => [r.id, r.numero_parada]));
-                            return prev.map(p => {
-                                if (byId.has(p.id)) return { ...p, numero_parada: byId.get(p.id) };
-                                return p;
-                            });
-                        });
-                    } catch (e) { /* ignore */ }
-                } catch (e) { setDataRotaCoordenadas([]); }
-            }
+            // 🎯 LÓGICA 1: Cards da Central -> SÓ O QUE É PENDENTE
+            const pendentes = todasAsEntregas.filter(item => item && item.status === 'pendente');
+            try { if (typeof setEntregasMap === 'function') setEntregasMap(pendentes); } catch (e) { }
+            setPedidosPendentes(pendentes);
+
+            // 🎯 LÓGICA 2: Pinos do Mapa -> MOSTRAR TODOS OS REGISTROS
+            // O mapa deve exibir todos os pontos independentemente do status
+            try { setEntregaMarkers(Array.isArray(todasAsEntregas) ? todasAsEntregas : []); } catch (e) { }
+
+            console.log(`✅ Central: ${pendentes.length} | Mapa: ${(todasAsEntregas || []).length}`);
         } catch (e) {
-            console.warn('Erro carregando entregas:', e);
-            setPedidosPendentes(prev => (prev && prev.length) ? prev : []);
-            scheduleRetry(5000);
+            console.error("Erro na sincronização de visibilidade:", e);
         }
-
-        try {
-            // Limit runtime polyline assembly to today's/active/tracked entregas to avoid loading old history
-            const todayStart_forPoly = new Date();
-            todayStart_forPoly.setHours(0, 0, 0, 0);
-            const isoToday_forPoly = todayStart_forPoly.toISOString();
-            let trackedIds_forPoly = [];
-            try {
-                const raw = typeof window !== 'undefined' ? window.sessionStorage.getItem('v10_tracked_entregas') : null;
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) trackedIds_forPoly = parsed.map(x => String(x)).filter(Boolean);
-                }
-            } catch (e) { trackedIds_forPoly = []; }
-
-            const orPartsPoly = [];
-            orPartsPoly.push(`created_at.gte.${isoToday_forPoly}`);
-            orPartsPoly.push('status.in.(pendente,em_rota)');
-            if (trackedIds_forPoly && trackedIds_forPoly.length > 0) orPartsPoly.push(`id.in.(${trackedIds_forPoly.join(',')})`);
-            const orStringPoly = orPartsPoly.join(',');
-
-            let q2 = supabase.from('entregas').select('*');
-            // Exclude archived entries
-            if (q2 && typeof q2.not === 'function') q2 = q2.not('status', 'eq', 'arquivado');
-            // Exclude completed/failed from polyline assembly to keep processing light
-            if (q2 && typeof q2.not === 'function') q2 = q2.not('status', 'in', '(concluido,falha)');
-            if (orStringPoly && typeof q2.or === 'function') q2 = q2.or(orStringPoly);
-            // ... (o código anterior de q2 continua igual)
-            const { data: todas } = await q2;
-            setTotalEntregas((todas || []).length);
-            try {
-                const newList = Array.isArray(todas) ? todas : (todas || []);
-                const hash2 = JSON.stringify((newList || []).map(i => `${i.id}:${i.lat},${i.lng}`));
-
-                if (hash2 !== lastEntregasHashRef.current) {
-                    lastEntregasHashRef.current = hash2;
-                    // 👇 A MÁGICA ESTÁ AQUI: Nós apagamos o setEntregas(newList) que estava
-                    // sobrescrevendo os pinos. Agora o mapa retém os verdes e vermelhos!
-                }
-            } catch (e) {
-                // 👇 Também apagamos o setEntregas do catch para garantir.
-                console.warn('Erro na verificação de hash do q2:', e);
-            }
-            try {
-                const polyMap = {};
-                if (Array.isArray(todas)) {
-                    for (const e of todas) {
-                        try {
-                            if (!e) continue;
-                            const mid = e.motorista_id != null ? String(e.motorista_id) : null;
-                            if (!mid) continue;
-                            const rp = e.rota_polyline || e.rota_polyline_raw || null;
-                            if (!rp) continue;
-                            let geom = null;
-                            if (typeof rp === 'string') {
-                                try { geom = JSON.parse(rp); } catch (err) { geom = null; }
-                            } else if (typeof rp === 'object') geom = rp;
-                            if (geom && Array.isArray(geom.coordinates) && geom.coordinates.length > 0) {
-                                const coordsLatLng = geom.coordinates.map(c => [Number(c[1]), Number(c[0])]);
-                                polyMap[mid] = coordsLatLng;
-                            }
-                        } catch (err) { }
-                    }
-                }
-                // Replace runtime polylines with freshly assembled map (do not merge stale entries)
-                if (Object.keys(polyMap).length > 0) setRuntimePolylines(polyMap); else setRuntimePolylines({});
-            } catch (err) { }
-        } catch (e) {
-            console.warn('Erro contando entregas:', e);
-            scheduleRetry(5000);
-        }
-
-        try {
-            let q3 = supabase.from('avisos_gestor').select('titulo, mensagem, created_at');
-            if (q3 && typeof q3.order === 'function') q3 = q3.order('created_at', { ascending: false });
-            if (q3 && typeof q3.limit === 'function') q3 = q3.limit(10);
-            const { data: avisosData, error: avisosErr } = await q3;
-            if (avisosErr) { console.warn('carregarDados: erro ao buscar avisos', avisosErr); setAvisos([]); } else setAvisos(avisosData || []);
-        } catch (e) { console.warn('Erro carregando avisos:', e); setAvisos([]); }
-
-        // carregamento de configuracoes do gestor removido (v149 rollback)
-
-        try {
-            function normalizeAddr(s) {
-                if (!s) return '';
-                try {
-                    return String(s)
-                        .normalize('NFD')
-                        .replace(/\p{Diacritic}/gu, '')
-                        .replace(/[.(),;:\/\\#\-]/g, ' ')
-                        .replace(/\s+/g, ' ')
-                        .trim()
-                        .toLowerCase();
-                } catch (e) {
-                    return String(s).toLowerCase();
-                }
-            }
-
-            let q5 = supabase.from('entregas').select('cliente,endereco,created_at');
-            // Include entries of all statuses (do not filter by 'arquivado')
-            // Order by most recent first
-            if (q5 && typeof q5.order === 'function') q5 = q5.order('created_at', { ascending: false });
-            if (q5 && typeof q5.limit === 'function') q5 = q5.limit(500);
-            const { data: recent, error: recentErr } = await q5;
-            if (recentErr) {
-                console.warn('carregarDados: erro ao buscar histórico', recentErr);
-                setRecentList([]);
-            } else if (recent && Array.isArray(recent)) {
-                const seen = new Set();
-                const unique = [];
-                for (const r of recent) {
-                    try {
-                        const addrKey = normalizeAddr(r.endereco || '');
-                        if (!addrKey) continue;
-                        if (seen.has(addrKey)) continue; // keep first (most recent)
-                        seen.add(addrKey);
-                        unique.push({ cliente: r.cliente || '', endereco: r.endereco || '' });
-                    } catch (err) { /* ignore row error */ }
-                }
-                setRecentList(unique);
-            } else {
-                setRecentList([]);
-            }
-        } catch (e) { console.warn('Erro carregando histórico de entregas:', e); setRecentList([]); scheduleRetry(5000); }
-        // If a routing/optimization or processing is in progress, restore selected driver / canSend state
-        try {
-            if (routingInProgressRef.current || isProcessingRef.current) {
-                try { if (__prevSelectedMotorista) setMotoristaSelecionadoId(__prevSelectedMotorista); } catch (e) { }
-                try { if (typeof __prevCanSend !== 'undefined') setCanSendMotoristaId(__prevCanSend); } catch (e) { }
-            }
-        } catch (e) { }
-
-        setLoadingFrota(false);
-    }, []); // <-- Properly close carregarDados function here
+    }, []);
+    // <-- Properly close carregarDados function here
 
     // Simples função para recarregar apenas os pins (mais leve que carregarDados)
     const carregarPins = useCallback(async () => {
@@ -607,8 +291,8 @@ function App() {
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
-                .or('status.eq.pendente,status.eq.em_rota')
-                .order('created_at', { ascending: false });
+                .eq('status', 'pendente')
+                .order('ordem_logistica', { ascending: true });
             if (error) {
                 console.warn('carregarPins: erro ao buscar entregas', error);
                 return;
@@ -624,11 +308,22 @@ function App() {
                 const hash = JSON.stringify((formatados || []).map(i => `${i.id}:${i.lat},${i.lng}`));
                 if (hash !== lastEntregasHashRef.current) {
                     lastEntregasHashRef.current = hash;
-                    setEntregas(formatados);
+                    if (typeof atualizarEntregasOrdenadas === 'function') {
+                        atualizarEntregasOrdenadas(formatados);
+                    } else {
+                        console.log('Ordem atualizada');
+                    }
+                    // Atualiza entregas exibidas no mapa com apenas pendentes
+                    try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
                     setPedidosPendentes(formatados.filter(item => String(item.status || '').toLowerCase() === 'pendente'));
                 }
             } catch (e) {
-                setEntregas(formatados);
+                if (typeof atualizarEntregasOrdenadas === 'function') {
+                    atualizarEntregasOrdenadas(formatados);
+                } else {
+                    console.log('Ordem atualizada');
+                }
+                try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
                 setPedidosPendentes(formatados.filter(item => String(item.status || '').toLowerCase() === 'pendente'));
             }
         } catch (e) {
@@ -662,29 +357,20 @@ function App() {
         // 2. CONFIGURA O TEMPO REAL (REALTIME)
         const canalEntregas = supabase
             .channel('alteracoes_entregas') // Nome qualquer para o canal
-            .on(
-                'postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'entregas' },
-                (payload) => {
-                    try {
-                        console.log('Mudança detectada em tempo real!', payload.new);
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'entregas' }, payload => {
+                console.log('🔄 Update em tempo real:', payload.new);
 
-                        const entregaAtualizada = {
-                            ...payload.new,
-                            lat: Number(payload.new.lat),
-                            lng: Number(payload.new.lng)
-                        };
+                setEntregas(listaAtual => {
+                    // Se a lista atual sumiu, usamos o novo item como início, mas nunca null
+                    if (!listaAtual) return [payload.new];
 
-                        // Atualiza os pinos do mapa
-                        setEntregas(prev => Array.isArray(prev) ? prev.map(e => e.id === entregaAtualizada.id ? entregaAtualizada : e) : prev);
-
-                        // Atualiza a lista lateral (se existir)
-                        setPedidosPendentes(prev => Array.isArray(prev) ? prev.map(p => p.id === entregaAtualizada.id ? entregaAtualizada : p) : prev);
-                    } catch (err) {
-                        console.warn('Erro ao processar payload realtime de entregas', err);
-                    }
-                }
-            )
+                    // Mapeamos a lista existente. Se o ID bater, atualizamos os dados.
+                    // Se não bater, mantemos o que já estava lá. Isso preserva os outros pinos.
+                    return listaAtual.map(item =>
+                        item.id === payload.new.id ? { ...item, ...payload.new } : item
+                    );
+                });
+            })
             .subscribe();
 
         // Limpa a escuta quando fechar a tela
@@ -716,7 +402,7 @@ function App() {
         }
 
         // Remove itens do estado local, o map atualizará automaticamente
-        setEntregas(prev => (prev || []).filter(item => {
+        atualizarEntregasOrdenadas(prev => (prev || []).filter(item => {
             try {
                 const s = String(item && item.status || '').trim().toLowerCase();
                 return s !== 'concluido' && s !== 'falha';
@@ -887,7 +573,7 @@ function App() {
         try {
             if (!Array.isArray(updates) || updates.length === 0) return;
             const byId = new Map((updates || []).map(u => [String(u.id), u]));
-            setEntregas(prev => (prev || []).map(ent => {
+            atualizarEntregasOrdenadas(prev => (prev || []).map(ent => {
                 const u = byId.get(String(ent.id));
                 if (!u) return ent;
                 // mescla campos atualizados (status, ordem_logistica, motorista_id, etc.)
@@ -2092,6 +1778,11 @@ function App() {
                 } catch (e) { return false; }
             }).map(it => ({ ...it, lat: Number(it.lat), lng: Number(it.lng) }));
 
+            // TRAVA: se não há pendentes, não chamamos Mapbox (evita Matrix 422)
+            if (!pendentes || pendentes.length === 0) {
+                return [];
+            }
+
             const ordenada = [];
 
             while (pendentes.length) {
@@ -2201,16 +1892,14 @@ function App() {
             try {
                 // If we're currently performing updates (assignDriver/recalc), ignore realtime changes
                 if (isUpdatingRef.current) return;
-                // Debounce rapid realtime events removed to prevent reload loop (spinner).
-                // Previously we cleared/set a timer to call `carregarPins()` after 2s.
-                // That behavior caused repeated reloads; updates will now occur only on explicit actions.
-                // try { if (listReloadTimerRef.current) clearTimeout(listReloadTimerRef.current); } catch (e) { }
-                // listReloadTimerRef.current = setTimeout(() => {
-                //     try {
-                //         console.log('🔔 Mudança detectada no banco (coalesced), atualizando pins localmente...');
-                //         carregarPins();
-                //     } catch (err) { console.warn('Erro ao recarregar pins via realtime debounce:', err); }
-                // }, 2000); // 2s debounce
+
+                // Re-fetch pins to guarantee database ordering and avoid race conditions
+                try {
+                    if (typeof carregarPins === 'function') {
+                        // keep it fire-and-forget; carregarPins has its own error handling
+                        carregarPins();
+                    }
+                } catch (e) { console.warn('Erro ao recarregar pins via realtime:', e); }
             } catch (e) { console.warn('Erro ao manipular evento realtime (handleListEvent):', e); }
         };
 
@@ -2260,33 +1949,74 @@ function App() {
 
     // NOTE: v42 cleanup: removed automatic clearing of canSendRoute (managed manually)
 
+    // 🧠 MEMÓRIA DO MOTORISTA: verifica se já temos coordenadas exatas de conclusão para este endereço
+    const buscarMemoriaDoMotorista = async (enderecoBuscado) => {
+        try {
+            const { data, error } = await supabase
+                .from('entregas')
+                .select('lat_conclusao, lng_conclusao')
+                .eq('status', 'entregue')
+                .ilike('endereco', `%${enderecoBuscado}%`)
+                .not('lat_conclusao', 'is', null)
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+            if (data && data.length > 0 && data[0].lat_conclusao) {
+                console.log("🧠 [MEMÓRIA] Coordenada exata recuperada do histórico!");
+                return { lat: parseFloat(data[0].lat_conclusao), lng: parseFloat(data[0].lng_conclusao) };
+            }
+            return null;
+        } catch (e) { return null; }
+    };
+
     const adicionarAosPendentes = async (e) => {
         if (e && typeof e.preventDefault === 'function') e.preventDefault();
         if (adicionando) return;
         setAdicionando(true);
 
+        // Se o mapa foi limpo por um envio recente ou estamos enviando, impedir novos cadastros
+        if (isSending || mapCleared) {
+            try { alert('A rota está sendo enviada ou o mapa foi limpo. Recarregue antes de adicionar novos pedidos.'); } catch (e) { }
+            setAdicionando(false);
+            return;
+        }
+
         try {
             const enderecoTrim = String(enderecoEntrega || '').trim();
-            console.log("🔍 Buscando coordenadas para:", enderecoTrim);
+            console.log("🔍 Preparando endereço e buscando coordenadas para:", enderecoTrim);
 
-            // --- BUSCA DE COORDENADAS (flow seguro) ---
+            // 1) Limpeza da query para o MAPBOX (pino mais confiável)
+            const enderecoLimpoParaMapa = montarQueryMapbox(enderecoTrim);
+
+            // 2) Buscar coordenadas: primeiro tenta memória do histórico, depois Mapbox
             let coords = { lat: 0, lng: 0 };
             try {
-                // Use o wrapper seguro que tenta busca estrita e fallback fuzzy
-                const res = await obterCoordenadasSeguras(enderecoTrim);
-                if (res && res.lat != null && res.lng != null) {
-                    coords = { lat: Number(res.lat), lng: Number(res.lng) };
-                    console.log("📍 Coordenadas encontradas (seguras):", coords, res.precisao || res.precision || null);
+                // 2a) Tenta a memória do motorista (lat_conclusao / lng_conclusao do histórico)
+                const memoriaCoords = await buscarMemoriaDoMotorista(enderecoLimpoParaMapa);
+                if (memoriaCoords) {
+                    coords = memoriaCoords;
+                    console.log("📍 Coordenadas recuperadas da memória do histórico:", coords);
                 } else {
-                    console.warn("⚠️ Nenhuma coordenada confiável encontrada para este endereço. Salvando com zero.");
+                    console.log("🗺️ Endereço novo. Buscando no Mapbox...");
+                    const res = await buscarCoordenadas(enderecoLimpoParaMapa);
+                    if (res && res.lat != null && res.lng != null) {
+                        coords = { lat: Number(res.lat), lng: Number(res.lng) };
+                        console.log("📍 Coordenadas encontradas para query de mapa:", enderecoLimpoParaMapa, coords, res.precisao || res.precision || null);
+                    } else {
+                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando com zero.");
+                    }
                 }
             } catch (err) {
-                console.error("❌ Erro ao obter coordenadas seguras:", err);
+                console.error("❌ Erro ao obter coordenadas:", err);
             }
 
+            // 3) Payload puro: cliente e endereço salvos exatamente como digitados
+            const nomeLimpo = String(nomeCliente || '').trim();
+            const enderecoPuro = String(enderecoEntrega || '').trim();
+
             const payload = {
-                cliente: String(nomeCliente || '').trim(),
-                endereco: enderecoTrim,
+                cliente: nomeLimpo,
+                endereco: enderecoPuro,
                 status: 'pendente',
                 tipo: tipoEncomenda || 'Entrega',
                 obs: observacoesGestor || '',
@@ -2299,10 +2029,12 @@ function App() {
 
             const newPedido = inserted[0];
 
-            // Atualiza a lista na tela (com as coordenadas novas para o pino aparecer)
-            setPedidosPendentes(prev => [...(Array.isArray(prev) ? prev : []), newPedido]);
-            // Atualiza o estado global de entregas para refletir imediatamente no mapa
-            try { setEntregas(prev => [...(Array.isArray(prev) ? prev : []), newPedido]); } catch (e) { /* ignore */ }
+            // Agora que persistimos, garantir que o mapa saiba que não está limpo
+            try { setMapCleared(false); } catch (e) { /* ignore */ }
+
+            // Não atualizamos localmente o array de entregas/mapa aqui —
+            // recarregamos os dados do backend para garantir consistência
+            try { if (typeof carregarDados === 'function') await carregarDados(); } catch (e) { /* ignore */ }
 
             // Foca o mapa no novo ponto se ele for válido
             if (coords.lat !== 0) {
@@ -2314,7 +2046,7 @@ function App() {
             setEnderecoEntrega('');
             setObservacoesGestor('');
 
-            alert(coords.lat !== 0 ? 'Carga adicionada com sucesso!' : 'Carga adicionada, mas o endereço não foi localizado no mapa.');
+            alert('📍 Ponto cadastrado e pronto para despacho!');
 
         } catch (err) {
             console.error(err);
@@ -2333,7 +2065,7 @@ function App() {
         // 1. ATUALIZAÇÃO OTIMISTA: Remove o card da tela IMEDIATAMENTE (snappy feel)
         setPedidosPendentes(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
         try {
-            setEntregas(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
+            atualizarEntregasOrdenadas(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
         } catch (e) { /* ignore */ }
 
         // 2. Apaga do banco de dados (Supabase)
@@ -2492,31 +2224,90 @@ function App() {
         }
     };
 
-    // Reorganizar rota (calcula e persiste ordem_logistica) e habilita envio
+    // Reorganizar rota: busca fresquinha do banco + Vizinho Mais Próximo a partir do GPS do motorista
     const handleReorganizarRota = async () => {
         setIsCalculating(true);
         try {
-            // require a motorista to be selected in the inline select before reorganizing
-            if (!motoristaSelecionadoId) {
-                try { alert('Por favor selecione o motorista para esta rota antes de reorganizar.'); } catch (e) { }
+            // 1. Busca fresquinha do banco: garante que pedidos recém-adicionados entrem no cálculo
+            const { data: entregasAtuais, error: errBusca } = await supabase
+                .from('entregas')
+                .select('*')
+                .in('status', ['pendente', 'em_rota']);
+
+            if (errBusca) throw errBusca;
+
+            const pedidosValidos = (entregasAtuais || []).filter(p => p.lat && p.lng);
+
+            if (pedidosValidos.length === 0) {
+                try { alert('Nenhum pedido válido com coordenadas para organizar.'); } catch (e) { }
+                setIsCalculating(false);
                 return;
             }
 
-            // Reordena a fila usando o algoritmo inteligente (Vizinho Mais Próximo)
-            const rotaOrdenada = await organizarRotaInteligente();
-            if (!rotaOrdenada || rotaOrdenada.length === 0) {
-                try { alert('Nenhuma entrega elegível para organizar.'); } catch (e) { }
-                return;
+            // 2. Ponto Zero: onde o motorista está agora?
+            let atualLat = -27.5953; // Posição fallback (Central)
+            let atualLng = -48.5480;
+
+            if (motoristaSelecionadoId && frota) {
+                const motorista = frota.find(m => String(m.id) === String(motoristaSelecionadoId));
+                if (motorista && motorista.lat && motorista.lng) {
+                    atualLat = parseFloat(motorista.lat);
+                    atualLng = parseFloat(motorista.lng);
+                    console.log('🚛 Motorista localizado! Recalculando a partir da posição dele.');
+                } else {
+                    console.warn('⚠️ Motorista sem GPS recente. Usando base da Central.');
+                }
             }
 
-            // Armazena rota e habilita envio
-            setRotaOrdenadaState(rotaOrdenada);
+            let naoVisitados = [...pedidosValidos];
+            let rotaOrdenada = [];
+
+            // 3. A mágica: recalcula TUDO baseado na distância real
+            while (naoVisitados.length > 0) {
+                let indiceMaisProximo = 0;
+                let menorDistancia = Infinity;
+
+                for (let i = 0; i < naoVisitados.length; i++) {
+                    const latDest = parseFloat(naoVisitados[i].lat);
+                    const lngDest = parseFloat(naoVisitados[i].lng);
+                    // Distância geométrica
+                    const dist = Math.sqrt(Math.pow(latDest - atualLat, 2) + Math.pow(lngDest - atualLng, 2));
+                    if (dist < menorDistancia) {
+                        menorDistancia = dist;
+                        indiceMaisProximo = i;
+                    }
+                }
+
+                const proximoPonto = naoVisitados.splice(indiceMaisProximo, 1)[0];
+                rotaOrdenada.push(proximoPonto);
+                // O motorista "anda" até esse ponto — o próximo cálculo parte daqui
+                atualLat = parseFloat(proximoPonto.lat);
+                atualLng = parseFloat(proximoPonto.lng);
+            }
+
+            // 4. Grava a nova ordem no banco de dados
+            console.log('💾 Salvando a nova ordem no Supabase...');
+            for (let i = 0; i < rotaOrdenada.length; i++) {
+                const novaOrdem = i + 1; // 1, 2, 3, 4... sem duplicatas!
+                await supabase
+                    .from('entregas')
+                    .update({ ordem_logistica: novaOrdem })
+                    .eq('id', rotaOrdenada[i].id);
+            }
+
+            // 5. Recarrega a tela para o gestor ver a mágica
+            if (typeof carregarDados === 'function') {
+                await carregarDados();
+            }
+
+            setRotaOrdenadaState([...rotaOrdenada]);
             setRotaPronta(true);
-            try { alert('✅ Rota organizada com sucesso!'); } catch (e) { }
             setPodeEnviar(true);
+            try { alert('✅ Rota Inteligente atualizada! Os pedidos foram encaixados na melhor ordem.'); } catch (e) { }
+
         } catch (e) {
-            console.error('Erro ao reorganizar rota:', e);
-            try { alert('Erro ao organizar rota.'); } catch (er) { }
+            console.error('Erro fatal ao reorganizar:', e);
+            try { alert('Ocorreu um erro ao calcular as distâncias.'); } catch (er) { }
         } finally {
             setIsCalculating(false);
         }
@@ -2567,61 +2358,48 @@ function App() {
     };
 
     const handleEnviarRota = async () => {
-        console.log("🚀 [ENVIO] Iniciando despacho inteligente e persistência de ordem...");
         setIsSending(true);
         try {
-            // pré-condições: rota organizada e motorista selecionado via select
-            if (!rotaPronta || !podeEnviar) {
-                try { alert('A rota precisa estar organizada antes de enviar.'); } catch (e) { }
-                return;
-            }
-            if (!motoristaSelecionadoId) {
-                try { alert('Selecione o motorista para esta rota antes de enviar.'); } catch (e) { }
+            if (!rotaPronta || !motoristaSelecionadoId) {
+                try { alert('A rota precisa estar organizada e um motorista deve estar selecionado.'); } catch (e) { }
                 return;
             }
 
-            const rotaOrdenada = rotaOrdenadaState || [];
-            if (!rotaOrdenada || rotaOrdenada.length === 0) {
-                try { alert('Nenhuma rota organizada disponível. Execute Reorganizar Rota primeiro.'); } catch (e) { }
+            const idsParaAtualizar = (rotaOrdenadaState || []).map(i => i && i.id).filter(Boolean);
+            if (!idsParaAtualizar || idsParaAtualizar.length === 0) {
+                try { alert('Nenhuma entrega válida para enviar.'); } catch (e) { }
                 return;
             }
 
-            const motoristaAlvo = motoristaSelecionadoId;
+            // Indica que estamos atualizando para evitar handlers realtime conflitantes
+            isUpdatingRef.current = true;
 
-            const promessas = rotaOrdenada.map((item, idx) => {
-                const payload = {
-                    motorista_id: String(motoristaAlvo),
-                    status: 'em_rota',
-                    ordem_entrega: Number(idx + 1),
-                    ordem_logistica: Number(idx + 1)
-                };
-                return supabase.from('entregas').update(payload).eq('id', item.id).then(res => ({ res, idx }));
-            });
+            // 1) Atualização em massa: marca como 'em_rota' e associa o motorista
+            const { error: upErr } = await supabase
+                .from('entregas')
+                .update({ status: 'em_rota', motorista_id: String(motoristaSelecionadoId) })
+                .in('id', idsParaAtualizar);
 
-            const resultados = await Promise.all(promessas);
-            resultados.forEach(r => {
-                try {
-                    if (r && r.res && !r.res.error) console.log('✅ Ordem gravada para o índice:', Number(r.idx + 1));
-                    else console.warn('❗ Falha ao gravar ordem para índice', r && r.idx, r && r.res && r.res.error);
-                } catch (e) { }
-            });
+            if (upErr) throw upErr;
 
-            try {
-                const updatesLocal = (rotaOrdenada || []).map((item, idx) => ({ id: item.id, status: 'em_rota', ordem_entrega: Number(idx + 1), ordem_logistica: Number(idx + 1), motorista_id: String(motoristaAlvo) }));
-                applyLocalEntregasUpdates(updatesLocal);
-            } catch (e) { }
+            // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL para evitar ressuscitar cards
+            try { setEntregas([]); } catch (e) { /* ignore */ }
+            try { if (typeof setEntregasMap === 'function') setEntregasMap([]); } catch (e) { }
+            try { setRotaOrdenadaState([]); } catch (e) { }
+            try { setPedidosPendentes([]); } catch (e) { }
+            try { setRotaPronta(false); } catch (e) { }
+            try { setPodeEnviar(false); } catch (e) { }
+            try { setMapCleared(true); } catch (e) { }
 
-            // Reset segurança após envio
-            setRotaPronta(false);
-            setRotaOrdenadaState([]);
-            setPodeEnviar(false);
+            // 3) Recarrega apenas PENDENTES (carregarDados já faz o filtro)
+            try { await carregarDados(); } catch (e) { console.error('carregarDados pós-envio erro', e); }
 
-            try { alert('✅ Ordem persistida; rota atribuída ao motorista selecionado.'); } catch (e) { }
-            try { await carregarDados(); } catch (e) { console.error('carregarDados erro pós envio', e); }
+            try { alert('✅ Rota enviada e Dashboard limpo!'); } catch (e) { }
         } catch (e) {
-            console.error('Erro no envio:', e);
-            try { alert('Erro ao gravar no banco: ' + (e && e.message ? e.message : String(e))); } catch (err) { }
+            console.error('Erro no envio em massa:', e);
+            try { alert('Erro ao enviar rota: ' + (e && e.message ? e.message : String(e))); } catch (er) { }
         } finally {
+            isUpdatingRef.current = false;
             setIsSending(false);
         }
     };
@@ -2652,16 +2430,19 @@ function App() {
 
     // entrega list passed to map: mantém todos os status visíveis exceto os arquivados
     const entregasMap = useMemo(() => {
-        try {
-            return (entregas || []).filter(e => {
-                const s = String(e.status || '').trim().toLowerCase();
-                // Mantém no mapa pendentes, em_rota, concluidos, entregues e falhas
-                return s !== 'arquivado';
-            });
-        } catch (e) {
-            console.error("Erro ao gerar entregasMap:", e);
-            return [];
-        }
+        if (!entregas) return [];
+
+        // Filtramos para tirar APENAS o que não deve ir para o mapa de jeito nenhum
+        return entregas
+            .filter(item => {
+                const s = String(item && item.status || '').trim().toLowerCase();
+                return s !== 'arquivado' && s !== 'cancelado';
+            })
+            .map(item => ({
+                ...item,
+                lat: item.lat == null ? item.lat : parseFloat(item.lat),
+                lng: item.lng == null ? item.lng : parseFloat(item.lng)
+            }));
     }, [entregas]); // Removido o motoristaDaRota da dependência para os pinos não sumirem ao trocar a seleção
     // Diagnostic: show first pin data to help debug render issues (lat/lng types)
     try { console.log('📌 Teste de renderização - Primeiro pino (entregasMap[0]):', entregasMap && entregasMap.length ? entregasMap[0] : null); } catch (e) { }
@@ -2795,7 +2576,7 @@ function App() {
                                     // Render Leaflet-based map via MapaLogistica (no Google API dependencies)
                                     (
                                         <ErrorBoundary>
-                                            <MapaLogistica darkMode={darkMode} clearMap={false} entregas={entregasMap} frota={frota} height={500} mobile={false} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} rotaCoordenadas={rotaCoordenadas} rotaOrdenadaState={rotaOrdenadaState} />
+                                            <MapaLogistica darkMode={darkMode} clearMap={false} entregas={entregaMarkers} frota={frota} height={500} mobile={false} motoristaDaRota={motoristaDaRota} runtimePolylines={runtimePolylines} rotaCoordenadas={rotaCoordenadas} rotaOrdenadaState={rotaOrdenadaState} />
                                         </ErrorBoundary>
                                     )
                                 }
@@ -2888,7 +2669,7 @@ function App() {
                                         <option>Outros</option>
                                     </select>
                                 </label>
-                                <input ref={clienteInputRef} name="cliente" placeholder="Nome do Cliente" style={{ ...inputStyle, width: '95% !important', boxSizing: 'border-box' }} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
+                                <input ref={clienteInputRef} name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
                                 <div style={{ position: 'relative' }}>
                                     <div style={{ width: '93% !important', boxSizing: 'border-box' }}>
                                         <input
@@ -2898,7 +2679,7 @@ function App() {
                                             value={enderecoEntrega}
                                             onChange={(e) => { setEnderecoEntrega(e.target.value); setEnderecoGeocodeNotFound(false); }}
                                             className="v10-mapbox-search-input"
-                                            style={{ padding: '10px', borderRadius: '8px', border: inputEnderecoInvalid ? '1px solid #ef4444' : '1px solid #cbd5e1', width: '100%', boxSizing: 'border-box' }}
+                                            style={{ ...inputStyle, border: inputEnderecoInvalid ? '1px solid #ef4444' : '1px solid #cbd5e1' }}
                                         />
                                         <div style={{ marginTop: 8, fontSize: 12, color: '#94a3b8' }}>Exemplo ideal: Rua Dom Pedro II, 176, Campinas, São José, SC</div>
                                         {enderecoGeocodeNotFound && (
@@ -3121,27 +2902,48 @@ function App() {
                         {/* --- FIM DO CABEÇALHO --- */}
                         {(!pedidosPendentes || pedidosPendentes.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
-                                {pedidosPendentes?.filter(e => String(e.status || '').trim().toLowerCase() === 'pendente').map(p => {
-                                    const tipo = p.tipo || 'Entrega';
-                                    const tipoColor = getColorForType(tipo);
-                                    const contrast = getContrastText(tipoColor);
-                                    return (
-                                        <div key={p.id} style={{ border: `1px solid ${tipoColor}`, padding: '20px', borderRadius: '12px', borderLeft: `6px solid ${tipoColor}`, background: theme.card }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
-                                                <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: tipoColor, color: contrast, fontWeight: 700 }}>{tipo}</span>
+                                {pedidosPendentes
+                                    ?.filter(e => {
+                                        const s = String(e.status || '').trim().toLowerCase();
+                                        // A MÁGICA: Filtramos tudo que o motorista ainda TEM que fazer
+                                        return s === 'pendente' || s === 'em_rota';
+                                    })
+                                    // 🛡️ Ordena do 1 ao X. Quem não tem número vai lá pro final (999)
+                                    .sort((a, b) => {
+                                        const ordemA = (Number(a.ordem_logistica) > 0) ? Number(a.ordem_logistica) : 999;
+                                        const ordemB = (Number(b.ordem_logistica) > 0) ? Number(b.ordem_logistica) : 999;
+                                        return ordemA - ordemB;
+                                    })
+                                    .map((p, index) => {
+                                        const tipo = p.tipo || 'Entrega';
+                                        const tipoColor = getColorForType(tipo);
+                                        const contrast = getContrastText(tipoColor);
+
+                                        // 🛡️ FORÇA A CONVERSÃO: Transforma qualquer lixo que vier do banco em número
+                                        const valorOrdem = Number(p.ordem_logistica);
+                                        // A TRAVA BLINDADA: Se for maior que zero, usa ele. Se for 0, nulo ou NaN, usa a fila (index + 1)
+                                        const numeroVisual = (valorOrdem > 0) ? valorOrdem : (index + 1);
+
+                                        return (
+                                            <div key={p.id} style={{ border: `1px solid ${tipoColor}`, padding: '20px', borderRadius: '12px', borderLeft: `6px solid ${tipoColor}`, background: theme.card }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                        <div style={{ width: 36, height: 36, borderRadius: '50%', background: theme.primary, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{numeroVisual}</div>
+                                                        <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
+                                                    </div>
+                                                    <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: tipoColor, color: contrast, fontWeight: 700 }}>{tipo}</span>
+                                                </div>
+                                                <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>📍 {p.endereco} {(!(p.lat && p.lng)) && <span title="Sem coordenadas: não participará da roteirização automática" style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Sem coords</span>}</p>
+                                                <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
+                                                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                                                    <button onClick={() => excluirPedido(p.id)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
+                                                    {(p.lat && p.lng) ? (
+                                                        <button onClick={() => { try { window.open('https://www.google.com/maps/dir/?api=1&destination=' + Number(p.lat) + ',' + Number(p.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ background: '#0ea5e9', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
+                                                    ) : null}
+                                                </div>
                                             </div>
-                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>{p.endereco} {(!(p.lat && p.lng)) && <span title="Sem coordenadas: não participará da roteirização automática" style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Sem coords</span>}</p>
-                                            <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
-                                            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                                                <button onClick={() => excluirPedido(p.id)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
-                                                {(p.lat && p.lng) ? (
-                                                    <button onClick={() => { try { window.open('https://www.google.com/maps/search/?api=1&query=' + Number(p.lat) + ',' + Number(p.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ background: '#0ea5e9', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
-                                                ) : null}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })}
                             </div>
                         )}
                     </div>
@@ -3422,6 +3224,6 @@ function App() {
 
     // DriverSelectModal removed: selection is now inline via header select
 
-} // <-- Close App component
+}
 
 export default App;
