@@ -1974,9 +1974,9 @@ function App() {
         if (adicionando) return;
         setAdicionando(true);
 
-        // Se o mapa foi limpo por um envio recente ou estamos enviando, impedir novos cadastros
-        if (isSending || mapCleared) {
-            try { alert('A rota está sendo enviada ou o mapa foi limpo. Recarregue antes de adicionar novos pedidos.'); } catch (e) { }
+        // Bloqueia apenas se o envio da rota ainda estiver em andamento
+        if (isSending) {
+            try { alert('A rota está sendo enviada. Aguarde a confirmação antes de adicionar novos pedidos.'); } catch (e) { }
             setAdicionando(false);
             return;
         }
@@ -2393,6 +2393,9 @@ function App() {
 
             // 3) Recarrega apenas PENDENTES (carregarDados já faz o filtro)
             try { await carregarDados(); } catch (e) { console.error('carregarDados pós-envio erro', e); }
+
+            // Libera o guard do formulário agora que os dados foram recarregados
+            try { setMapCleared(false); } catch (e) { }
 
             try { alert('✅ Rota enviada e Dashboard limpo!'); } catch (e) { }
         } catch (e) {

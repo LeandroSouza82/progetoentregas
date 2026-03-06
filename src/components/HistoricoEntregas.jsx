@@ -1,4 +1,5 @@
 import React from 'react';
+import supabase from '../supabaseClient';
 
 const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
     // Fallback para o tema caso não seja passado corretamente
@@ -49,6 +50,29 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
             console.error('Erro ao copiar:', err);
             alert('❌ Erro ao copiar. Tente novamente.');
         });
+    };
+
+    // Corrige lat/lng da entrega com as coordenadas reais do GPS do motorista
+    const handleCorrigirCoordenadas = async (entrega) => {
+        if (!entrega.lat_conclusao || !entrega.lng_conclusao) {
+            alert('Dados de GPS do motorista ausentes para esta entrega.');
+            return;
+        }
+        try {
+            const { error } = await supabase
+                .from('entregas')
+                .update({
+                    lat: entrega.lat_conclusao,
+                    lng: entrega.lng_conclusao
+                })
+                .eq('id', entrega.id);
+
+            if (error) throw error;
+            alert('\u2705 Coordenadas corrigidas! Pr\u00f3ximas rotas usar\u00e3o o ponto GPS exato do motorista.');
+        } catch (err) {
+            console.error('Erro ao corrigir coordenadas:', err);
+            alert('\u274c Erro ao corrigir as coordenadas: ' + (err?.message || String(err)));
+        }
     };
 
     // Helper para definir cor do status
@@ -313,6 +337,44 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                             }}>
                                                 💬 {detalheExtra}
                                             </div>
+                                        )}
+
+                                        {/* Botão de correção GPS — aparece apenas quando o motorista gravou lat_conclusao */}
+                                        {entrega.lat_conclusao && entrega.lng_conclusao && isEntregue && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleCorrigirCoordenadas(entrega);
+                                                }}
+                                                style={{
+                                                    marginTop: '12px',
+                                                    width: '100%',
+                                                    padding: '9px 12px',
+                                                    background: 'rgba(251,146,60,0.12)',
+                                                    color: '#fb923c',
+                                                    border: '1px solid rgba(251,146,60,0.35)',
+                                                    borderRadius: '8px',
+                                                    fontSize: '12px',
+                                                    fontWeight: '700',
+                                                    cursor: 'pointer',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '6px',
+                                                    transition: 'all 0.2s ease'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.background = '#fb923c';
+                                                    e.currentTarget.style.color = '#fff';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.background = 'rgba(251,146,60,0.12)';
+                                                    e.currentTarget.style.color = '#fb923c';
+                                                }}
+                                                title={`Substituir coordenadas do Mapbox pelo GPS do motorista (${entrega.lat_conclusao}, ${entrega.lng_conclusao})`}
+                                            >
+                                                <span>📍</span> Corrigir Mapa com GPS do Motorista
+                                            </button>
                                         )}
                                     </div>
                                 );
