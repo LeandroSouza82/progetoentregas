@@ -257,23 +257,25 @@ function App() {
     const carregarDados = React.useCallback(async () => {
         console.log("🔄 [Sincronização Inteligente] Organizando Cards e Mapa...");
         try {
-            // 1. Busca TUDO do banco para ter o histórico
+            // 1. Busca apenas entregas ativas (pendente / em_rota / adicionado)
+            // Evita carregar o histórico inteiro (128+ registros) no estado do mapa
+            const STATUS_MAPA = ['adicionado', 'pendente', 'em_rota'];
             const { data, error } = await supabase
                 .from('entregas')
-                .select('*');
+                .select('*')
+                .in('status', STATUS_MAPA);
 
             if (error) throw error;
 
             const todasAsEntregas = data || [];
 
             // 🎯 LÓGICA 1: Cards da Central -> pedidos acionáveis (adicionado, pendente, em_rota)
-            const statusAcionaveis = ['adicionado', 'pendente', 'em_rota'];
+            const statusAcionaveis = STATUS_MAPA;
             const pendentes = todasAsEntregas.filter(item => item && statusAcionaveis.includes(String(item.status || '').trim().toLowerCase()));
             try { if (typeof setEntregasMap === 'function') setEntregasMap(pendentes); } catch (e) { }
             setPedidosPendentes(pendentes);
 
-            // 🎯 LÓGICA 2: Pinos do Mapa -> MOSTRAR TODOS OS REGISTROS
-            // O mapa deve exibir todos os pontos independentemente do status
+            // 🎯 LÓGICA 2: Pinos do Mapa -> apenas ativas (sem histórico de concluídas)
             try { setEntregaMarkers(Array.isArray(todasAsEntregas) ? todasAsEntregas : []); } catch (e) { }
 
             console.log(`✅ Central: ${pendentes.length} | Mapa: ${(todasAsEntregas || []).length}`);
@@ -2415,7 +2417,7 @@ function App() {
             try { alert('✅ Rota enviada e Dashboard limpo!'); } catch (e) { }
         } catch (e) {
             console.error('Erro no envio em massa:', e);
-            try { alert('Erro ao enviar rota: ' + (e && e.message ? e.message : String(e))); } catch (er) { }
+            try { alert('Erro no Supabase: ' + (e && e.message ? e.message : String(e))); } catch (er) { }
         } finally {
             isUpdatingRef.current = false;
             setIsSending(false);
