@@ -2389,7 +2389,7 @@ function App() {
 
             // 1) Atualização em massa: associa motorista (UUID) e mantém status 'pendente'
             // motorista_id recebe sempre o UUID (ex: '447bb6e6-2086-421b-9e49-00c0d8d1c2c8')
-            const motoristaUUID = String(motoristaSelecionadoId);
+            const motoristaUUID = String(motoristaSelecionadoId).trim();
             console.log('[handleEnviarRota] motorista_id UUID:', motoristaUUID, '| ids:', idsParaAtualizar);
 
             const { error: upErr } = await supabase
@@ -2424,7 +2424,7 @@ function App() {
             try { alert('✅ Rota enviada e Dashboard limpo!'); } catch (e) { }
         } catch (e) {
             console.error('Erro no envio em massa:', e);
-            try { alert('Erro no Supabase: ' + (e && e.message ? e.message : String(e))); } catch (er) { }
+            try { alert(JSON.stringify(e)); } catch (er) { }
         } finally {
             isUpdatingRef.current = false;
             setIsSending(false);
@@ -2830,13 +2830,13 @@ function App() {
                                     <label style={{ color: theme.textLight, fontWeight: '700', marginBottom: '6px', fontSize: '14px' }}>Selecionar Motorista:</label>
                                     <select
                                         value={motoristaSelecionadoId || ''}
-                                        onChange={(e) => { setMotoristaSelecionadoId(e.target.value || null); setPodeEnviar(false); }}
+                                        onChange={(e) => { setMotoristaSelecionadoId((e.target.value || '').trim() || null); setPodeEnviar(false); }}
                                         className="v10-driver-select"
                                         style={{ height: '48px', fontSize: '15px', cursor: 'pointer', width: '220px' }}
                                     >
                                         <option value="">Selecione...</option>
                                         {(frota || []).filter(m => m && (m.esta_online === true || String(m.esta_online) === 'true')).map(m => (
-                                            <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                            <option key={m.id} value={String(m.uuid || m.id).trim()}>{m.nome}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -3220,7 +3220,7 @@ function App() {
                                 </thead>
                                 <tbody>
                                     {motoristasPendentes?.map(m => (
-                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setMotoristaSelecionadoId(mm.id)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
+                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setMotoristaSelecionadoId(String(mm.uuid || mm.id).trim())} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
                                     ))}
                                 </tbody>
                             </table>
