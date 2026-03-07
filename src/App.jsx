@@ -269,9 +269,9 @@ function App() {
 
             const todasAsEntregas = data || [];
 
-            // 🎯 LÓGICA 1: Cards da Central -> pedidos acionáveis (adicionado, pendente, em_rota)
-            const statusAcionaveis = STATUS_MAPA;
-            const pendentes = todasAsEntregas.filter(item => item && statusAcionaveis.includes(String(item.status || '').trim().toLowerCase()));
+            // 🎯 LÓGICA 1: Cards da Central -> apenas 'pendente' e 'adicionado' (em_rota já saiu da Central)
+            const statusCentral = ['adicionado', 'pendente'];
+            const pendentes = todasAsEntregas.filter(item => item && statusCentral.includes(String(item.status || '').trim().toLowerCase()));
             try { if (typeof setEntregasMap === 'function') setEntregasMap(pendentes); } catch (e) { }
             setPedidosPendentes(pendentes);
 
@@ -318,7 +318,7 @@ function App() {
                     }
                     // Atualiza entregas exibidas no mapa com apenas pendentes
                     try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
-                    setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente', 'em_rota'].includes(String(item.status || '').toLowerCase())));
+                    setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente'].includes(String(item.status || '').toLowerCase())));
                 }
             } catch (e) {
                 if (typeof atualizarEntregasOrdenadas === 'function') {
@@ -327,7 +327,7 @@ function App() {
                     console.log('Ordem atualizada');
                 }
                 try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
-                setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente', 'em_rota'].includes(String(item.status || '').toLowerCase())));
+                setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente'].includes(String(item.status || '').toLowerCase())));
             }
         } catch (e) {
             console.warn('carregarPins: exceção', e);
@@ -2387,14 +2387,14 @@ function App() {
             // Indica que estamos atualizando para evitar handlers realtime conflitantes
             isUpdatingRef.current = true;
 
-            // 1) Atualização em massa: associa motorista (UUID) e mantém status 'pendente'
-            // motorista_id recebe sempre o UUID (ex: '447bb6e6-2086-421b-9e49-00c0d8d1c2c8')
+            // 1) Atualização em massa: associa motorista (UUID) e MUDA status para 'em_rota'
+            // em_rota = saiu da Central de Despacho, está a caminho do motorista
             const motoristaUUID = String(motoristaSelecionadoId).trim();
             console.log('[handleEnviarRota] motorista_id UUID:', motoristaUUID, '| ids:', idsParaAtualizar);
 
             const { error: upErr } = await supabase
                 .from('entregas')
-                .update({ status: 'pendente', motorista_id: motoristaUUID })
+                .update({ status: 'em_rota', motorista_id: motoristaUUID })
                 .in('id', idsParaAtualizar)
                 .then(({ data, error }) => {
                     if (error) alert('Erro no Banco: ' + error.message);
@@ -2406,11 +2406,12 @@ function App() {
                 throw upErr;
             }
 
-            // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL para evitar ressuscitar cards
-            try { setEntregas([]); } catch (e) { /* ignore */ }
-            try { if (typeof setEntregasMap === 'function') setEntregasMap([]); } catch (e) { }
+            // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL
+            // Remove exatamente os itens despachados (otimista) antes do reload
+            try { setEntregas(prev => (prev || []).filter(p => !idsParaAtualizar.includes(p.id))); } catch (e) { /* ignore */ }
+            try { if (typeof setEntregasMap === 'function') setEntregasMap(prev => (prev || []).filter(p => !idsParaAtualizar.includes(p.id))); } catch (e) { }
             try { setRotaOrdenadaState([]); } catch (e) { }
-            try { setPedidosPendentes([]); } catch (e) { }
+            try { setPedidosPendentes(prev => (prev || []).filter(p => !idsParaAtualizar.includes(p.id))); } catch (e) { }
             try { setRotaPronta(false); } catch (e) { }
             try { setPodeEnviar(false); } catch (e) { }
             try { setMapCleared(true); } catch (e) { }
@@ -2932,8 +2933,8 @@ function App() {
                                 {pedidosPendentes
                                     ?.filter(e => {
                                         const s = String(e.status || '').trim().toLowerCase();
-                                        // A MÁGICA: Filtramos tudo que o motorista ainda TEM que fazer
-                                        return s === 'pendente' || s === 'em_rota';
+                                        // Central mostra apenas pendente (em_rota = já despachado ao motorista)
+                                        return s === 'pendente' || s === 'adicionado';
                                     })
                                     // 🛡️ Ordena do 1 ao X. Quem não tem número vai lá pro final (999)
                                     .sort((a, b) => {
