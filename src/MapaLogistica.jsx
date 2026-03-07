@@ -420,8 +420,10 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             const statusNormalizado = String(status || '').trim().toLowerCase();
             const tipoNormalizado = String(tipo || '').trim().toLowerCase();
 
-            if (statusNormalizado === 'entregue') return '#10b981'; // verde
-            if (statusNormalizado === 'falha') return '#ef4444'; // vermelho
+            // Verde: entrega concluída com sucesso
+            if (['entregue', 'sucesso', 'concluido'].includes(statusNormalizado)) return '#10b981';
+            // Vermelho: falha na entrega
+            if (statusNormalizado === 'falha') return '#ef4444';
 
             if (tipoNormalizado === 'recolha') return '#fb923c'; // laranja
             if (tipoNormalizado === 'entrega') return '#2563eb'; // azul

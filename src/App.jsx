@@ -257,9 +257,9 @@ function App() {
     const carregarDados = React.useCallback(async () => {
         console.log("🔄 [Sincronização Inteligente] Organizando Cards e Mapa...");
         try {
-            // 1. Busca apenas entregas ativas (pendente / em_rota / adicionado)
-            // Evita carregar o histórico inteiro (128+ registros) no estado do mapa
-            const STATUS_MAPA = ['adicionado', 'pendente', 'em_rota'];
+            // 1. Busca entregas ativas E finalizadas do turno (para histórico visual do mapa)
+            // 'arquivado' é excluído — só some do mapa após o botão "Limpar Mapa" ser clicado
+            const STATUS_MAPA = ['adicionado', 'pendente', 'em_rota', 'sucesso', 'concluido', 'falha'];
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
@@ -393,7 +393,7 @@ function App() {
                 const { data, error } = await supabase
                     .from('entregas')
                     .update({ status: 'arquivado' })
-                    .in('status', ['entregue', 'falha']);
+                    .in('status', ['entregue', 'sucesso', 'concluido', 'falha']);
                 if (error) {
                     console.warn('limparMarcadores: falha no update', error);
                 }
@@ -408,7 +408,7 @@ function App() {
         atualizarEntregasOrdenadas(prev => (prev || []).filter(item => {
             try {
                 const s = String(item && item.status || '').trim().toLowerCase();
-                return s !== 'concluido' && s !== 'falha';
+                return s !== 'concluido' && s !== 'sucesso' && s !== 'falha' && s !== 'entregue';
             } catch (err) {
                 return true;
             }
@@ -416,7 +416,7 @@ function App() {
         setPedidosPendentes(prev => (prev || []).filter(item => {
             try {
                 const s = String(item && item.status || '').trim().toLowerCase();
-                return s !== 'concluido' && s !== 'falha';
+                return s !== 'concluido' && s !== 'sucesso' && s !== 'falha' && s !== 'entregue';
             } catch (err) {
                 return true;
             }
