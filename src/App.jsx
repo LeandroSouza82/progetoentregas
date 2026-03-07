@@ -266,8 +266,9 @@ function App() {
 
             const todasAsEntregas = data || [];
 
-            // 🎯 LÓGICA 1: Cards da Central -> SÓ O QUE É PENDENTE
-            const pendentes = todasAsEntregas.filter(item => item && item.status === 'pendente');
+            // 🎯 LÓGICA 1: Cards da Central -> pedidos acionáveis (adicionado, pendente, em_rota)
+            const statusAcionaveis = ['adicionado', 'pendente', 'em_rota'];
+            const pendentes = todasAsEntregas.filter(item => item && statusAcionaveis.includes(String(item.status || '').trim().toLowerCase()));
             try { if (typeof setEntregasMap === 'function') setEntregasMap(pendentes); } catch (e) { }
             setPedidosPendentes(pendentes);
 
@@ -291,7 +292,7 @@ function App() {
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
-                .eq('status', 'pendente')
+            .in('status', ['adicionado', 'pendente', 'em_rota'])
                 .order('ordem_logistica', { ascending: true });
             if (error) {
                 console.warn('carregarPins: erro ao buscar entregas', error);
@@ -315,7 +316,7 @@ function App() {
                     }
                     // Atualiza entregas exibidas no mapa com apenas pendentes
                     try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
-                    setPedidosPendentes(formatados.filter(item => String(item.status || '').toLowerCase() === 'pendente'));
+                    setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente', 'em_rota'].includes(String(item.status || '').toLowerCase())));
                 }
             } catch (e) {
                 if (typeof atualizarEntregasOrdenadas === 'function') {
@@ -324,7 +325,7 @@ function App() {
                     console.log('Ordem atualizada');
                 }
                 try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
-                setPedidosPendentes(formatados.filter(item => String(item.status || '').toLowerCase() === 'pendente'));
+                setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente', 'em_rota'].includes(String(item.status || '').toLowerCase())));
             }
         } catch (e) {
             console.warn('carregarPins: exceção', e);
