@@ -743,8 +743,15 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 />
 
                 {/* Marcadores de Entregas - HISTÓRICO COMPLETO NO MAPA */}
-                {showPins && entregaMarkers.map((p, idx) => {
-                    const numeroMapa = p.ordem_logistica || idx + 1;
+                {showPins && [...entregaMarkers]
+                    .sort((a, b) => {
+                        const oa = (Number(a.ordem_logistica) > 0) ? Number(a.ordem_logistica) : 99999;
+                        const ob = (Number(b.ordem_logistica) > 0) ? Number(b.ordem_logistica) : 99999;
+                        return oa - ob;
+                    })
+                    .map((p, idx) => {
+                    // idx+1 da lista ordenada = sequência real que o motorista percorre
+                    const numeroMapa = idx + 1;
                     const statusLimpo = String(p.status || '').trim().toLowerCase();
 
                     // Função para formatar o horário de Brasília (São Paulo)
@@ -783,7 +790,9 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         >
                             <Popup className="custom-leaflet-popup" closeButton={false} autoPan={false}>
                                 <div style={{ fontFamily: 'sans-serif', minWidth: '160px' }}>
-                                    <strong style={{ fontSize: '14px', display: 'block', marginBottom: '4px' }}>{p.cliente || 'Pedido'}</strong>
+                                    <strong style={{ fontSize: '14px', display: 'block', marginBottom: '4px' }}>
+                                        <span style={{ color: '#2563eb', marginRight: '6px' }}>#{numeroMapa}</span>{p.cliente || 'Pedido'}
+                                    </strong>
 
                                     <div style={{ fontSize: '12px', marginBottom: '2px' }}>
                                         <b>Status:</b> {
