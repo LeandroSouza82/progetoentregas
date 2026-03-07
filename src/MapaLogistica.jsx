@@ -420,8 +420,10 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             const statusNormalizado = String(status || '').trim().toLowerCase();
             const tipoNormalizado = String(tipo || '').trim().toLowerCase();
 
-            if (statusNormalizado === 'entregue') return '#10b981'; // verde
-            if (statusNormalizado === 'falha') return '#ef4444'; // vermelho
+            // Verde: entrega concluída com sucesso
+            if (['entregue', 'sucesso', 'concluido'].includes(statusNormalizado)) return '#10b981';
+            // Vermelho: falha na entrega
+            if (statusNormalizado === 'falha') return '#ef4444';
 
             if (tipoNormalizado === 'recolha') return '#fb923c'; // laranja
             if (tipoNormalizado === 'entrega') return '#2563eb'; // azul
@@ -745,9 +747,12 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 {/* Marcadores de Entregas - HISTÓRICO COMPLETO NO MAPA */}
                 {showPins && [...entregaMarkers]
                     .sort((a, b) => {
-                        const oa = (Number(a.ordem_logistica) > 0) ? Number(a.ordem_logistica) : 99999;
-                        const ob = (Number(b.ordem_logistica) > 0) ? Number(b.ordem_logistica) : 99999;
-                        return oa - ob;
+                        // Ordenar por ordem_logistica; usar id como tiebreaker para garantir
+                        // sequência estável quando ordem_logistica for igual, 0 ou nulo
+                        const oa = (Number(a.ordem_logistica) > 0) ? Number(a.ordem_logistica) : Number.MAX_SAFE_INTEGER;
+                        const ob = (Number(b.ordem_logistica) > 0) ? Number(b.ordem_logistica) : Number.MAX_SAFE_INTEGER;
+                        if (oa !== ob) return oa - ob;
+                        return (Number(a.id) || 0) - (Number(b.id) || 0);
                     })
                     .map((p, idx) => {
                         // idx+1 da lista ordenada = sequência real que o motorista percorre

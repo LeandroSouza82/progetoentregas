@@ -257,22 +257,25 @@ function App() {
     const carregarDados = React.useCallback(async () => {
         console.log("🔄 [Sincronização Inteligente] Organizando Cards e Mapa...");
         try {
-            // 1. Busca TUDO do banco para ter o histórico
+            // 1. Busca entregas ativas E finalizadas do turno (para histórico visual do mapa)
+            // 'arquivado' é excluído — só some do mapa após o botão "Limpar Mapa" ser clicado
+            const STATUS_MAPA = ['adicionado', 'pendente', 'em_rota', 'sucesso', 'concluido', 'falha'];
             const { data, error } = await supabase
                 .from('entregas')
-                .select('*');
+                .select('*')
+                .in('status', STATUS_MAPA);
 
             if (error) throw error;
 
             const todasAsEntregas = data || [];
 
-            // 🎯 LÓGICA 1: Cards da Central -> SÓ O QUE É PENDENTE
-            const pendentes = todasAsEntregas.filter(item => item && item.status === 'pendente');
+            // 🎯 LÓGICA 1: Cards da Central -> apenas 'pendente' e 'adicionado' (em_rota já saiu da Central)
+            const statusCentral = ['adicionado', 'pendente'];
+            const pendentes = todasAsEntregas.filter(item => item && statusCentral.includes(String(item.status || '').trim().toLowerCase()));
             try { if (typeof setEntregasMap === 'function') setEntregasMap(pendentes); } catch (e) { }
             setPedidosPendentes(pendentes);
 
-            // 🎯 LÓGICA 2: Pinos do Mapa -> MOSTRAR TODOS OS REGISTROS
-            // O mapa deve exibir todos os pontos independentemente do status
+            // 🎯 LÓGICA 2: Pinos do Mapa -> apenas ativas (sem histórico de concluídas)
             try { setEntregaMarkers(Array.isArray(todasAsEntregas) ? todasAsEntregas : []); } catch (e) { }
 
             console.log(`✅ Central: ${pendentes.length} | Mapa: ${(todasAsEntregas || []).length}`);
@@ -291,7 +294,7 @@ function App() {
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
-                .eq('status', 'pendente')
+                .in('status', ['adicionado', 'pendente', 'em_rota'])
                 .order('ordem_logistica', { ascending: true });
             if (error) {
                 console.warn('carregarPins: erro ao buscar entregas', error);
@@ -315,7 +318,7 @@ function App() {
                     }
                     // Atualiza entregas exibidas no mapa com apenas pendentes
                     try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
-                    setPedidosPendentes(formatados.filter(item => String(item.status || '').toLowerCase() === 'pendente'));
+                    setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente'].includes(String(item.status || '').toLowerCase())));
                 }
             } catch (e) {
                 if (typeof atualizarEntregasOrdenadas === 'function') {
@@ -324,7 +327,7 @@ function App() {
                     console.log('Ordem atualizada');
                 }
                 try { if (typeof setEntregasMap === 'function') setEntregasMap(formatados); } catch (e) { /* ignore */ }
-                setPedidosPendentes(formatados.filter(item => String(item.status || '').toLowerCase() === 'pendente'));
+                setPedidosPendentes(formatados.filter(item => ['adicionado', 'pendente'].includes(String(item.status || '').toLowerCase())));
             }
         } catch (e) {
             console.warn('carregarPins: exceção', e);
@@ -390,7 +393,7 @@ function App() {
                 const { data, error } = await supabase
                     .from('entregas')
                     .update({ status: 'arquivado' })
-                    .in('status', ['entregue', 'falha']);
+                    .in('status', ['entregue', 'sucesso', 'concluido', 'falha']);
                 if (error) {
                     console.warn('limparMarcadores: falha no update', error);
                 }
@@ -405,7 +408,7 @@ function App() {
         atualizarEntregasOrdenadas(prev => (prev || []).filter(item => {
             try {
                 const s = String(item && item.status || '').trim().toLowerCase();
-                return s !== 'concluido' && s !== 'falha';
+                return s !== 'concluido' && s !== 'sucesso' && s !== 'falha' && s !== 'entregue';
             } catch (err) {
                 return true;
             }
@@ -413,7 +416,7 @@ function App() {
         setPedidosPendentes(prev => (prev || []).filter(item => {
             try {
                 const s = String(item && item.status || '').trim().toLowerCase();
-                return s !== 'concluido' && s !== 'falha';
+                return s !== 'concluido' && s !== 'sucesso' && s !== 'falha' && s !== 'entregue';
             } catch (err) {
                 return true;
             }
@@ -2002,8 +2005,16 @@ function App() {
                     if (res && res.lat != null && res.lng != null) {
                         coords = { lat: Number(res.lat), lng: Number(res.lng) };
                         console.log("📍 Coordenadas encontradas para query de mapa:", enderecoLimpoParaMapa, coords, res.precisao || res.precision || null);
+                        // Validação de município: alerta se resultado for fora da área de atuação
+                        try {
+                            const _AREAS_VALIDAS = ['palhoca', 'sao jose', 'florianopolis', 'biguacu', 'ingleses'];
+                            const _displayNorm = String(res.display_name || res.place_name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+                            if (_displayNorm && !_AREAS_VALIDAS.some(a => _displayNorm.includes(a))) {
+                                alert('⚠️ Endereço fora da área de atuação!');
+                            }
+                        } catch (_e) { /* ignore */ }
                     } else {
-                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando com zero.");
+                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando como nulo.");
                     }
                 }
             } catch (err) {
@@ -2014,14 +2025,15 @@ function App() {
             const nomeLimpo = String(nomeCliente || '').trim();
             const enderecoPuro = String(enderecoEntrega || '').trim();
 
+            // Garantir que lat/lng sejam doubles e não strings ou zero/NaN
             const payload = {
                 cliente: nomeLimpo,
                 endereco: enderecoPuro,
                 status: 'pendente',
                 tipo: tipoEncomenda || 'Entrega',
                 obs: observacoesGestor || '',
-                lat: coords.lat,
-                lng: coords.lng
+                lat: (Number.isFinite(coords.lat) && coords.lat !== 0) ? parseFloat(coords.lat) : null,
+                lng: (Number.isFinite(coords.lng) && coords.lng !== 0) ? parseFloat(coords.lng) : null
             };
 
             const { data: inserted, error } = await supabase.from('entregas').insert([payload]).select();
@@ -2037,7 +2049,7 @@ function App() {
             try { if (typeof carregarDados === 'function') await carregarDados(); } catch (e) { /* ignore */ }
 
             // Foca o mapa no novo ponto se ele for válido
-            if (coords.lat !== 0) {
+            if (Number.isFinite(coords.lat) && coords.lat !== 0) {
                 try { setMapFocusCoords(coords); } catch (e) { /* ignore */ }
             }
 
@@ -2155,8 +2167,9 @@ function App() {
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
-            // status para despacho: enviar como 'em_rota' para remover da Central
-            const statusValue = String('em_rota').trim().toLowerCase();
+            // status para despacho: 'pendente' para que o app do motorista receba
+            // (muda para 'em_rota' apenas quando o motorista iniciar a viagem)
+            const statusValue = 'pendente';
 
             // Determine entregas to dispatch and collect their IDs (preserve original type)
             const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
@@ -2184,7 +2197,7 @@ function App() {
                     // detect any errors
                     for (const r of results) {
                         if (!r) continue;
-                        if (r.error) { updErr = r.error; console.error('assignDriver: update error', r.error); break; }
+                        if (r.error) { updErr = r.error; console.error('Erro Supabase:', r.error); break; }
                     }
 
                     if (!updErr) {
@@ -2374,19 +2387,31 @@ function App() {
             // Indica que estamos atualizando para evitar handlers realtime conflitantes
             isUpdatingRef.current = true;
 
-            // 1) Atualização em massa: marca como 'em_rota' e associa o motorista
+            // 1) Atualização em massa: associa motorista (UUID) e MUDA status para 'em_rota'
+            // em_rota = saiu da Central de Despacho, está a caminho do motorista
+            const motoristaUUID = String(motoristaSelecionadoId).trim();
+            console.log('[handleEnviarRota] motorista_id UUID:', motoristaUUID, '| ids:', idsParaAtualizar);
+
             const { error: upErr } = await supabase
                 .from('entregas')
-                .update({ status: 'em_rota', motorista_id: String(motoristaSelecionadoId) })
-                .in('id', idsParaAtualizar);
+                .update({ status: 'em_rota', motorista_id: motoristaUUID })
+                .in('id', idsParaAtualizar)
+                .then(({ data, error }) => {
+                    if (error) alert('Erro no Banco: ' + error.message);
+                    return { data, error };
+                });
 
-            if (upErr) throw upErr;
+            if (upErr) {
+                console.error('Erro Supabase:', upErr);
+                throw upErr;
+            }
 
-            // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL para evitar ressuscitar cards
-            try { setEntregas([]); } catch (e) { /* ignore */ }
-            try { if (typeof setEntregasMap === 'function') setEntregasMap([]); } catch (e) { }
+            // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL
+            // Remove exatamente os itens despachados (otimista) antes do reload
+            try { setEntregas(prev => (prev || []).filter(p => !idsParaAtualizar.includes(p.id))); } catch (e) { /* ignore */ }
+            try { if (typeof setEntregasMap === 'function') setEntregasMap(prev => (prev || []).filter(p => !idsParaAtualizar.includes(p.id))); } catch (e) { }
             try { setRotaOrdenadaState([]); } catch (e) { }
-            try { setPedidosPendentes([]); } catch (e) { }
+            try { setPedidosPendentes(prev => (prev || []).filter(p => !idsParaAtualizar.includes(p.id))); } catch (e) { }
             try { setRotaPronta(false); } catch (e) { }
             try { setPodeEnviar(false); } catch (e) { }
             try { setMapCleared(true); } catch (e) { }
@@ -2400,7 +2425,7 @@ function App() {
             try { alert('✅ Rota enviada e Dashboard limpo!'); } catch (e) { }
         } catch (e) {
             console.error('Erro no envio em massa:', e);
-            try { alert('Erro ao enviar rota: ' + (e && e.message ? e.message : String(e))); } catch (er) { }
+            try { alert(JSON.stringify(e)); } catch (er) { }
         } finally {
             isUpdatingRef.current = false;
             setIsSending(false);
@@ -2806,13 +2831,13 @@ function App() {
                                     <label style={{ color: theme.textLight, fontWeight: '700', marginBottom: '6px', fontSize: '14px' }}>Selecionar Motorista:</label>
                                     <select
                                         value={motoristaSelecionadoId || ''}
-                                        onChange={(e) => { setMotoristaSelecionadoId(e.target.value || null); setPodeEnviar(false); }}
+                                        onChange={(e) => { setMotoristaSelecionadoId((e.target.value || '').trim() || null); setPodeEnviar(false); }}
                                         className="v10-driver-select"
                                         style={{ height: '48px', fontSize: '15px', cursor: 'pointer', width: '220px' }}
                                     >
                                         <option value="">Selecione...</option>
                                         {(frota || []).filter(m => m && (m.esta_online === true || String(m.esta_online) === 'true')).map(m => (
-                                            <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                            <option key={m.id} value={String(m.uuid || m.id).trim()}>{m.nome}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -2908,8 +2933,8 @@ function App() {
                                 {pedidosPendentes
                                     ?.filter(e => {
                                         const s = String(e.status || '').trim().toLowerCase();
-                                        // A MÁGICA: Filtramos tudo que o motorista ainda TEM que fazer
-                                        return s === 'pendente' || s === 'em_rota';
+                                        // Central mostra apenas pendente (em_rota = já despachado ao motorista)
+                                        return s === 'pendente' || s === 'adicionado';
                                     })
                                     // 🛡️ Ordena do 1 ao X. Quem não tem número vai lá pro final (999)
                                     .sort((a, b) => {
@@ -3196,7 +3221,7 @@ function App() {
                                 </thead>
                                 <tbody>
                                     {motoristasPendentes?.map(m => (
-                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setMotoristaSelecionadoId(mm.id)} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
+                                        <MotoristaRow key={m.id} m={m} onClick={(mm) => setMotoristaSelecionadoId(String(mm.uuid || mm.id).trim())} entregasAtivos={entregasAtivos} theme={theme} onApprove={(mm) => aprovarMotorista(mm.id)} onReject={(mm) => rejectDriver(mm)} />
                                     ))}
                                 </tbody>
                             </table>

@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient';
 import MapComponent from '../../src/MapComponent';
 
-// Safety helper: Santa Catarina bounds per manager request
-const isValidSC = (lat, lng) => lat < -25.0 && lat > -30.0 && lng < -54.0 && lng > -48.0;
+// Safety helper: valida se coordenadas estão dentro de Santa Catarina
+// lat: entre -30.0 e -25.0 | lng: entre -54.0 e -48.0 (negativo aumenta p/ oeste)
+const isValidSC = (lat, lng) => lat < -25.0 && lat > -30.0 && lng > -54.0 && lng < -48.0;
 
 export default function AppMotorista() {
     // render count diagnostics removed for production stability
