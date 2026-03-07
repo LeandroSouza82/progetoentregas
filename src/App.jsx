@@ -2002,8 +2002,16 @@ function App() {
                     if (res && res.lat != null && res.lng != null) {
                         coords = { lat: Number(res.lat), lng: Number(res.lng) };
                         console.log("📍 Coordenadas encontradas para query de mapa:", enderecoLimpoParaMapa, coords, res.precisao || res.precision || null);
+                        // Validação de município: alerta se resultado for fora da área de atuação
+                        try {
+                            const _AREAS_VALIDAS = ['palhoca', 'sao jose', 'florianopolis', 'biguacu', 'ingleses'];
+                            const _displayNorm = String(res.display_name || res.place_name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
+                            if (_displayNorm && !_AREAS_VALIDAS.some(a => _displayNorm.includes(a))) {
+                                alert('⚠️ Endereço fora da área de atuação!');
+                            }
+                        } catch (_e) { /* ignore */ }
                     } else {
-                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando com zero.");
+                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando como nulo.");
                     }
                 }
             } catch (err) {
@@ -2014,14 +2022,15 @@ function App() {
             const nomeLimpo = String(nomeCliente || '').trim();
             const enderecoPuro = String(enderecoEntrega || '').trim();
 
+            // Garantir que lat/lng sejam doubles e não strings ou zero/NaN
             const payload = {
                 cliente: nomeLimpo,
                 endereco: enderecoPuro,
                 status: 'pendente',
                 tipo: tipoEncomenda || 'Entrega',
                 obs: observacoesGestor || '',
-                lat: coords.lat,
-                lng: coords.lng
+                lat: (Number.isFinite(coords.lat) && coords.lat !== 0) ? parseFloat(coords.lat) : null,
+                lng: (Number.isFinite(coords.lng) && coords.lng !== 0) ? parseFloat(coords.lng) : null
             };
 
             const { data: inserted, error } = await supabase.from('entregas').insert([payload]).select();
@@ -2037,7 +2046,7 @@ function App() {
             try { if (typeof carregarDados === 'function') await carregarDados(); } catch (e) { /* ignore */ }
 
             // Foca o mapa no novo ponto se ele for válido
-            if (coords.lat !== 0) {
+            if (Number.isFinite(coords.lat) && coords.lat !== 0) {
                 try { setMapFocusCoords(coords); } catch (e) { /* ignore */ }
             }
 

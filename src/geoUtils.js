@@ -457,12 +457,12 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 
         // Usamos a função exportada `montarQueryMapbox` definida no escopo global acima
 
-        // Default operacional amplo
+        // BBox restrito à Grande Florianópolis (SW: -28.0,-48.9 | NE: -27.3,-48.3)
         const defaultBounds = {
-            south: -27.900,
-            north: -27.350,
-            west: -48.900,
-            east: -48.350
+            south: -28.0,
+            north: -27.3,
+            west: -48.9,
+            east: -48.3
         };
 
         // Detectar se o usuário especificou uma cidade ao final do endereço
@@ -1028,12 +1028,12 @@ export async function searchMapbox(query, bounds = null) {
         // TOKEN OFICIAL MAPBOX
         const MAPBOX_TOKEN = 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
 
-        // VIEWBOX expandido: Grande Florianópolis (Ingleses, Florianópolis, São José, Palhoça, Biguaçu, Santo Amaro)
+        // BBox restrito à Grande Florianópolis (SW: -28.0,-48.9 | NE: -27.3,-48.3)
         const defaultBounds = {
-            south: -27.900,
-            north: -27.350,
-            west: -48.900,
-            east: -48.350
+            south: -28.0,
+            north: -27.3,
+            west: -48.9,
+            east: -48.3
         };
 
         const b = bounds || defaultBounds;
@@ -1046,7 +1046,8 @@ export async function searchMapbox(query, bounds = null) {
         const lowerQuery = String(query || '').toLowerCase();
         let queryWithCity = query;
         const hasKnownCity = knownCities.some(c => lowerQuery.indexOf(c) !== -1) || /,\s*[a-zA-Z]/.test(query);
-        if (!hasKnownCity) queryWithCity = `${queryWithCity.trim()}, SC, Brasil`;
+        // Sufixo automático: âncora regional para evitar geocoding em outra cidade (ex: Curitiba)
+        if (!hasKnownCity) queryWithCity = `${queryWithCity.trim()}, Grande Florianópolis, SC, Brasil`;
 
         const queryClean = (queryWithCity || query)
             .replace(/,\s*,+/g, ',')
@@ -1093,8 +1094,12 @@ export async function searchMapbox(query, bounds = null) {
             context: item.context || []
         }));
 
-        console.log('🔍 Mapbox Autosuggest:', results.length, 'sugestões');
-        return results;
+        // Validação de município: filtrar apenas resultados da área de atuação
+        const _AREAS_VALIDAS_SEARCH = ['palhoca', 'sao jose', 'florianopolis', 'biguacu', 'ingleses'];
+        const _normSearch = (s) => { try { return String(s || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); } catch (e) { return String(s || '').toLowerCase(); } };
+        const resultsFiltrados = results.filter(r => _AREAS_VALIDAS_SEARCH.some(a => _normSearch(r.place_name).includes(a)));
+        console.log('🔍 Mapbox Autosuggest:', results.length, 'sugestões →', resultsFiltrados.length, 'dentro da área de atuação');
+        return resultsFiltrados.length > 0 ? resultsFiltrados : results;
 
     } catch (err) {
         console.error('❌ Erro Mapbox Autosuggest:', err);
