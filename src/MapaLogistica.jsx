@@ -750,78 +750,78 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                         return oa - ob;
                     })
                     .map((p, idx) => {
-                    // idx+1 da lista ordenada = sequência real que o motorista percorre
-                    const numeroMapa = idx + 1;
-                    const statusLimpo = String(p.status || '').trim().toLowerCase();
+                        // idx+1 da lista ordenada = sequência real que o motorista percorre
+                        const numeroMapa = idx + 1;
+                        const statusLimpo = String(p.status || '').trim().toLowerCase();
 
-                    // Função para formatar o horário de Brasília (São Paulo)
-                    const formatarHorarioBrasil = (dataString) => {
-                        if (!dataString) return null;
-                        try {
-                            const data = new Date(dataString);
-                            return data.toLocaleTimeString('pt-BR', {
-                                timeZone: 'America/Sao_Paulo',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                            });
-                        } catch (e) { return null; }
-                    };
+                        // Função para formatar o horário de Brasília (São Paulo)
+                        const formatarHorarioBrasil = (dataString) => {
+                            if (!dataString) return null;
+                            try {
+                                const data = new Date(dataString);
+                                return data.toLocaleTimeString('pt-BR', {
+                                    timeZone: 'America/Sao_Paulo',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                });
+                            } catch (e) { return null; }
+                        };
 
-                    // Só busca o horário se já foi concluído ou se deu falha
-                    const horarioFinal = (statusLimpo === 'entregue' || statusLimpo === 'falha')
-                        ? formatarHorarioBrasil(p.horario_conclusao || p.data_conclusao)
-                        : null;
+                        // Só busca o horário se já foi concluído ou se deu falha
+                        const horarioFinal = (statusLimpo === 'entregue' || statusLimpo === 'falha')
+                            ? formatarHorarioBrasil(p.horario_conclusao || p.data_conclusao)
+                            : null;
 
-                    return (
-                        <Marker
-                            key={`marker-${p.id}`}
-                            position={[parseFloat(p.lat), parseFloat(p.lng)]}
-                            icon={createCustomPinIcon(
-                                getMarkerIcon(p.status, p.tipo),
-                                numeroMapa,
-                                p.status
-                            )}
-                            draggable={statusLimpo === 'pendente'}
-                            eventHandlers={{
-                                mouseover: (e) => e.target.openPopup(),
-                                mouseout: (e) => e.target.closePopup(),
-                                dragend: (e) => handleArrastarPino(e, p.id)
-                            }}
-                        >
-                            <Popup className="custom-leaflet-popup" closeButton={false} autoPan={false}>
-                                <div style={{ fontFamily: 'sans-serif', minWidth: '160px' }}>
-                                    <strong style={{ fontSize: '14px', display: 'block', marginBottom: '4px' }}>
-                                        <span style={{ color: '#2563eb', marginRight: '6px' }}>#{numeroMapa}</span>{p.cliente || 'Pedido'}
-                                    </strong>
+                        return (
+                            <Marker
+                                key={`marker-${p.id}`}
+                                position={[parseFloat(p.lat), parseFloat(p.lng)]}
+                                icon={createCustomPinIcon(
+                                    getMarkerIcon(p.status, p.tipo),
+                                    numeroMapa,
+                                    p.status
+                                )}
+                                draggable={statusLimpo === 'pendente'}
+                                eventHandlers={{
+                                    mouseover: (e) => e.target.openPopup(),
+                                    mouseout: (e) => e.target.closePopup(),
+                                    dragend: (e) => handleArrastarPino(e, p.id)
+                                }}
+                            >
+                                <Popup className="custom-leaflet-popup" closeButton={false} autoPan={false}>
+                                    <div style={{ fontFamily: 'sans-serif', minWidth: '160px' }}>
+                                        <strong style={{ fontSize: '14px', display: 'block', marginBottom: '4px' }}>
+                                            <span style={{ color: '#2563eb', marginRight: '6px' }}>#{numeroMapa}</span>{p.cliente || 'Pedido'}
+                                        </strong>
 
-                                    <div style={{ fontSize: '12px', marginBottom: '2px' }}>
-                                        <b>Status:</b> {
-                                            statusLimpo === 'entregue' ? '✅ Entregue' :
-                                                statusLimpo === 'falha' ? '❌ Falha' : '⏳ Em rota'
-                                        }
-                                    </div>
-
-                                    {/* O HORÁRIO SÓ APARECE AQUI SE EXISTIR (FINALIZADOS) */}
-                                    {horarioFinal && (
-                                        <div style={{ fontSize: '11px', color: '#444', fontWeight: 'bold' }}>
-                                            🕒 Finalizado às: {horarioFinal}
+                                        <div style={{ fontSize: '12px', marginBottom: '2px' }}>
+                                            <b>Status:</b> {
+                                                statusLimpo === 'entregue' ? '✅ Entregue' :
+                                                    statusLimpo === 'falha' ? '❌ Falha' : '⏳ Em rota'
+                                            }
                                         </div>
-                                    )}
 
-                                    {statusLimpo === 'falha' && p.motivo_nao_entrega && (
-                                        <div style={{ fontSize: '11px', color: '#d32f2f', marginTop: '4px' }}>
-                                            <b>Motivo:</b> {p.motivo_nao_entrega}
+                                        {/* O HORÁRIO SÓ APARECE AQUI SE EXISTIR (FINALIZADOS) */}
+                                        {horarioFinal && (
+                                            <div style={{ fontSize: '11px', color: '#444', fontWeight: 'bold' }}>
+                                                🕒 Finalizado às: {horarioFinal}
+                                            </div>
+                                        )}
+
+                                        {statusLimpo === 'falha' && p.motivo_nao_entrega && (
+                                            <div style={{ fontSize: '11px', color: '#d32f2f', marginTop: '4px' }}>
+                                                <b>Motivo:</b> {p.motivo_nao_entrega}
+                                            </div>
+                                        )}
+
+                                        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px', borderTop: '1px solid #eee', paddingTop: '4px' }}>
+                                            📍 {p.endereco}
                                         </div>
-                                    )}
-
-                                    <div style={{ fontSize: '10px', color: '#888', marginTop: '6px', borderTop: '1px solid #eee', paddingTop: '4px' }}>
-                                        📍 {p.endereco}
                                     </div>
-                                </div>
-                            </Popup>
-                        </Marker>
-                    );
-                })}
+                                </Popup>
+                            </Marker>
+                        );
+                    })}
 
                 {/* popup condicional removido: usamos Hover Popups dentro de cada Marker */}
 
