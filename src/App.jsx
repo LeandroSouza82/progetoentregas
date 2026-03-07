@@ -2387,12 +2387,19 @@ function App() {
             // Indica que estamos atualizando para evitar handlers realtime conflitantes
             isUpdatingRef.current = true;
 
-            // 1) Atualização em massa: associa motorista e mantém status 'pendente'
-            // (status muda para 'em_rota' apenas quando o motorista aceitar/iniciar a viagem)
+            // 1) Atualização em massa: associa motorista (UUID) e mantém status 'pendente'
+            // motorista_id recebe sempre o UUID (ex: '447bb6e6-2086-421b-9e49-00c0d8d1c2c8')
+            const motoristaUUID = String(motoristaSelecionadoId);
+            console.log('[handleEnviarRota] motorista_id UUID:', motoristaUUID, '| ids:', idsParaAtualizar);
+
             const { error: upErr } = await supabase
                 .from('entregas')
-                .update({ status: 'pendente', motorista_id: String(motoristaSelecionadoId) })
-                .in('id', idsParaAtualizar);
+                .update({ status: 'pendente', motorista_id: motoristaUUID })
+                .in('id', idsParaAtualizar)
+                .then(({ data, error }) => {
+                    if (error) alert('Erro no Banco: ' + error.message);
+                    return { data, error };
+                });
 
             if (upErr) {
                 console.error('Erro Supabase:', upErr);
