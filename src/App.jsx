@@ -292,7 +292,7 @@ function App() {
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
-            .in('status', ['adicionado', 'pendente', 'em_rota'])
+                .in('status', ['adicionado', 'pendente', 'em_rota'])
                 .order('ordem_logistica', { ascending: true });
             if (error) {
                 console.warn('carregarPins: erro ao buscar entregas', error);
@@ -2165,8 +2165,9 @@ function App() {
             // Validate motorista exists in local `frota` to avoid sending wrong id
             const motoristaExists = frota && frota.find ? frota.find(m => String(m.id) === String(motoristaIdVal)) : null;
             if (!motoristaExists) console.warn('assignDriver: motorista_id não encontrado na frota local', motoristaIdVal);
-            // status para despacho: enviar como 'em_rota' para remover da Central
-            const statusValue = String('em_rota').trim().toLowerCase();
+            // status para despacho: 'pendente' para que o app do motorista receba
+            // (muda para 'em_rota' apenas quando o motorista iniciar a viagem)
+            const statusValue = 'pendente';
 
             // Determine entregas to dispatch and collect their IDs (preserve original type)
             const entregasParaDespachar = rotaOtimizada || []; // use rota otimizada as the set to dispatch
@@ -2194,7 +2195,7 @@ function App() {
                     // detect any errors
                     for (const r of results) {
                         if (!r) continue;
-                        if (r.error) { updErr = r.error; console.error('assignDriver: update error', r.error); break; }
+                        if (r.error) { updErr = r.error; console.error('Erro Supabase:', r.error); break; }
                     }
 
                     if (!updErr) {
@@ -2384,13 +2385,17 @@ function App() {
             // Indica que estamos atualizando para evitar handlers realtime conflitantes
             isUpdatingRef.current = true;
 
-            // 1) Atualização em massa: marca como 'em_rota' e associa o motorista
+            // 1) Atualização em massa: associa motorista e mantém status 'pendente'
+            // (status muda para 'em_rota' apenas quando o motorista aceitar/iniciar a viagem)
             const { error: upErr } = await supabase
                 .from('entregas')
-                .update({ status: 'em_rota', motorista_id: String(motoristaSelecionadoId) })
+                .update({ status: 'pendente', motorista_id: String(motoristaSelecionadoId) })
                 .in('id', idsParaAtualizar);
 
-            if (upErr) throw upErr;
+            if (upErr) {
+                console.error('Erro Supabase:', upErr);
+                throw upErr;
+            }
 
             // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL para evitar ressuscitar cards
             try { setEntregas([]); } catch (e) { /* ignore */ }
