@@ -449,8 +449,9 @@ function InternalMobileApp() {
 
                 const tipoRaw = String((pedido && pedido.tipo) || 'entrega').trim();
                 const tipoLower = tipoRaw.toLowerCase();
-                const observacao = String((pedido && (pedido.observacoes || pedido.obs)) || '').toLowerCase();
-                const isAta = observacao.includes('ata');
+                // obs lida diretamente dos campos de observação — NUNCA de pedido.recebedor
+                const obsDisplay = String((pedido && (pedido.observacoes || pedido.obs)) || '').trim();
+                const isAta = obsDisplay.toLowerCase().includes('ata');
                 const isOutros = tipoLower === 'outros';
 
                 const cabecalho = isOutros
@@ -461,12 +462,15 @@ function InternalMobileApp() {
                     ? `*Status:* \u2705 ATA REGISTRADA`
                     : `*Status:* \u2705 Sucesso`;
 
+                // REGRA ABSOLUTA: tipo 'outros' → sem linha de recebedor; usa linha de Obs
                 const rotuloPessoa = tipoLower === 'recolha' ? '*Entregue por:*' : '*Recebido por:*';
-                const linhaRecebedor = (isOutros && isAta) ? '' : `${rotuloPessoa} ${recebedor}\n`;
+                const linhaObs = isOutros && obsDisplay ? `*Obs:* ${obsDisplay}\n` : '';
+                const linhaRecebedor = isOutros ? '' : `${rotuloPessoa} ${recebedor}\n`;
 
                 const textoWhatsApp =
                     `${cabecalho}\n` +
                     `${statusLinha}\n` +
+                    linhaObs +
                     linhaRecebedor +
                     `*Cliente:* ${nomeCliente}\n` +
                     `*Endere\u00e7o:* ${enderecoFinal}\n` +
@@ -534,7 +538,7 @@ function InternalMobileApp() {
 
                 const recebedor = (pedido && pedido.recebedor) || 'MORADOR';
                 const rotuloPessoa = tipoLower === 'recolha' ? '*Entregue por:*' : '*Recebido por:*';
-                const linhaRecebedor = (isOutros && isAta) ? '' : `${rotuloPessoa} ${recebedor}\n`;
+                const linhaRecebedor = isOutros ? '' : `${rotuloPessoa} ${recebedor}\n`;
 
                 const textoWhatsApp =
                     `${cabecalho}\n` +
@@ -764,99 +768,110 @@ function InternalMobileApp() {
                                 <p style={{ color: theme.textLight }}>O mapa e a lista abaixo continuam visíveis para sua conferência.</p>
                                 <button onClick={carregarRota} style={{ marginTop: '10px', padding: '10px 20px', background: theme.primary, border: 'none', borderRadius: '20px', fontWeight: 'bold', color: '#fff', cursor: 'pointer' }}>🔄 Sincronizar Agora</button>
                             </div>
-                        ) : (
-                            // CARTÃO DA ENTREGA ATUAL (CARD GIGANTE)
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                <div style={{ marginBottom: '10px' }}>
-                                    <span style={{ background: theme.header, color: '#fff', padding: '5px 12px', borderRadius: '15px', fontSize: '12px', fontWeight: 'bold' }}>PRÓXIMA PARADA</span>
-                                </div>
-
-                                <div style={{
-                                    backgroundColor: theme.card,
-                                    borderRadius: '24px',
-                                    padding: '25px',
-                                    boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '20px'
-                                }}>
-                                    {/* Tempo estimado para entrega */}
-                                    <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '14px', fontWeight: 'bold' }}>
-                                        ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem_logistica || 1)}
-                                    </div>
-                                    {/* Dados do Cliente */}
-                                    <div>
-                                        <h1 style={{ margin: '0 0 5px 0', color: theme.textMain, fontSize: '22px' }}>{tarefaAtual.cliente}</h1>
-                                        <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 {tarefaAtual.endereco}</p>
+                        ) : (() => {
+                            const tipoAtual = String((tarefaAtual && tarefaAtual.tipo) || 'entrega').toLowerCase().trim();
+                            const tipoLabel = tipoAtual === 'recolha' ? 'RECOLHA' : tipoAtual === 'outros' ? 'OUTROS/ATAS' : 'ENTREGA';
+                            const tipoCor = tipoAtual === 'recolha' ? '#f39c12' : tipoAtual === 'outros' ? '#9333ea' : '#3b82f6';
+                            return (
+                                // CARTÃO DA ENTREGA ATUAL (CARD GIGANTE)
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    <div style={{ marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <span style={{ background: theme.header, color: '#fff', padding: '5px 12px', borderRadius: '15px', fontSize: '12px', fontWeight: 'bold' }}>PRÓXIMA PARADA</span>
+                                        <span style={{ background: tipoCor, color: '#fff', padding: '5px 14px', borderRadius: '15px', fontSize: '13px', fontWeight: '900', letterSpacing: '1px' }}>{tipoLabel}</span>
                                     </div>
 
-                                    {/* Recado/Obs removido (campo 'msg' não existe) */}
+                                    <div style={{
+                                        backgroundColor: theme.card,
+                                        borderRadius: '24px',
+                                        padding: '25px',
+                                        boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '20px'
+                                    }}>
+                                        {/* Título dinâmico do tipo no topo do card */}
+                                        <div style={{ textAlign: 'center', padding: '10px 0 4px', borderBottom: `3px solid ${tipoCor}`, marginBottom: '4px' }}>
+                                            <span style={{ fontSize: '20px', fontWeight: '900', color: tipoCor, letterSpacing: '2px', textTransform: 'uppercase' }}>{tipoLabel}</span>
+                                        </div>
+                                        {/* Tempo estimado para entrega */}
+                                        <div style={{ marginBottom: '8px', color: theme.textLight, fontSize: '14px', fontWeight: 'bold' }}>
+                                            ⏱️ Tempo estimado: {estimarTempoEntrega(tarefaAtual.ordem_logistica || 1)}
+                                        </div>
+                                        {/* Dados do Cliente */}
+                                        <div>
+                                            <h1 style={{ margin: '0 0 5px 0', color: theme.textMain, fontSize: '22px' }}>{tarefaAtual.cliente}</h1>
+                                            <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 {tarefaAtual.endereco}</p>
+                                        </div>
 
-                                    {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                        {/* Recado/Obs removido (campo 'msg' não existe) */}
+
+                                        {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                                            <button
+                                                onClick={() => abrirGPS('waze', tarefaAtual.lat, tarefaAtual.lng)}
+                                                style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                                            >
+                                                🚙 WAZE
+                                            </button>
+                                            <button
+                                                onClick={() => abrirGPS('maps', tarefaAtual.lat, tarefaAtual.lng)}
+                                                style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                                            >
+                                                🗺️ MAPS
+                                            </button>
+                                        </div>
+
+                                        <hr style={{ border: 'none', borderTop: '1px solid #f3f4f6', margin: '5px 0' }} />
+
+                                        {/* BOTÃO DE FINALIZAR */}
                                         <button
-                                            onClick={() => abrirGPS('waze', tarefaAtual.lat, tarefaAtual.lng)}
-                                            style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                                            onClick={() => finalizarEntrega(tarefaAtual)}
+                                            style={{
+                                                width: '100%',
+                                                padding: '20px',
+                                                borderRadius: '18px',
+                                                border: 'none',
+                                                background: theme.secondary,
+                                                color: '#fff',
+                                                fontWeight: '800',
+                                                fontSize: '18px',
+                                                cursor: 'pointer',
+                                                borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                                borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
+                                                transition: 'background 0.3s',
+                                                marginBottom: '10px'
+                                            }}
                                         >
-                                            🚙 WAZE
+                                            ✅ FINALIZAR {tipoLabel}
                                         </button>
+
+                                        {/* BOTÃO DE FALHA */}
                                         <button
-                                            onClick={() => abrirGPS('maps', tarefaAtual.lat, tarefaAtual.lng)}
-                                            style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                                            onClick={() => reportarFalha(tarefaAtual)}
+                                            style={{
+                                                backgroundColor: '#9333ea',
+                                                color: 'white',
+                                                border: '3px solid #000',
+                                                borderRadius: '8px',
+                                                fontWeight: '900',
+                                                fontSize: '11px',
+                                                padding: '8px 10px',
+                                                whiteSpace: 'nowrap',
+                                                width: '100%',
+                                                cursor: 'pointer',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '6px'
+                                            }}
                                         >
-                                            🗺️ MAPS
+                                            TESTE FALHA
                                         </button>
                                     </div>
-
-                                    <hr style={{ border: 'none', borderTop: '1px solid #f3f4f6', margin: '5px 0' }} />
-
-                                    {/* BOTÃO DE FINALIZAR */}
-                                    <button
-                                        onClick={() => finalizarEntrega(tarefaAtual)}
-                                        style={{
-                                            width: '100%',
-                                            padding: '20px',
-                                            borderRadius: '18px',
-                                            border: 'none',
-                                            background: theme.secondary,
-                                            color: '#fff',
-                                            fontWeight: '800',
-                                            fontSize: '18px',
-                                            cursor: 'pointer',
-                                            borderLeft: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                            borderRight: darkMode ? '1px solid #222' : '1px solid #ddd',
-                                            transition: 'background 0.3s',
-                                            marginBottom: '10px'
-                                        }}
-                                    >
-                                        ✅ FINALIZAR ENTREGA
-                                    </button>
-
-                                    {/* BOTÃO DE FALHA */}
-                                    <button
-                                        onClick={() => reportarFalha(tarefaAtual)}
-                                        style={{
-                                            backgroundColor: '#9333ea',
-                                            color: 'white',
-                                            border: '3px solid #000',
-                                            borderRadius: '8px',
-                                            fontWeight: '900',
-                                            fontSize: '11px',
-                                            padding: '8px 10px',
-                                            whiteSpace: 'nowrap',
-                                            width: '100%',
-                                            cursor: 'pointer',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '6px'
-                                        }}
-                                    >
-                                        TESTE FALHA
-                                    </button>
                                 </div>
-                            </div>
-                        )}
+                            );
+                        })()
+                        }
                     </>
                 )}
 
