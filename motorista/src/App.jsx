@@ -447,10 +447,31 @@ function InternalMobileApp() {
                 const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
                 const enderecoFinal = String((pedido && pedido.endereco) || '').trim();
 
+                const tipoRaw = String((pedido && pedido.tipo) || 'entrega').trim();
+                const tipoLower = tipoRaw.toLowerCase();
+                const observacao = String((pedido && (pedido.observacoes || pedido.obs)) || '').toLowerCase();
+                const isAta = observacao.includes('ata');
+                const isOutros = tipoLower === 'outros';
+
+                const cabecalho = isOutros
+                    ? '------------- *OUTROS/ATAS* -------------'
+                    : `------------- *${tipoRaw.toUpperCase()}* -------------`;
+
+                const statusLinha = (isOutros && isAta)
+                    ? `*Status:* \u2705 ATA REGISTRADA`
+                    : `*Status:* \u2705 Sucesso`;
+
+                const rotuloPessoa = tipoLower === 'recolha' ? '*Entregue por:*' : '*Recebido por:*';
+                const linhaRecebedor = (isOutros && isAta) ? '' : `${rotuloPessoa} ${recebedor}\n`;
+
                 const textoWhatsApp =
-                    `Status: Sucesso\n` +
-                    `Recebido por: ${recebedor}\n` +
-                    `Cliente: ${nomeCliente} | Endere\u00e7o: ${enderecoFinal} | Motorista: ${nomeMotorista} | Hora: ${hora}`;
+                    `${cabecalho}\n` +
+                    `${statusLinha}\n` +
+                    linhaRecebedor +
+                    `*Cliente:* ${nomeCliente}\n` +
+                    `*Endere\u00e7o:* ${enderecoFinal}\n` +
+                    `*Motorista:* ${nomeMotorista}\n` +
+                    `*Hora:* ${hora}`;
 
                 const urlWhatsApp = `https://wa.me/5548996525008?text=${encodeURIComponent(textoWhatsApp)}`;
                 window.open(urlWhatsApp, '_blank');
@@ -470,7 +491,8 @@ function InternalMobileApp() {
     };
 
     // Função para Reportar Falha (Nova Funcionalidade)
-    const reportarFalha = async (id) => {
+    const reportarFalha = async (pedido) => {
+        const id = pedido && pedido.id ? pedido.id : pedido;
         const motivo = window.prompt("Qual o motivo da falha? (Ex: Cliente ausente, Endereço não localizado)");
         if (motivo === null) return;
         if (!motivo.trim()) { alert("Informe o motivo."); return; }
@@ -488,6 +510,47 @@ function InternalMobileApp() {
             // Deixe o Realtime cuidar da atualização local para evitar remover/zerar arrays
             // (Evita efeitos colaterais como pinos sumindo). O alerta informa o motorista.
             alert("❌ Falha registrada com sucesso. O gestor verá o pino vermelho.");
+
+            // 📲 RELATÓRIO DE FALHA VIA WHATSAPP
+            try {
+                const nomeCliente = String((pedido && pedido.cliente) || '').trim();
+                const nomeMotorista = (motorista && motorista.nome) || 'Motorista';
+                const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                const enderecoFinal = String((pedido && pedido.endereco) || '').trim();
+
+                const tipoRaw = String((pedido && pedido.tipo) || 'entrega').trim();
+                const tipoLower = tipoRaw.toLowerCase();
+                const observacao = String((pedido && (pedido.observacoes || pedido.obs)) || '').toLowerCase();
+                const isAta = observacao.includes('ata');
+                const isOutros = tipoLower === 'outros';
+
+                const cabecalho = isOutros
+                    ? '------------- *OUTROS/ATAS* -------------'
+                    : `------------- *${tipoRaw.toUpperCase()}* -------------`;
+
+                const statusLinha = (isOutros && isAta)
+                    ? `*Status:* \u274c ATA N\u00c3O REGISTRADA`
+                    : `*Status:* \u274c Falha`;
+
+                const recebedor = (pedido && pedido.recebedor) || 'MORADOR';
+                const rotuloPessoa = tipoLower === 'recolha' ? '*Entregue por:*' : '*Recebido por:*';
+                const linhaRecebedor = (isOutros && isAta) ? '' : `${rotuloPessoa} ${recebedor}\n`;
+
+                const textoWhatsApp =
+                    `${cabecalho}\n` +
+                    `${statusLinha}\n` +
+                    `*Motivo:* ${motivo}\n` +
+                    linhaRecebedor +
+                    `*Cliente:* ${nomeCliente}\n` +
+                    `*Endere\u00e7o:* ${enderecoFinal}\n` +
+                    `*Motorista:* ${nomeMotorista}\n` +
+                    `*Hora:* ${hora}`;
+
+                const urlWhatsApp = `https://wa.me/5548996525008?text=${encodeURIComponent(textoWhatsApp)}`;
+                window.open(urlWhatsApp, '_blank');
+            } catch (waErr) {
+                console.warn('reportarFalha: falha ao abrir WhatsApp', waErr);
+            }
         } else {
             alert("Erro ao reportar falha: " + error.message);
         }
@@ -771,7 +834,7 @@ function InternalMobileApp() {
 
                                     {/* BOTÃO DE FALHA */}
                                     <button
-                                        onClick={() => reportarFalha(tarefaAtual.id)}
+                                        onClick={() => reportarFalha(tarefaAtual)}
                                         style={{
                                             backgroundColor: '#9333ea',
                                             color: 'white',
