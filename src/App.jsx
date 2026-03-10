@@ -2959,12 +2959,10 @@ function App() {
                                             return `${titulo}\n*CLIENTE:* ${p.cliente || ''}\n*ENDERE\u00c7O:* ${p.endereco || ''}\n*OBS:* ${obs}`;
                                         });
                                         const texto = blocos.join('\n---------------------------\n');
-                                        navigator.clipboard.writeText(texto)
-                                            .then(() => {
-                                                setToastCopiarTudo(true);
-                                                setTimeout(() => setToastCopiarTudo(false), 2500);
-                                            })
-                                            .catch(() => alert('N\u00e3o foi poss\u00edvel copiar. Verifique as permiss\u00f5es do navegador.'));
+                                        navigator.clipboard.writeText(texto).catch(() => { });
+                                        window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+                                        setToastCopiarTudo(true);
+                                        setTimeout(() => setToastCopiarTudo(false), 2500);
                                     }}
                                     style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}
                                 >
@@ -3044,10 +3042,10 @@ function App() {
                                                                 `*CLIENTE:* ${p.cliente || ''}\n` +
                                                                 `*ENDERE\u00c7O:* ${p.endereco || ''}\n` +
                                                                 `*OBS:* ${obsTexto}`;
-                                                            navigator.clipboard.writeText(texto).then(() => {
-                                                                setCardCopiado(p.id);
-                                                                setTimeout(() => setCardCopiado(null), 2000);
-                                                            }).catch(() => alert('Não foi possível copiar. Verifique as permissões do navegador.'));
+                                                            navigator.clipboard.writeText(texto).catch(() => { });
+                                                            window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
+                                                            setCardCopiado(p.id);
+                                                            setTimeout(() => setCardCopiado(null), 2000);
                                                         }}
                                                         style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '2px 4px', color: cardCopiado === p.id ? '#22c55e' : '#FF8C00', lineHeight: 1, flexShrink: 0, transition: 'color 0.2s' }}
                                                     >{cardCopiado === p.id ? '✅' : '📋'}</button>
