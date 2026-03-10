@@ -209,6 +209,8 @@ function App() {
     // Estados do Supabase
     const [entregas, setEntregas] = useState([]);
     const [pedidosPendentes, setPedidosPendentes] = useState([]);
+    const [cardCopiado, setCardCopiado] = useState(null);
+    const [toastCopiarTudo, setToastCopiarTudo] = useState(false);
     // compat shim: estado para seleções de vagas (se o projeto usar esse nome em outros trechos)
     const [vagasSelecionadas, setVagasSelecionadas] = useState([]);
     // estado para controles de marcadores do mapa (visibilidade separada dos cards)
@@ -2928,6 +2930,48 @@ function App() {
 
                         </div>
                         {/* --- FIM DO CABEÇALHO --- */}
+                        {/* BOTÃO COPIAR TUDO */}
+                        {pedidosPendentes && pedidosPendentes.length > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px', position: 'relative' }}>
+                                {toastCopiarTudo && (
+                                    <span style={{ position: 'absolute', top: '-32px', right: 0, background: '#16a34a', color: '#fff', padding: '4px 14px', borderRadius: '20px', fontSize: '13px', fontWeight: 700, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+                                        ✅ Todos os cards copiados!
+                                    </span>
+                                )}
+                                <button
+                                    onClick={() => {
+                                        const ativos = (pedidosPendentes || []).filter(e => {
+                                            const s = String(e.status || '').trim().toLowerCase();
+                                            return s === 'pendente' || s === 'adicionado';
+                                        }).sort((a, b) => {
+                                            const orA = Number(a.ordem_logistica) > 0 ? Number(a.ordem_logistica) : 999;
+                                            const orB = Number(b.ordem_logistica) > 0 ? Number(b.ordem_logistica) : 999;
+                                            return orA - orB;
+                                        });
+                                        const blocos = ativos.map(p => {
+                                            const tipoLower = String(p.tipo || 'entrega').toLowerCase().trim();
+                                            const titulo = tipoLower === 'recolha'
+                                                ? '*RECOLHA*'
+                                                : tipoLower === 'outros'
+                                                    ? '*OUTROS/ATAS*'
+                                                    : '*ENTREGA*';
+                                            const obs = p.obs || p.observacoes || 'Sem observa\u00e7\u00f5es';
+                                            return `${titulo}\n*CLIENTE:* ${p.cliente || ''}\n*ENDERE\u00c7O:* ${p.endereco || ''}\n*OBS:* ${obs}`;
+                                        });
+                                        const texto = blocos.join('\n---------------------------\n');
+                                        navigator.clipboard.writeText(texto)
+                                            .then(() => {
+                                                setToastCopiarTudo(true);
+                                                setTimeout(() => setToastCopiarTudo(false), 2500);
+                                            })
+                                            .catch(() => alert('N\u00e3o foi poss\u00edvel copiar. Verifique as permiss\u00f5es do navegador.'));
+                                    }}
+                                    style={{ background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.2)' }}
+                                >
+                                    📋 Copiar Todos os Dados
+                                </button>
+                            </div>
+                        )}
                         {(!pedidosPendentes || pedidosPendentes.length === 0) ? <p style={{ textAlign: 'center', color: theme.textLight }}>Tudo limpo! Sem pendências.</p> : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
                                 {pedidosPendentes
@@ -2962,7 +3006,52 @@ function App() {
                                                     <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: tipoColor, color: contrast, fontWeight: 700 }}>{tipo}</span>
                                                 </div>
                                                 <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>📍 {p.endereco} {(!(p.lat && p.lng)) && <span title="Sem coordenadas: não participará da roteirização automática" style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Sem coords</span>}</p>
-                                                <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}><strong>Obs:</strong> Sem observações</p>
+                                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, margin: '6px 0', flexWrap: 'wrap' }}>
+                                                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#FF8C00', whiteSpace: 'nowrap' }}>Obs:</span>
+                                                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#FF8C00', flex: 1, wordBreak: 'break-word', minWidth: 0 }}>
+                                                        {p.obs || p.observacoes || 'Sem observações'}
+                                                    </span>
+                                                    <button
+                                                        title="Editar observação"
+                                                        onClick={async () => {
+                                                            const atual = p.obs || p.observacoes || '';
+                                                            const nova = window.prompt('Editar observação:', atual);
+                                                            if (nova === null) return;
+                                                            const obsAtualizada = nova.trim();
+                                                            try {
+                                                                await supabase.from('entregas').update({ obs: obsAtualizada }).eq('id', p.id);
+                                                                setPedidosPendentes(prev => (prev || []).map(item =>
+                                                                    item.id === p.id ? { ...item, obs: obsAtualizada } : item
+                                                                ));
+                                                            } catch (e) {
+                                                                alert('Erro ao salvar observação: ' + (e && e.message ? e.message : String(e)));
+                                                            }
+                                                        }}
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '2px 4px', color: '#FF8C00', lineHeight: 1, flexShrink: 0 }}
+                                                    >🖊️</button>
+                                                    <button
+                                                        title="Copiar para WhatsApp"
+                                                        onClick={() => {
+                                                            const tipoLower = String(p.tipo || 'entrega').toLowerCase().trim();
+                                                            const tituloCopia = tipoLower === 'recolha'
+                                                                ? '*RECOLHA*'
+                                                                : tipoLower === 'outros'
+                                                                    ? '*OUTROS/ATAS*'
+                                                                    : '*ENTREGA*';
+                                                            const obsTexto = p.obs || p.observacoes || 'Sem observa\u00e7\u00f5es';
+                                                            const texto =
+                                                                `${tituloCopia}\n` +
+                                                                `*CLIENTE:* ${p.cliente || ''}\n` +
+                                                                `*ENDERE\u00c7O:* ${p.endereco || ''}\n` +
+                                                                `*OBS:* ${obsTexto}`;
+                                                            navigator.clipboard.writeText(texto).then(() => {
+                                                                setCardCopiado(p.id);
+                                                                setTimeout(() => setCardCopiado(null), 2000);
+                                                            }).catch(() => alert('Não foi possível copiar. Verifique as permissões do navegador.'));
+                                                        }}
+                                                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '2px 4px', color: cardCopiado === p.id ? '#22c55e' : '#FF8C00', lineHeight: 1, flexShrink: 0, transition: 'color 0.2s' }}
+                                                    >{cardCopiado === p.id ? '✅' : '📋'}</button>
+                                                </div>
                                                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                                                     <button onClick={() => excluirPedido(p.id)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
                                                     {(p.lat && p.lng) ? (
