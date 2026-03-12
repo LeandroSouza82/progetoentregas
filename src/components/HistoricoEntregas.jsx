@@ -29,8 +29,9 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
         const endereco = entrega.endereco || 'Não informado';
         const horario = entrega.horario_conclusao || '';
         const recebedor = entrega.recebedor || '';
-        const lat = entrega.lat_conclusao || '';
-        const lng = entrega.lng_conclusao || '';
+        // Prioriza lat_realizacao (campo salvo pelo DriverApp no futuro), com fallback para lat_conclusao (campo atual)
+        const lat = entrega.lat_realizacao || entrega.lat_conclusao || '';
+        const lng = entrega.lng_realizacao || entrega.lng_conclusao || '';
         const obs = entrega.observacoes || entrega.obs || entrega.motivo_nao_entrega || '';
 
         let texto = `*RELATÓRIO DE ATIVIDADE - ADECELL*\n\n`;
@@ -41,7 +42,11 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
 
         if (horario) texto += `*Horário:* ${horario}\n`;
         if (recebedor) texto += `*Recebedor:* ${recebedor}\n`;
-        if (lat && lng) texto += `*Localização:* https://www.google.com/maps?q=${lat},${lng}\n`;
+        if (lat && lng) {
+            texto += `📍 Mapa da Finalização: https://www.google.com/maps?q=${lat},${lng}\n`;
+        } else {
+            texto += `📍 Mapa da Finalização: Coordenadas GPS não registradas para esta finalização\n`;
+        }
         if (obs) texto += `*Obs:* ${obs}\n`;
 
         navigator.clipboard.writeText(texto).then(() => {
@@ -54,7 +59,9 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
 
     // Corrige lat/lng da entrega com as coordenadas reais do GPS do motorista
     const handleCorrigirCoordenadas = async (entrega) => {
-        if (!entrega.lat_conclusao || !entrega.lng_conclusao) {
+        const latGPS = entrega.lat_realizacao || entrega.lat_conclusao;
+        const lngGPS = entrega.lng_realizacao || entrega.lng_conclusao;
+        if (!latGPS || !lngGPS) {
             alert('Dados de GPS do motorista ausentes para esta entrega.');
             return;
         }
@@ -62,8 +69,8 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
             const { error } = await supabase
                 .from('entregas')
                 .update({
-                    lat: entrega.lat_conclusao,
-                    lng: entrega.lng_conclusao
+                    lat: latGPS,
+                    lng: lngGPS
                 })
                 .eq('id', entrega.id);
 
@@ -263,11 +270,11 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                                     <span>📍</span>
                                                     <span>{entrega.endereco || 'Endereço não informado'}</span>
                                                 </div>
-                                                {(entrega.horario_conclusao || entrega.recebedor || entrega.lat_conclusao) && (
+                                                {(entrega.horario_conclusao || entrega.recebedor || entrega.lat_realizacao || entrega.lat_conclusao) && (
                                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '4px', fontSize: '11px', color: safeTheme.primary }}>
                                                         {entrega.horario_conclusao && <span>🕒 {entrega.horario_conclusao}</span>}
                                                         {entrega.recebedor && <span>👤 {entrega.recebedor}</span>}
-                                                        {entrega.lat_conclusao && (
+                                                        {(entrega.lat_realizacao || entrega.lat_conclusao) && (
                                                             <span style={{ color: '#10b981', fontWeight: 'bold' }}>📍 Local Validado</span>
                                                         )}
                                                     </div>
@@ -339,8 +346,8 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                             </div>
                                         )}
 
-                                        {/* Botão de correção GPS — aparece apenas quando o motorista gravou lat_conclusao */}
-                                        {entrega.lat_conclusao && entrega.lng_conclusao && isEntregue && (
+                                        {/* Botão de correção GPS — aparece quando o motorista gravou lat_realizacao ou lat_conclusao */}
+                                        {(entrega.lat_realizacao || entrega.lat_conclusao) && (entrega.lng_realizacao || entrega.lng_conclusao) && isEntregue && (
                                             <button
                                                 onClick={(e) => {
                                                     e.stopPropagation();
@@ -371,7 +378,7 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                                     e.currentTarget.style.background = 'rgba(251,146,60,0.12)';
                                                     e.currentTarget.style.color = '#fb923c';
                                                 }}
-                                                title={`Substituir coordenadas do Mapbox pelo GPS do motorista (${entrega.lat_conclusao}, ${entrega.lng_conclusao})`}
+                                                title={`Substituir coordenadas do Mapbox pelo GPS do motorista (${entrega.lat_realizacao || entrega.lat_conclusao}, ${entrega.lng_realizacao || entrega.lng_conclusao})`}
                                             >
                                                 <span>📍</span> Corrigir Mapa com GPS do Motorista
                                             </button>

@@ -429,10 +429,29 @@ function InternalMobileApp() {
         const id = pedido && pedido.id ? pedido.id : pedido;
         if (!window.confirm("Confirmar entrega realizada?")) return;
 
+        // Captura GPS exato do motorista no momento da finalização
+        let latGPS = null, lngGPS = null;
+        try {
+            await new Promise((resolve) => {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => { latGPS = pos.coords.latitude; lngGPS = pos.coords.longitude; resolve(); },
+                    () => resolve(),
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+                );
+            });
+        } catch (e) { /* continua sem GPS */ }
+
+        const updatePayload = { status: 'entregue' };
+        if (latGPS && lngGPS) {
+            updatePayload.lat_conclusao = latGPS;
+            updatePayload.lng_conclusao = lngGPS;
+            updatePayload.horario_conclusao = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        }
+
         // IMPORTANTE: Status 'entregue' para o pino ficar verde instantaneamente no Dashboard
         const { error } = await supabase
             .from('entregas')
-            .update({ status: 'entregue' })
+            .update(updatePayload)
             .eq('id', id);
 
         if (!error) {
@@ -503,11 +522,35 @@ function InternalMobileApp() {
 
         if (!window.confirm("Confirmar FALHA na entrega?")) return;
 
+        // Captura GPS exato do motorista no momento da falha
+        let latGPS = null, lngGPS = null;
+        try {
+            await new Promise((resolve) => {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => { latGPS = pos.coords.latitude; lngGPS = pos.coords.longitude; resolve(); },
+                    () => resolve(),
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+                );
+            });
+        } catch (e) { /* continua sem GPS */ }
+
+        const updateFalhaPayload = {
+            status: 'falha',
+            motivo_nao_entrega: motivo,
+            recebedor: null,
+            tipo_recebedor: null,
+            ...(latGPS && lngGPS ? {
+                lat_conclusao: latGPS,
+                lng_conclusao: lngGPS,
+                horario_conclusao: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+            } : {})
+        };
+
         // IMPORTANTE: Status 'falha' para o pino ficar vermelho instantaneamente no Dashboard
         // Ao reportar falha gravamos o motivo em `motivo_nao_entrega` e limpamos `recebedor` e `tipo_recebedor`
         const { error } = await supabase
             .from('entregas')
-            .update({ status: 'falha', motivo_nao_entrega: motivo, recebedor: null, tipo_recebedor: null })
+            .update(updateFalhaPayload)
             .eq('id', id);
 
         if (!error) {
