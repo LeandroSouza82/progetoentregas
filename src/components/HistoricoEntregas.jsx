@@ -381,12 +381,12 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                                                 color: '#fb923c',
                                                                 border: '1px solid rgba(251,146,60,0.5)',
                                                                 boxShadow: '0 0 8px rgba(251,146,60,0.25)'
-                                                              }
+                                                            }
                                                             : {
                                                                 background: 'rgba(16,185,129,0.1)',
                                                                 color: '#10b981',
                                                                 border: '1px solid rgba(16,185,129,0.3)'
-                                                              }
+                                                            }
                                                         )
                                                     }}>
                                                         {badgeGPS.tipo === 'divergencia'
