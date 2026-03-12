@@ -104,6 +104,31 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
         return s === 'em_rota' ? 'EM ROTA' : s.toUpperCase();
     };
 
+    // Fórmula de Haversine — retorna distância em km entre dois pontos geográficos
+    const calcularDistancia = (lat1, lon1, lat2, lon2) => {
+        const R = 6371;
+        const toRad = (v) => (v * Math.PI) / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+
+    // Retorna { tipo: 'divergencia'|'validado'|null, distancia } para exibir badge GPS
+    const getBadgeGPS = (entrega) => {
+        const latOrigem = parseFloat(entrega.lat);
+        const lngOrigem = parseFloat(entrega.lng);
+        const latReal = parseFloat(entrega.lat_realizacao || entrega.lat_conclusao);
+        const lngReal = parseFloat(entrega.lng_realizacao || entrega.lng_conclusao);
+        if (!Number.isFinite(latOrigem) || !Number.isFinite(lngOrigem) ||
+            !Number.isFinite(latReal)   || !Number.isFinite(lngReal)) return null;
+        const dist = calcularDistancia(latOrigem, lngOrigem, latReal, lngReal);
+        return { tipo: dist > 0.3 ? 'divergencia' : 'validado', distancia: dist };
+    };
+
     return (
         <>
             {/* Backdrop com blur */}
@@ -209,6 +234,7 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                 const statusLabel = getStatusLabel(status);
                                 const detalheExtra = entrega.observacoes || entrega.obs || entrega.motivo_nao_entrega || '';
                                 const isEntregue = ['entregue', 'concluido'].includes(status);
+                                const badgeGPS = getBadgeGPS(entrega);
 
                                 return (
                                     <div
@@ -262,9 +288,41 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
 
                                         {/* Informações Principais */}
                                         <div style={{ marginBottom: '12px' }}>
-                                            <div style={{ color: safeTheme.textMain, fontWeight: '700', fontSize: '16px', marginBottom: '4px' }}>
+                                            <div style={{ color: safeTheme.textMain, fontWeight: '700', fontSize: '16px', marginBottom: '6px' }}>
                                                 {entrega.cliente || 'Cliente não identificado'}
                                             </div>
+
+                                            {/* Badge de divergência GPS */}
+                                            {badgeGPS && (
+                                                <div style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '5px',
+                                                    fontSize: '11px',
+                                                    fontWeight: '700',
+                                                    padding: '3px 10px',
+                                                    borderRadius: '20px',
+                                                    marginBottom: '8px',
+                                                    ...(badgeGPS.tipo === 'divergencia'
+                                                        ? {
+                                                            background: 'rgba(251,146,60,0.15)',
+                                                            color: '#fb923c',
+                                                            border: '1px solid rgba(251,146,60,0.5)',
+                                                            boxShadow: '0 0 8px rgba(251,146,60,0.25)'
+                                                          }
+                                                        : {
+                                                            background: 'rgba(16,185,129,0.1)',
+                                                            color: '#10b981',
+                                                            border: '1px solid rgba(16,185,129,0.3)'
+                                                          }
+                                                    )
+                                                }}>
+                                                    {badgeGPS.tipo === 'divergencia'
+                                                        ? `⚠️ Divergência de GPS: ${badgeGPS.distancia.toFixed(2)} km de distância`
+                                                        : '📍 GPS Validado'
+                                                    }
+                                                </div>
+                                            )}
                                             <div style={{ fontSize: '12px', color: safeTheme.textLight, display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                 <div style={{ display: 'flex', gap: '5px', alignItems: 'flex-start' }}>
                                                     <span>📍</span>
