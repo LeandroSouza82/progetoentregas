@@ -12,6 +12,11 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
         accent: theme?.accent || '#60a5fa'
     };
 
+    // IDs de entregas cujo GPS já foi corrigido nesta sessão (esconde o botão após sucesso)
+    const [gpsCorrigidoIds, setGpsCorrigidoIds] = React.useState(new Set());
+    // Toast de feedback
+    const [toast, setToast] = React.useState(null);
+
     // Ordenar entregas por criado_em descendente (mais recentes primeiro)
     const entregasOrdenadas = React.useMemo(() => {
         return [...entregas].sort((a, b) => {
@@ -82,6 +87,50 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
         }
     };
 
+    // Atualiza lat/lng do cliente no registro atual + pedidos pendentes do mesmo cliente
+    const atualizarGpsCliente = async (entrega) => {
+        const latGPS = entrega.lat_realizacao || entrega.lat_conclusao;
+        const lngGPS = entrega.lng_realizacao || entrega.lng_conclusao;
+        const nomeCliente = entrega.cliente || `ID #${entrega.id}`;
+
+        if (!latGPS || !lngGPS) {
+            alert('GPS não disponível para esta entrega. Não é possível atualizar.');
+            return;
+        }
+
+        const confirmado = window.confirm(
+            `Deseja atualizar as coordenadas oficiais do cliente "${nomeCliente}" para este novo local exato?\n\n` +
+            `Isso corrigirá o ponto neste registro e em todos os pedidos pendentes deste cliente.`
+        );
+        if (!confirmado) return;
+
+        try {
+            // 1. Corrige o registro atual (da entrega já finalizada)
+            const { error: errAtual } = await supabase
+                .from('entregas')
+                .update({ lat: latGPS, lng: lngGPS })
+                .eq('id', entrega.id);
+            if (errAtual) throw errAtual;
+
+            // 2. Propaga para todos os pedidos pendentes/em_rota do mesmo cliente
+            //    para que futuras rotas já usem o GPS correto
+            if (entrega.cliente) {
+                await supabase
+                    .from('entregas')
+                    .update({ lat: latGPS, lng: lngGPS })
+                    .eq('cliente', entrega.cliente)
+                    .in('status', ['pendente', 'em_rota']);
+            }
+
+            setGpsCorrigidoIds(prev => new Set([...prev, entrega.id]));
+            setToast(`✅ Coordenadas de "${nomeCliente}" atualizadas com sucesso!`);
+            setTimeout(() => setToast(null), 4000);
+        } catch (err) {
+            console.error('Erro ao atualizar GPS do cliente:', err);
+            alert('❌ Erro ao atualizar: ' + (err?.message || String(err)));
+        }
+    };
+
     // Helper para definir cor do status
     const getStatusColor = (status) => {
         const s = String(status || '').toLowerCase();
@@ -124,13 +173,35 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
         const latReal = parseFloat(entrega.lat_realizacao || entrega.lat_conclusao);
         const lngReal = parseFloat(entrega.lng_realizacao || entrega.lng_conclusao);
         if (!Number.isFinite(latOrigem) || !Number.isFinite(lngOrigem) ||
-            !Number.isFinite(latReal)   || !Number.isFinite(lngReal)) return null;
+            !Number.isFinite(latReal) || !Number.isFinite(lngReal)) return null;
         const dist = calcularDistancia(latOrigem, lngOrigem, latReal, lngReal);
         return { tipo: dist > 0.3 ? 'divergencia' : 'validado', distancia: dist };
     };
 
     return (
         <>
+            {/* Toast de sucesso (auto-dismiss 4s) */}
+            {toast && (
+                <div style={{
+                    position: 'fixed',
+                    bottom: '32px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: '#10b981',
+                    color: '#fff',
+                    padding: '13px 24px',
+                    borderRadius: '12px',
+                    fontWeight: '700',
+                    fontSize: '14px',
+                    zIndex: 9999,
+                    boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none'
+                }}>
+                    {toast}
+                </div>
+            )}
+
             {/* Backdrop com blur */}
             {isOpen && (
                 <div
@@ -292,35 +363,74 @@ const HistoricoEntregas = ({ isOpen, onClose, entregas = [], theme = {} }) => {
                                                 {entrega.cliente || 'Cliente não identificado'}
                                             </div>
 
-                                            {/* Badge de divergência GPS */}
+                                            {/* Badge de divergência GPS + botão Atualizar Cadastro */}
                                             {badgeGPS && (
-                                                <div style={{
-                                                    display: 'inline-flex',
-                                                    alignItems: 'center',
-                                                    gap: '5px',
-                                                    fontSize: '11px',
-                                                    fontWeight: '700',
-                                                    padding: '3px 10px',
-                                                    borderRadius: '20px',
-                                                    marginBottom: '8px',
-                                                    ...(badgeGPS.tipo === 'divergencia'
-                                                        ? {
-                                                            background: 'rgba(251,146,60,0.15)',
-                                                            color: '#fb923c',
-                                                            border: '1px solid rgba(251,146,60,0.5)',
-                                                            boxShadow: '0 0 8px rgba(251,146,60,0.25)'
-                                                          }
-                                                        : {
-                                                            background: 'rgba(16,185,129,0.1)',
-                                                            color: '#10b981',
-                                                            border: '1px solid rgba(16,185,129,0.3)'
-                                                          }
-                                                    )
-                                                }}>
-                                                    {badgeGPS.tipo === 'divergencia'
-                                                        ? `⚠️ Divergência de GPS: ${badgeGPS.distancia.toFixed(2)} km de distância`
-                                                        : '📍 GPS Validado'
-                                                    }
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                                                    {/* Badge */}
+                                                    <div style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '5px',
+                                                        fontSize: '11px',
+                                                        fontWeight: '700',
+                                                        padding: '3px 10px',
+                                                        borderRadius: '20px',
+                                                        ...(badgeGPS.tipo === 'divergencia'
+                                                            ? {
+                                                                background: 'rgba(251,146,60,0.15)',
+                                                                color: '#fb923c',
+                                                                border: '1px solid rgba(251,146,60,0.5)',
+                                                                boxShadow: '0 0 8px rgba(251,146,60,0.25)'
+                                                              }
+                                                            : {
+                                                                background: 'rgba(16,185,129,0.1)',
+                                                                color: '#10b981',
+                                                                border: '1px solid rgba(16,185,129,0.3)'
+                                                              }
+                                                        )
+                                                    }}>
+                                                        {badgeGPS.tipo === 'divergencia'
+                                                            ? `⚠️ Divergência de GPS: ${badgeGPS.distancia.toFixed(2)} km`
+                                                            : '📍 GPS Validado'
+                                                        }
+                                                    </div>
+
+                                                    {/* Botão ao lado — apenas em divergência e ainda não corrigido */}
+                                                    {badgeGPS.tipo === 'divergencia' && !gpsCorrigidoIds.has(entrega.id) && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); atualizarGpsCliente(entrega); }}
+                                                            style={{
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: '4px',
+                                                                fontSize: '10px',
+                                                                fontWeight: '700',
+                                                                padding: '3px 9px',
+                                                                borderRadius: '20px',
+                                                                cursor: 'pointer',
+                                                                background: 'rgba(99,102,241,0.15)',
+                                                                color: '#818cf8',
+                                                                border: '1px solid rgba(99,102,241,0.4)',
+                                                                transition: 'all 0.2s ease'
+                                                            }}
+                                                            onMouseEnter={(e) => {
+                                                                e.currentTarget.style.background = '#6366f1';
+                                                                e.currentTarget.style.color = '#fff';
+                                                            }}
+                                                            onMouseLeave={(e) => {
+                                                                e.currentTarget.style.background = 'rgba(99,102,241,0.15)';
+                                                                e.currentTarget.style.color = '#818cf8';
+                                                            }}
+                                                            title={`Corrigir GPS de ${entrega.cliente || 'cliente'} para futuras entregas`}
+                                                        >
+                                                            🗺️ Atualizar Cadastro
+                                                        </button>
+                                                    )}
+
+                                                    {/* Feedback inline após correção bem-sucedida */}
+                                                    {badgeGPS.tipo === 'divergencia' && gpsCorrigidoIds.has(entrega.id) && (
+                                                        <span style={{ fontSize: '11px', color: '#10b981', fontWeight: '700' }}>✅ Corrigido</span>
+                                                    )}
                                                 </div>
                                             )}
                                             <div style={{ fontSize: '12px', color: safeTheme.textLight, display: 'flex', flexDirection: 'column', gap: '4px' }}>
