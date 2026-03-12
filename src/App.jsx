@@ -715,6 +715,7 @@ function App() {
     }, [recentList]);
 
     const [historyFilter, setHistoryFilter] = useState('');
+    const [gpsValidationMap, setGpsValidationMap] = useState({});
     const fileInputRef = useRef(null);
     // Busca reativa e normalizada para o Histórico (v157/v158)
     const filteredRecentList = React.useMemo(() => {
@@ -1954,6 +1955,67 @@ function App() {
 
     // NOTE: v42 cleanup: removed automatic clearing of canSendRoute (managed manually)
 
+    // 📡 GPS VALIDATION: carrega dados de validação para os clientes do histórico ao entrar em Nova Carga
+    useEffect(() => {
+        if (abaAtiva !== 'Nova Carga') return;
+        const clienteNames = [...new Set((recentList || []).map(it => it.cliente).filter(Boolean))];
+        if (clienteNames.length === 0) return;
+        let cancelled = false;
+        const fetchValidations = async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('entregas')
+                    .select('id, cliente, lat, lng, lat_conclusao, lng_conclusao')
+                    .eq('status', 'entregue')
+                    .in('cliente', clienteNames)
+                    .not('lat_conclusao', 'is', null)
+                    .order('created_at', { ascending: false });
+                if (cancelled || error || !data) return;
+                const newMap = {};
+                data.forEach(row => {
+                    if (newMap[row.cliente]) return; // já processou o mais recente
+                    const latO = parseFloat(row.lat);
+                    const lngO = parseFloat(row.lng);
+                    const latC = parseFloat(row.lat_conclusao);
+                    const lngC = parseFloat(row.lng_conclusao);
+                    const hasOrigem = Number.isFinite(latO) && Number.isFinite(lngO);
+                    const distMetros = hasOrigem
+                        ? haversineKm({ lat: latO, lng: lngO }, { lat: latC, lng: lngC }) * 1000
+                        : null;
+                    newMap[row.cliente] = {
+                        entregaId: row.id,
+                        latConclusao: latC,
+                        lngConclusao: lngC,
+                        distMetros,
+                        validado: distMetros !== null && distMetros <= 300
+                    };
+                });
+                setGpsValidationMap(newMap);
+            } catch (e) { console.error('[GPS Validation] fetch error:', e); }
+        };
+        fetchValidations();
+        return () => { cancelled = true; };
+    }, [abaAtiva, recentList]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // 🛠️ CORRIGIR ENDEREÇO: sobrescreve lat/lng do registro com as coordenadas reais de conclusão
+    const corrigirEnderecoCliente = async (e, clienteNome, entregaId, latC, lngC) => {
+        e.stopPropagation();
+        try {
+            const { error } = await supabase
+                .from('entregas')
+                .update({ lat: latC, lng: lngC })
+                .eq('id', entregaId);
+            if (error) throw error;
+            setGpsValidationMap(prev => ({
+                ...prev,
+                [clienteNome]: { ...prev[clienteNome], validado: true }
+            }));
+        } catch (err) {
+            console.error('[GPS Validation] erro ao corrigir endereço:', err);
+            alert('Erro ao corrigir o endereço. Tente novamente.');
+        }
+    };
+
     // 🧠 MEMÓRIA DO MOTORISTA: verifica se já temos coordenadas exatas de conclusão para este endereço
     const buscarMemoriaDoMotorista = async (enderecoBuscado) => {
         try {
@@ -2794,20 +2856,50 @@ function App() {
                                 {(!filteredRecentList || filteredRecentList.length === 0) ? (
                                     <div style={{ color: theme.textLight, padding: '12px' }}>Nenhum histórico disponível.</div>
                                 ) : (
-                                    (filteredRecentList || []).map((it, idx) => (
-                                        <div key={idx}
-                                            className="v10-history-card"
-                                            onClick={async () => {
-                                                try {
-                                                    setNomeCliente(it.cliente || '');
-                                                    setEnderecoEntrega(it.endereco || '');
-                                                } catch (e) { }
-                                            }}
-                                        >
-                                            <div className="title" style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
-                                            <div className="addr" style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
-                                        </div>
-                                    ))
+                                    (filteredRecentList || []).map((it, idx) => {
+                                        const gpsInfo = gpsValidationMap[it.cliente];
+                                        const precisaCorrecao = gpsInfo && !gpsInfo.validado && gpsInfo.distMetros !== null && gpsInfo.distMetros > 300;
+                                        const foiValidado = gpsInfo && gpsInfo.validado;
+                                        return (
+                                            <div key={idx}
+                                                className="v10-history-card"
+                                                onClick={async () => {
+                                                    try {
+                                                        setNomeCliente(it.cliente || '');
+                                                        setEnderecoEntrega(it.endereco || '');
+                                                    } catch (e) { }
+                                                }}
+                                            >
+                                                <div className="title" style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
+                                                <div className="addr" style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
+                                                {precisaCorrecao && (
+                                                    <button
+                                                        onClick={(e) => corrigirEnderecoCliente(e, it.cliente, gpsInfo.entregaId, gpsInfo.latConclusao, gpsInfo.lngConclusao)}
+                                                        style={{
+                                                            marginTop: 8,
+                                                            padding: '5px 11px',
+                                                            borderRadius: 6,
+                                                            background: '#f97316',
+                                                            border: 'none',
+                                                            color: '#fff',
+                                                            fontSize: 12,
+                                                            fontWeight: 700,
+                                                            cursor: 'pointer',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: 4
+                                                        }}
+                                                        title={`GPS real desviou ${Math.round(gpsInfo.distMetros)}m do endereço registrado`}
+                                                    >
+                                                        ⚠️ Corrigir Endereço
+                                                    </button>
+                                                )}
+                                                {foiValidado && (
+                                                    <div style={{ marginTop: 8, fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✅ Validado</div>
+                                                )}
+                                            </div>
+                                        );
+                                    })
                                 )}
                             </div>
                         </div>
