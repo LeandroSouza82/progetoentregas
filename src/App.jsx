@@ -733,6 +733,50 @@ function App() {
             });
         } catch (e) { return recentList || []; }
     }, [recentList, historyFilter]);
+
+    // ✅ PASSO 2: Carga inicial do Histórico de Clientes diretamente do banco (lista completa e distinta)
+    useEffect(() => {
+        if (!HAS_SUPABASE_CREDENTIALS) return;
+        let cancelled = false;
+        const carregarHistoricoClientes = async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('entregas')
+                    .select('cliente, endereco, lat, lng')
+                    .not('status', 'eq', 'arquivado')
+                    .not('cliente', 'is', null)
+                    .neq('cliente', '')
+                    .order('created_at', { ascending: false });
+                if (cancelled || error || !data) return;
+                // Deduplica por nome do cliente (case-insensitive) — mantém o mais recente
+                const seen = new Set();
+                const unicos = [];
+                for (const row of data) {
+                    const chave = String(row.cliente || '').toLowerCase().trim();
+                    if (!chave || seen.has(chave)) continue;
+                    seen.add(chave);
+                    unicos.push({
+                        cliente: row.cliente,
+                        endereco: row.endereco || '',
+                        lat: row.lat,
+                        lng: row.lng
+                    });
+                }
+                if (cancelled || unicos.length === 0) return;
+                // Mescla: registros existentes (localStorage) têm prioridade; novos do banco são acrescentados
+                setRecentList(prev => {
+                    const lista = Array.isArray(prev) ? prev : [];
+                    const prevKeys = new Set(lista.map(p => String(p.cliente || '').toLowerCase().trim()));
+                    const novos = unicos.filter(u => !prevKeys.has(String(u.cliente || '').toLowerCase().trim()));
+                    if (novos.length === 0) return lista;
+                    return [...lista, ...novos];
+                });
+            } catch (e) { console.error('[Histórico] erro ao carregar do banco:', e); }
+        };
+        carregarHistoricoClientes();
+        return () => { cancelled = true; };
+    }, []); // executa apenas uma vez no mount
+
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
     const audioRef = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
@@ -2104,6 +2148,24 @@ function App() {
             if (error) throw error;
 
             const newPedido = inserted[0];
+
+            // ✅ PASSO 1: Atualiza a barra lateral em tempo real — adiciona o novo cliente no TOPO
+            try {
+                const novoRegistroHistorico = {
+                    cliente: nomeLimpo,
+                    endereco: enderecoPuro,
+                    lat: payload.lat,
+                    lng: payload.lng
+                };
+                setRecentList(prev => {
+                    const lista = Array.isArray(prev) ? prev : [];
+                    const jaExiste = lista.some(it =>
+                        String(it.cliente || '').toLowerCase().trim() === nomeLimpo.toLowerCase().trim()
+                    );
+                    if (jaExiste) return lista;
+                    return [novoRegistroHistorico, ...lista];
+                });
+            } catch (e) { /* ignore */ }
 
             // Agora que persistimos, garantir que o mapa saiba que não está limpo
             try { setMapCleared(false); } catch (e) { /* ignore */ }
