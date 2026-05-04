@@ -332,7 +332,6 @@ async function tryCandidatesWithMapbox(candidates, bbox, proximityParam, MAPBOX_
         try {
             for (const t of preferTypes) {
                 const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(cand))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=${t}&language=pt&limit=1`;
-                console.log('[GEO fuzzy] tentando:', url);
                 const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
                 if (!resp || !resp.ok) continue;
                 const jd = await resp.json();
@@ -358,7 +357,6 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
     // 🛑 Aplicar filtro logo na porta de entrada para evitar 422 e requisições desnecessárias
     try {
         const addressEntryClean = limparEnderecoParaMapbox(address);
-        console.log(`🚀 [GEO] Iniciando busca com endereço limpo: ${addressEntryClean}`);
         address = addressEntryClean;
     } catch (e) {
         // se a limpeza falhar por algum motivo, continuar com o valor original
@@ -497,12 +495,10 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
             const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
 
-            console.log('[GEO v33] Cidade detectada (FORÇADA):', strictCity, '| Query Limpa:', queryLimpa, '| bbox:', bbox);
 
             // 1) Tentar types=address
             // Use limit=1 to return the single most probable result (address precision)
             const urlAddr = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedQuery}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
-            console.log('[GEO v33] URL (address):', urlAddr);
             const resp1 = await fetch(urlAddr, { headers: { 'Accept': 'application/json' } });
             if (resp1 && resp1.ok) {
                 const d1 = await resp1.json();
@@ -524,7 +520,6 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             const encodedStreetQuery = encodeURIComponent(querySemNumerosParaRua);
 
             const urlStreet = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodedStreetQuery}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=street&language=pt&limit=5`;
-            console.log('[GEO v33] URL (street sem números):', urlStreet);
             const resp2 = await fetch(urlStreet, { headers: { 'Accept': 'application/json' } });
             if (resp2 && resp2.ok) {
                 const d2 = await resp2.json();
@@ -630,7 +625,6 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             if (!cepRegex.test(addressClean)) {
                 // tentar buscar postcode por types=postcode usando o termo limpo
                 const postcodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(addressClean))}.json?access_token=${MAPBOX_TOKEN}&bbox=${bbox}&proximity=${proximityParam}&types=postcode&language=pt&limit=1`;
-                console.log('[GEO v54] Tentando obter CEP via Mapbox (postcode lookup):', postcodeUrl);
                 try {
                     const respPc = await fetch(postcodeUrl, { headers: { 'Accept': 'application/json' } });
                     if (respPc && respPc.ok) {
@@ -674,7 +668,6 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 
                 const searchWithCep = `${streetOnly}${numberToken ? (', ' + numberToken) : ''}, ${foundPostcode}${cityForSearch ? (', ' + cityForSearch + ', SC, Brasil') : ''}`;
                 const urlCep = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(searchWithCep))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
-                console.log('[GEO v54] Reconsultando com CEP para precisão:', searchWithCep, urlCep);
                 try {
                     const respCep = await fetch(urlCep, { headers: { 'Accept': 'application/json' } });
                     if (respCep && respCep.ok) {
@@ -723,8 +716,6 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             `&language=pt` +
             `&limit=1`;
 
-        console.log('[GEO] Input original:', address);
-        console.log('[GEO] URL enviada ao Mapbox:', url);
 
         const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
         
@@ -1227,7 +1218,6 @@ export async function geocodePhoton(address, bounds = null) {
             `&limit=1` +
             `&lang=pt`;
 
-        console.log('🔍 Photon URL:', url);
 
         const response = await fetch(url, {
             headers: {
@@ -1235,7 +1225,6 @@ export async function geocodePhoton(address, bounds = null) {
             }
         });
 
-        console.log('📡 Photon Status:', response.status, response.statusText);
 
         if (!response.ok) {
             console.warn('⚠️ Photon resposta não-OK:', response.status);
@@ -1243,7 +1232,6 @@ export async function geocodePhoton(address, bounds = null) {
         }
 
         const data = await response.json();
-        console.log('📊 Photon Resposta:', data);
 
         if (!data || !data.features || data.features.length === 0) {
             console.warn('❌ Photon não encontrou resultados');
@@ -1321,7 +1309,6 @@ export async function geocodeNominatim(address, bounds = null) {
             `&limit=1` +
             `&addressdetails=1`;
 
-        console.log('🌍 Nominatim URL (restrito):', url);
 
         let response = await fetch(url, {
             headers: {
@@ -1330,7 +1317,6 @@ export async function geocodeNominatim(address, bounds = null) {
             }
         });
 
-        console.log('📡 Nominatim Status:', response.status, response.statusText);
 
         if (!response.ok) {
             if (response.status === 403) {
@@ -1341,7 +1327,6 @@ export async function geocodeNominatim(address, bounds = null) {
         }
 
         let data = await response.json();
-        console.log('📊 Nominatim Resposta (restrito):', data);
 
         // PLANO B: Se viewbox restrito retornar vazio, tentar sem bounded=1
         if (!data || data.length === 0) {
@@ -1358,7 +1343,6 @@ export async function geocodeNominatim(address, bounds = null) {
                 `&limit=5` +
                 `&addressdetails=1`;
 
-            console.log('🔄 Nominatim URL (fallback):', url);
 
             response = await fetch(url, {
                 headers: {
@@ -1370,7 +1354,6 @@ export async function geocodeNominatim(address, bounds = null) {
             if (!response.ok) return null;
 
             data = await response.json();
-            console.log('📊 Nominatim Resposta (fallback):', data);
         }
 
         if (!data || data.length === 0) {

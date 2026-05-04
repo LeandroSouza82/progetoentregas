@@ -2543,7 +2543,6 @@ function App() {
             // 1) Atualização em massa: associa motorista (UUID) e MUDA status para 'em_rota'
             // em_rota = saiu da Central de Despacho, está a caminho do motorista
             const motoristaUUID = String(motoristaSelecionadoId).trim();
-            console.log('[handleEnviarRota] motorista_id UUID:', motoristaUUID, '| ids:', idsParaAtualizar);
 
             const { error: upErr } = await supabase
                 .from('entregas')
@@ -2629,7 +2628,6 @@ function App() {
     // Diagnostic: show first pin data to help debug render issues (lat/lng types)
     try { 
         if (entregasMap && entregasMap.length > 0 && entregasMap[0]) {
-            console.log('📌 Teste de renderização - Primeiro pino (entregasMap[0]):', entregasMap[0]); 
         } else {
             console.warn('📌 Teste de renderização - entregasMap está vazio ou primeiro item é nulo.');
         }
