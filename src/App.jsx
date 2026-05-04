@@ -1100,7 +1100,7 @@ function App() {
                     if (!cancelled) setMotoristaCidade(cidadeCacheRef.current.get(key));
                     return;
                 }
-                const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
+                const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
                 const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${Number(motoristaDaRota.lng)},${Number(motoristaDaRota.lat)}.json?types=place&language=pt&limit=1&access_token=${token}`;
                 const resp = await fetch(url, { headers: { Accept: 'application/json' } });
                 if (!resp || !resp.ok) {
@@ -1710,7 +1710,19 @@ function App() {
             let routeGeo = null;
             try {
                 routeGeo = await getRouteGeometry(origin, remainingForDriver, {});
-            } catch (err) { console.warn('directions fail', err); }
+            } catch (err) { 
+                console.warn('⚠️ Directions fail (Emergency Bypass Activated)', err); 
+                // 🛑 BYPASS: Create a simple polyline using raw coordinates to avoid blocking dispatch
+                routeGeo = {
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: [
+                            [origin.lng, origin.lat],
+                            ...remainingForDriver.map(p => [Number(p.lng), Number(p.lat)])
+                        ]
+                    }
+                };
+            }
 
             // persist orders + status + polyline
             try {
@@ -1753,8 +1765,8 @@ function App() {
     // --- Mapbox Matrix helper: retorna array de durations do origin para cada destination (versão blindada)
     async function getRoadDistances(origin, destinations = []) {
         try {
-            const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
-            if (!token) throw new Error('VITE_MAPBOX_TOKEN não definido');
+            const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
+            if (!token) throw new Error('VITE_MAPBOX_ACCESS_TOKEN não definido');
 
             // 1. Validação da Origem
             if (!origin || !Number.isFinite(Number(origin.lat)) || !Number.isFinite(Number(origin.lng))) {
@@ -2375,10 +2387,12 @@ function App() {
 
             if (errBusca) throw errBusca;
 
-            const pedidosValidos = (entregasAtuais || []).filter(p => p.lat && p.lng);
+            const todasEntregas = entregasAtuais || [];
+            const pedidosValidos = todasEntregas.filter(p => p.lat && p.lng);
+            const pedidosSemCoords = todasEntregas.filter(p => !p.lat || !p.lng);
 
-            if (pedidosValidos.length === 0) {
-                try { alert('Nenhum pedido válido com coordenadas para organizar.'); } catch (e) { }
+            if (todasEntregas.length === 0) {
+                try { alert('Nenhum pedido pendente para organizar.'); } catch (e) { }
                 setIsCalculating(false);
                 return;
             }
@@ -2422,6 +2436,12 @@ function App() {
                 // O motorista "anda" até esse ponto — o próximo cálculo parte daqui
                 atualLat = parseFloat(proximoPonto.lat);
                 atualLng = parseFloat(proximoPonto.lng);
+            }
+
+            // 3.1 Bypass: Adicionar pedidos sem coordenadas ao final da rota para garantir o envio total
+            if (pedidosSemCoords.length > 0) {
+                console.log(`📦 Adicionando ${pedidosSemCoords.length} pedidos sem coordenadas ao final da fila.`);
+                rotaOrdenada = [...rotaOrdenada, ...pedidosSemCoords];
             }
 
             // 4. Grava a nova ordem no banco de dados
@@ -2505,14 +2525,15 @@ function App() {
                 return;
             }
 
-            if (!rotaOrdenadaState || rotaOrdenadaState.length === 0) {
-                console.error("❌ Erro: rotaOrdenadaState está vazio ou nulo.");
-                return;
+            let idsParaAtualizar = (rotaOrdenadaState || []).map(i => i && i.id).filter(Boolean);
+            
+            if (!idsParaAtualizar || idsParaAtualizar.length === 0) {
+                console.warn("⚠️ [EMERGENCY] rotaOrdenadaState vazio. Usando pedidosPendentes como fallback.");
+                idsParaAtualizar = (pedidosPendentes || []).map(p => p && p.id).filter(Boolean);
             }
 
-            const idsParaAtualizar = (rotaOrdenadaState || []).map(i => i && i.id).filter(Boolean);
             if (!idsParaAtualizar || idsParaAtualizar.length === 0) {
-                try { alert('Nenhuma entrega válida para enviar.'); } catch (e) { }
+                try { alert('Nenhuma entrega válida para enviar (Fila vazia).'); } catch (e) { }
                 return;
             }
 
@@ -2606,7 +2627,13 @@ function App() {
             }));
     }, [entregas]); // Removido o motoristaDaRota da dependência para os pinos não sumirem ao trocar a seleção
     // Diagnostic: show first pin data to help debug render issues (lat/lng types)
-    try { console.log('📌 Teste de renderização - Primeiro pino (entregasMap[0]):', entregasMap && entregasMap.length ? entregasMap[0] : null); } catch (e) { }
+    try { 
+        if (entregasMap && entregasMap.length > 0 && entregasMap[0]) {
+            console.log('📌 Teste de renderização - Primeiro pino (entregasMap[0]):', entregasMap[0]); 
+        } else {
+            console.warn('📌 Teste de renderização - entregasMap está vazio ou primeiro item é nulo.');
+        }
+    } catch (e) { }
 
     const appContent = (
         <div style={{ minHeight: '100vh', width: '100vw', overflowX: 'hidden', margin: 0, padding: 0, backgroundColor: '#071228', fontFamily: "'Inter', sans-serif", color: theme.textMain }}>

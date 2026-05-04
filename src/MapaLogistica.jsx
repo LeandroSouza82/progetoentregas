@@ -9,28 +9,37 @@ import createCustomPinIcon from './CustomPin.jsx';
 // Disponibiliza `MapboxMap`, `MapboxMarker` e `MapboxPopup` se você quiser usar Mapbox GL React
 import MapboxMap, { Marker as MapboxMarker, Popup as MapboxPopup } from 'react-map-gl';
 
-const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
+const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
 
-// Safety helper: Santa Catarina bounds (manager requested)
+if (!token) {
+  console.error("❌ Erro Crítico: Token do Mapbox não encontrado nas variáveis de ambiente.");
+}
+
 const isValidSC = (lat, lng) => {
     if (lat == null || lng == null) return false;
     const latN = Number(lat); const lngN = Number(lng);
     if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return false;
-    // ✅ Santo Amaro da Imperatriz: Lat até -28.20
-    return (latN < -25.0 && latN > -28.20 && lngN > -50.0 && lngN < -48.0);
+    // 🛡️ Região Estrita: Grande Florianópolis (Impede drift para SP)
+    return (latN <= -27.35 && latN >= -27.90 && lngN >= -48.98 && lngN <= -48.30);
 };
 
 function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, rotaCoordenadas = [], clearMap = false, darkMode = undefined, rotaOrdenadaState = [] }) {
-    // 🛡️ Cláusula de Guarda (Sync Inteligente): Se não há dados, exibe loading para evitar quebra de coordenadas nulas
-    if (!entregas || entregas.length === 0 || (entregas.length > 0 && !entregas[0])) {
+    // 🛡️ Validação de Injeção: Se o token não for encontrado, exibe erro amigável em vez de quebrar
+    if (!token) {
         return (
-            <div style={{ width: '100%', height: height, background: '#1f2937', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', borderRadius: '12px' }}>
+            <div style={{ width: '100%', height: height, background: '#111827', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171', borderRadius: '12px', border: '1px solid #7f1d1d', padding: '20px', boxSizing: 'border-box' }}>
                 <div style={{ textAlign: 'center' }}>
-                    <div className="animate-spin" style={{ width: '32px', height: '32px', border: '4px solid #374151', borderTopColor: '#3b82f6', borderRadius: '50%', margin: '0 auto 12px' }}></div>
-                    <p>Sincronizando dados logísticos...</p>
+                    <div style={{ fontSize: '40px', marginBottom: '10px' }}>⚠️</div>
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: 800 }}>Erro de Configuração</h3>
+                    <p style={{ margin: 0, fontSize: '14px', color: '#9ca3af' }}>A credencial do Mapbox (VITE_MAPBOX_ACCESS_TOKEN) não foi encontrada no arquivo .env.local.</p>
                 </div>
             </div>
         );
+    }
+
+    // 🛡️ Cláusula de guarda para evitar erro de 'null' e "flicker" de sincronização
+    if (!entregas || entregas.length === 0 || !entregas[0]) {
+        return <div className="loading-map" style={{ width: '100%', height: height, background: '#1f2937', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', borderRadius: '12px' }}>Sincronizando com Supabase...</div>;
     }
 
     const mapRef = useRef(null);
@@ -740,8 +749,10 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     return (
         <div style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
             <MapContainer
-                center={[-27.6, -48.6]}
+                center={[-27.66090, -48.70871]}
                 zoom={13}
+                accessToken={token}
+                maxBounds={[[-27.90, -48.98], [-27.35, -48.30]]}
                 scrollWheelZoom={true}
                 dragging={true}
                 trackResize={true}

@@ -10,7 +10,7 @@ export default function MapComponent({
     onError = () => { }
 }) {
     try {
-        const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
+        const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
         const url = token && token.length > 0
             ? `https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${token}`
             : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;

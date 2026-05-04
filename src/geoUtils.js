@@ -368,7 +368,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
     if (!address || address.trim().length < 3) return null;
 
     try {
-        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
+        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
 
         // v45/v48: regras agressivas para casos conhecidos
         try {
@@ -692,8 +692,21 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             } catch (e) { /* ignore cep requery issues */ }
         }
 
-        // proximity: usar proximity param se fornecido, senão centralizar em Palhoça (prioridade local)
-        let proximityParam = '-48.67,-27.64';
+        // 🛡️ INTERVENÇÃO CIRÚRGICA: Restrição à Grande Florianópolis
+        // Abrange: Florianópolis, São José, Palhoça, Biguaçu, Sto Amaro, Gov. Celso Ramos
+        const regionSuffix = ", Grande Florianópolis, SC, Brasil";
+        
+        // Se o usuário não especificou uma dessas cidades, adicionamos o sufixo da região
+        const cities = ["florianopolis", "florianópolis", "sao jose", "são josé", "palhoca", "palhoça", "biguacu", "biguaçu", "santo amaro", "governador celso ramos"];
+        const hasCity = cities.some(c => addressClean.toLowerCase().includes(c));
+        
+        const addressWithSuffix = hasCity ? addressClean : `${addressClean}${regionSuffix}`;
+
+        // proximity: centralizar na região metropolitana
+        let proximityParam = '-48.5481,-27.5948'; 
+        
+        // Bbox estrita para Grande Florianópolis: [minLng, minLat, maxLng, maxLat]
+        const strictBbox = '-48.98,-27.90,-48.30,-27.35';
         try {
             if (proximity && typeof proximity === 'object' && proximity.lat != null && proximity.lng != null) {
                 proximityParam = `${Number(proximity.lng)},${Number(proximity.lat)}`;
@@ -702,11 +715,11 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
             }
         } catch (e) { }
 
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(addressClean))}.json?` +
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(addressWithSuffix))}.json?` +
             `access_token=${MAPBOX_TOKEN}` +
             `&proximity=${proximityParam}` +
-            `&bbox=${bbox}` +
-            `&types=address` +
+            `&bbox=${strictBbox}` +
+            `&types=address,poi,place` +
             `&language=pt` +
             `&limit=1`;
 
@@ -717,8 +730,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         
         // 🛑 Fallback para Nominatim se Mapbox falhar (401/403 ou limite atingido)
         if (!response.ok && (response.status === 401 || response.status === 403)) {
-            console.warn(`⚠️ Mapbox retornou ${response.status}. Tentando fallback Nominatim para: ${addressClean}`);
-            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressClean)}&limit=1`;
+            console.warn(`⚠️ Mapbox retornou ${response.status}. Tentando fallback Nominatim para: ${addressWithSuffix}`);
+            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressWithSuffix)}&limit=1`;
             try {
                 const nomResp = await fetch(nomUrl, { headers: { 'User-Agent': 'V10-Logistica-Dashboard' } });
                 if (nomResp.ok) {
@@ -758,6 +771,43 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         }
         const data = await response.json();
         let result = data && data.features && data.features.length > 0 ? data.features[0] : null;
+
+        // --- INTERVENÇÃO: Validação de Região e Fallback Nível Rua ---
+        const regionalBounds = { west: -48.98, south: -27.90, east: -48.30, north: -27.35 };
+        
+        const isOutside = (coords) => {
+            if (!coords || coords.length < 2) return true;
+            const [lng, lat] = coords;
+            return (lng < regionalBounds.west || lng > regionalBounds.east || lat < regionalBounds.south || lat > regionalBounds.north);
+        };
+
+        if (!result || isOutside(result.center) || (result.relevance && result.relevance < 0.5)) {
+            console.warn('⚠️ Mapbox falhou ou retornou fora da região. Tentando nível rua...');
+            // Tenta apenas a rua sem o número para garantir que caia na rua certa na região certa
+            const streetOnly = addressClean.split(',')[0].replace(/\d+/g, '').trim();
+            const streetUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(streetOnly + regionSuffix)}.json?` +
+                `access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${strictBbox}&types=address,street&limit=1`;
+            
+            try {
+                const sResp = await fetch(streetUrl);
+                if (sResp.ok) {
+                    const sData = await sResp.json();
+                    if (sData.features && sData.features.length > 0) {
+                        const feat = sData.features[0];
+                        if (!isOutside(feat.center)) {
+                            console.log('📍 Mapbox (Nível Rua):', feat.place_name);
+                            result = feat;
+                        }
+                    }
+                }
+            } catch (e) { }
+        }
+
+        // Se ainda assim estiver fora, abortamos para não cair em São Paulo
+        if (result && isOutside(result.center)) {
+            console.error('❌ Resultado geocodificado está fora da Grande Florianópolis. Abortando pino para evitar SP.');
+            return null;
+        }
 
         const isUnwantedPlaceType = (r) => {
             if (!r || !r.place_type) return false;
@@ -897,9 +947,9 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
             query = `${query}, ${defaultCity}`;
         }
 
-        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
+        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
         if (!MAPBOX_TOKEN) {
-            console.warn('buscarCoordenadasMelhoradas: VITE_MAPBOX_TOKEN não está definido');
+            console.warn('buscarCoordenadasMelhoradas: VITE_MAPBOX_ACCESS_TOKEN não está definido');
             return null;
         }
 
@@ -1462,7 +1512,7 @@ export async function searchNominatim(query, bounds = null) {
  */
 // Versão otimizada conforme solicitado: aceita `heading` e usa `driving-traffic`.
 export const getRouteGeometry = async (origin, destination, heading = null) => {
-    const MAPBOX_TOKEN = process.env.VITE_MAPBOX_TOKEN;
+    const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
     if (!MAPBOX_TOKEN) return null;
     if (!origin || !destination) return null;
 
