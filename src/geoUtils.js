@@ -368,7 +368,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
     if (!address || address.trim().length < 3) return null;
 
     try {
-        const MAPBOX_TOKEN = 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
+        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || '';
 
         // v45/v48: regras agressivas para casos conhecidos
         try {
@@ -714,6 +714,31 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         console.log('[GEO] URL enviada ao Mapbox:', url);
 
         const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        
+        // 🛑 Fallback para Nominatim se Mapbox falhar (401/403 ou limite atingido)
+        if (!response.ok && (response.status === 401 || response.status === 403)) {
+            console.warn(`⚠️ Mapbox retornou ${response.status}. Tentando fallback Nominatim para: ${addressClean}`);
+            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressClean)}&limit=1`;
+            try {
+                const nomResp = await fetch(nomUrl, { headers: { 'User-Agent': 'V10-Logistica-Dashboard' } });
+                if (nomResp.ok) {
+                    const nomData = await nomResp.json();
+                    if (nomData && nomData.length > 0) {
+                        const first = nomData[0];
+                        console.log('✅ Fallback Nominatim funcionou!');
+                        return { 
+                            lat: parseFloat(first.lat), 
+                            lng: parseFloat(first.lon), 
+                            display_name: first.display_name,
+                            source: 'nominatim'
+                        };
+                    }
+                }
+            } catch (nomErr) {
+                console.error('❌ Fallback Nominatim também falhou:', nomErr);
+            }
+        }
+
         if (!response.ok) {
             console.warn('⚠️ Mapbox resposta não-OK:', response.status);
             // Se Mapbox rejeitou a requisição por erro de payload (422), tentar variações simplificadas (fuzzy)
@@ -1452,10 +1477,16 @@ export const getRouteGeometry = async (origin, destination, heading = null) => {
 
     try {
         const response = await fetch(url);
-        if (!response || !response.ok) return null;
+        if (!response || !response.ok) {
+            console.warn(`⚠️ Mapbox Directions falhou (${response?.status}). Tentando fallback OSRM...`);
+            return await getOSRMRoute([{ lng: origin.lng, lat: origin.lat }, { lng: destination.lng, lat: destination.lat }]);
+        }
         const data = await response.json();
 
-        if (!data.routes || data.routes.length === 0) return null;
+        if (!data.routes || data.routes.length === 0) {
+             console.warn('⚠️ Mapbox não retornou rotas. Tentando fallback OSRM...');
+             return await getOSRMRoute([{ lng: origin.lng, lat: origin.lat }, { lng: destination.lng, lat: destination.lat }]);
+        }
 
         const route = data.routes[0];
         return {
@@ -1465,8 +1496,8 @@ export const getRouteGeometry = async (origin, destination, heading = null) => {
             geometry: route.geometry
         };
     } catch (error) {
-        console.error('Erro na rota Mapbox:', error);
-        return null;
+        console.error('Erro na rota Mapbox, tentando fallback OSRM:', error);
+        return await getOSRMRoute([{ lng: origin.lng, lat: origin.lat }, { lng: destination.lng, lat: destination.lat }]);
     }
 };
 

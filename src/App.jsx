@@ -1100,7 +1100,7 @@ function App() {
                     if (!cancelled) setMotoristaCidade(cidadeCacheRef.current.get(key));
                     return;
                 }
-                const token = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_MAPBOX_TOKEN) ? import.meta.env.VITE_MAPBOX_TOKEN : 'pk.eyJ1IjoibGVhbmRyb2RpdGFtYXI4MiIsImEiOiJjbWpid2NsZDYwbDN4M2ZweWZsbTBvamV4In0.cmNRPggP9Y_zkZZ1Yq-_4w';
+                const token = import.meta.env.VITE_MAPBOX_TOKEN || '';
                 const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${Number(motoristaDaRota.lng)},${Number(motoristaDaRota.lat)}.json?types=place&language=pt&limit=1&access_token=${token}`;
                 const resp = await fetch(url, { headers: { Accept: 'application/json' } });
                 if (!resp || !resp.ok) {
@@ -2500,7 +2500,13 @@ function App() {
         setIsSending(true);
         try {
             if (!rotaPronta || !motoristaSelecionadoId) {
+                console.warn("❌ Tentativa de envio de rota abortada: Rota não pronta ou motorista não selecionado.");
                 try { alert('A rota precisa estar organizada e um motorista deve estar selecionado.'); } catch (e) { }
+                return;
+            }
+
+            if (!rotaOrdenadaState || rotaOrdenadaState.length === 0) {
+                console.error("❌ Erro: rotaOrdenadaState está vazio ou nulo.");
                 return;
             }
 
@@ -2589,7 +2595,8 @@ function App() {
         // Filtramos para tirar APENAS o que não deve ir para o mapa de jeito nenhum
         return entregas
             .filter(item => {
-                const s = String(item && item.status || '').trim().toLowerCase();
+                if (!item) return false;
+                const s = String(item.status || '').trim().toLowerCase();
                 return s !== 'arquivado' && s !== 'cancelado';
             })
             .map(item => ({

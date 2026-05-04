@@ -21,6 +21,18 @@ const isValidSC = (lat, lng) => {
 };
 
 function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false, focusCoords = null, motoristaDaRota = null, runtimePolylines = {}, rotaCoordenadas = [], clearMap = false, darkMode = undefined, rotaOrdenadaState = [] }) {
+    // 🛡️ Cláusula de Guarda (Sync Inteligente): Se não há dados, exibe loading para evitar quebra de coordenadas nulas
+    if (!entregas || entregas.length === 0 || (entregas.length > 0 && !entregas[0])) {
+        return (
+            <div style={{ width: '100%', height: height, background: '#1f2937', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', borderRadius: '12px' }}>
+                <div style={{ textAlign: 'center' }}>
+                    <div className="animate-spin" style={{ width: '32px', height: '32px', border: '4px solid #374151', borderTopColor: '#3b82f6', borderRadius: '50%', margin: '0 auto 12px' }}></div>
+                    <p>Sincronizando dados logísticos...</p>
+                </div>
+            </div>
+        );
+    }
+
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
     const lastCoordsRef = useRef(new Map());
@@ -690,9 +702,16 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     /* INTERVENÇÃO: Mapa Estabilizado (Removido useMemo que destruía o MapContainer) */
 
     // 1. Defina a URL do Tile fora para evitar recálculos
-    const mapboxUrl = token && token.length > 0
+    const initialMapboxUrl = token && token.length > 0
         ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
         : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
+    
+    const [currentTileUrl, setCurrentTileUrl] = useState(initialMapboxUrl);
+
+    // Se o token mudar externamente, reseta a URL
+    useEffect(() => {
+        setCurrentTileUrl(initialMapboxUrl);
+    }, [token, initialMapboxUrl]);
 
     // 📍 CORREÇÃO MANUAL: atualiza a coordenada do pino no banco após arrastar
     const handleArrastarPino = async (e, id) => {
@@ -738,10 +757,18 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 <AutoFitBounds gestorPos={gestorPos} entregas={entregaMarkers} />
 
                 <TileLayer
-                    url={mapboxUrl}
+                    url={currentTileUrl}
                     attribution={'© Mapbox © OSM'}
-                    tileSize={token ? 512 : 256}
-                    zoomOffset={token ? -1 : 0}
+                    tileSize={currentTileUrl.includes('mapbox') ? 512 : 256}
+                    zoomOffset={currentTileUrl.includes('mapbox') ? -1 : 0}
+                    eventHandlers={{
+                        tileerror: (e) => {
+                            if (currentTileUrl.includes('mapbox')) {
+                                console.warn('⚠️ Falha ao carregar tiles do Mapbox. Verifique o Token. Usando fallback OpenStreetMap.');
+                                setCurrentTileUrl('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+                            }
+                        }
+                    }}
                 />
 
                 {/* Marcadores de Entregas - HISTÓRICO COMPLETO NO MAPA */}
