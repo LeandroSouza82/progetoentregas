@@ -18,7 +18,6 @@ export const HistoricoService = {
                 'sucesso', 'arquivado'
             ];
 
-            console.log("🔍 [HistoricoService] Consultando status:", statusAlvo, "na data:", dataIso);
 
             let query = supabase
                 .from('entregas')
@@ -35,7 +34,6 @@ export const HistoricoService = {
 
             const { data, error } = await query.order('data_conclusao', { ascending: false });
 
-            console.log("📦 [HistoricoService] Resposta bruta do Supabase:", data ? data.length + " itens" : "null");
             
             if (error) {
                 console.error("⚠️ [HistoricoService] Erro do Supabase:", error);
