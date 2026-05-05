@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import HistoricoEntregas from './HistoricoEntregas';
 import supabase, { subscribeToTable } from './supabaseClient';
 import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
@@ -207,7 +208,7 @@ function App() {
     }
 
     // Estados do Supabase
-    const [entregas, setEntregas] = useState([]);
+    const [entregas, setEntregas] = useState(null);
     const [pedidosPendentes, setPedidosPendentes] = useState([]);
     const [cardCopiado, setCardCopiado] = useState(null);
     const [toastCopiarTudo, setToastCopiarTudo] = useState(false);
@@ -2680,10 +2681,23 @@ function App() {
                 <div style={{ flex: 1 }} />
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                        <div style={{ color: theme.success, fontWeight: 'bold' }}>● SISTEMA ONLINE - {motoristaCidade || gestorLocation}</div>
-                        <div style={{ opacity: 0.6 }}>Contato: 5548996525008</div>
-                    </div>
+                    <button 
+                        onClick={() => setAbaAtiva('Histórico')}
+                        style={{
+                            padding: '10px 24px',
+                            borderRadius: '12px',
+                            border: `1px solid ${theme.primary}`,
+                            background: abaAtiva === 'Histórico' ? theme.primary : 'transparent',
+                            color: abaAtiva === 'Histórico' ? '#fff' : theme.primary,
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            transition: '0.2s',
+                            boxShadow: abaAtiva === 'Histórico' ? `0 0 15px ${theme.primary}33` : 'none'
+                        }}
+                    >
+                        📂 HISTÓRICO
+                    </button>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <button onClick={() => setDarkMode(d => !d)} style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: 'transparent', color: theme.headerText, cursor: 'pointer' }}>{darkMode ? 'Modo Claro' : 'Modo Escuro'}</button>
                         <div style={{ color: theme.headerText, fontWeight: 700, marginLeft: '8px' }}>Gestor: Administrador</div>
@@ -3502,6 +3516,11 @@ function App() {
                     </div>
                 )}
 
+
+                {/* HISTÓRICO DE ENTREGAS */}
+                {abaAtiva === 'Histórico' && (
+                    <HistoricoEntregas theme={theme} />
+                )}
             </main>
 
             {/* Driver selection is now inline; modal-based selection removed. */}

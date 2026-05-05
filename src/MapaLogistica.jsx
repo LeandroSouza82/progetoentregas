@@ -37,10 +37,6 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         );
     }
 
-    // 🛡️ Cláusula de guarda para evitar erro de 'null' e "flicker" de sincronização
-    if (!entregas || entregas.length === 0 || !entregas[0]) {
-        return <div className="loading-map" style={{ width: '100%', height: height, background: '#1f2937', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', borderRadius: '12px' }}>Sincronizando com Supabase...</div>;
-    }
 
     const mapRef = useRef(null);
     // cache último posicionamento conhecido por motorista (id -> {lat,lng,ultima_atualizacao})
