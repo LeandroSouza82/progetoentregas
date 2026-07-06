@@ -144,6 +144,7 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
 function App() {
     const [rotaPronta, setRotaPronta] = useState(false);
     const [rotaOrdenadaState, setRotaOrdenadaState] = useState([]);
+    const atualizarEntregasOrdenadas = setRotaOrdenadaState;
 
     // NOTE: modal-driven motorista selection was removed in favor of an inline `<select>`.
 
@@ -2447,6 +2448,9 @@ function App() {
 
             // 4. Grava a nova ordem no banco de dados
             console.log('💾 Salvando a nova ordem no Supabase...');
+            const sessaoReordem = await supabase.auth.getSession();
+            console.log('🔍 [DEBUG RLS] Sessão Atual (Reordenação):', sessaoReordem);
+            
             for (let i = 0; i < rotaOrdenada.length; i++) {
                 const novaOrdem = i + 1; // 1, 2, 3, 4... sem duplicatas!
                 await supabase
@@ -2544,6 +2548,9 @@ function App() {
             // 1) Atualização em massa: associa motorista (UUID) e MUDA status para 'em_rota'
             // em_rota = saiu da Central de Despacho, está a caminho do motorista
             const motoristaUUID = String(motoristaSelecionadoId).trim();
+
+            const sessaoEnvio = await supabase.auth.getSession();
+            console.log('🔍 [DEBUG RLS] Sessão Atual (Envio em Massa):', sessaoEnvio);
 
             const { error: upErr } = await supabase
                 .from('entregas')
