@@ -8,9 +8,8 @@ export const HistoricoService = {
      * Busca entregas finalizadas filtradas por data opcional
      * @param {string} dataIso - Data no formato YYYY-MM-DD
      */
-    async fetchHistorico(dataIso = null) {
+    async fetchHistorico(dataIso = null, busca = '') {
         try {
-            // Incluindo 'arquivado' conforme solicitado para garantir que registros limpos do mapa apareçam aqui
             const statusAlvo = [
                 'concluido', 'concluída', 'concluida', 'concluído',
                 'falha', 'erro', 
@@ -18,15 +17,16 @@ export const HistoricoService = {
                 'sucesso', 'arquivado'
             ];
 
-
             let query = supabase
                 .from('entregas')
                 .select('*')
                 .in('status', statusAlvo);
 
-            if (dataIso) {
-                // Filtro de data: do início ao fim do dia selecionado em UTC
-                // data_conclusao é o campo oficial de finalização
+            if (busca) {
+                const termo = `%${busca}%`;
+                // Filtering globally if a search term is provided, ignoring dataIso
+                query = query.or(`cliente.ilike.${termo},endereco.ilike.${termo}`);
+            } else if (dataIso) {
                 const start = `${dataIso}T00:00:00.000Z`;
                 const end = `${dataIso}T23:59:59.999Z`;
                 query = query.gte('data_conclusao', start).lte('data_conclusao', end);
