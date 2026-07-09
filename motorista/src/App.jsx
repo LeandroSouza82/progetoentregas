@@ -705,13 +705,13 @@ function InternalMobileApp() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         <div style={{ width: '45px', height: '45px', borderRadius: '50%', backgroundColor: darkMode ? '#444' : '#374151', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', overflow: 'hidden', position: 'relative' }}>
-                            <img src={motorista.foto} alt="Foto do motorista" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                            <img src={motorista?.foto || '/default-avatar.png'} alt="Foto do motorista" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
                             <div style={{ position: 'absolute', bottom: '-8px', right: '-8px', background: battery.level > 0.2 ? '#10b981' : '#f59e0b', color: '#fff', borderRadius: '8px', padding: '2px 6px', fontSize: '10px', fontWeight: 'bold', boxShadow: '0 2px 6px rgba(0,0,0,0.2)' }}>
                                 {Math.round(battery.level * 100)}% {battery.charging ? '⚡' : ''}
                             </div>
                         </div>
                         <div>
-                            <h2 style={{ margin: 0, fontSize: '16px' }}>{(motorista && (motorista.nome || motorista.sobrenome)) ? `${(motorista.nome || '').trim()}${motorista.sobrenome ? ' ' + String(motorista.sobrenome).trim() : ''}` : motorista.nome}</h2>
+                            <h2 style={{ margin: 0, fontSize: '16px' }}>{(motorista && (motorista.nome || motorista.sobrenome)) ? `${(motorista.nome || '').trim()}${motorista.sobrenome ? ' ' + String(motorista.sobrenome).trim() : ''}` : (motorista?.nome || 'Desconectado')}</h2>
                             <span style={{ fontSize: '12px', color: '#10b981', display: 'flex', alignItems: 'center', gap: '5px' }}>● Online</span>
                         </div>
                         <button onClick={() => setChatOpen(true)} title="Chat rápido com gestor" style={{ marginLeft: '10px', background: theme.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '6px 12px', fontWeight: 'bold', cursor: 'pointer', fontSize: '14px' }}>💬 Chat</button>
@@ -843,7 +843,10 @@ function InternalMobileApp() {
                                         {/* Dados do Cliente */}
                                         <div>
                                             <h1 style={{ margin: '0 0 5px 0', color: theme.textMain, fontSize: '22px' }}>{tarefaAtual.cliente}</h1>
-                                            <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 {tarefaAtual.endereco}</p>
+                                            {tarefaAtual.endereco_coleta && (
+                                                <p style={{ margin: '0 0 8px 0', color: '#fb923c', fontSize: '16px', lineHeight: '1.4', fontWeight: 'bold' }}>📥 Coleta: {tarefaAtual.endereco_coleta}</p>
+                                            )}
+                                            <p style={{ margin: 0, color: theme.textLight, fontSize: '16px', lineHeight: '1.4' }}>📍 Entrega: {tarefaAtual.endereco}</p>
                                         </div>
 
                                         {/* Recado/Obs removido (campo 'msg' não existe) */}
@@ -851,13 +854,13 @@ function InternalMobileApp() {
                                         {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                                             <button
-                                                onClick={() => abrirGPS('waze', tarefaAtual.lat, tarefaAtual.lng)}
+                                                onClick={() => abrirGPS('waze', tarefaAtual.lat_coleta || tarefaAtual.lat, tarefaAtual.lng_coleta || tarefaAtual.lng)}
                                                 style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                                             >
                                                 🚙 WAZE
                                             </button>
                                             <button
-                                                onClick={() => abrirGPS('maps', tarefaAtual.lat, tarefaAtual.lng)}
+                                                onClick={() => abrirGPS('maps', tarefaAtual.lat_coleta || tarefaAtual.lat, tarefaAtual.lng_coleta || tarefaAtual.lng)}
                                                 style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                                             >
                                                 🗺️ MAPS

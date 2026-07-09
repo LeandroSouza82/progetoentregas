@@ -140,11 +140,61 @@ async function otimizarRotaComGoogle(pontoPartida, listaEntregas, motoristaId = 
     // Fallback simples: se não houver origem específica, retorna a lista sem otimização
     return remaining;
 }
+
+const getColetaAtual = () => new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve({ lat: null, lng: null });
+    navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (err) => resolve({ lat: null, lng: null }),
+        { enableHighAccuracy: true, timeout: 5000 }
+    );
+});
+
+const obterGpsDespacho = () => new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve({ lat: null, lng: null });
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            console.log("🚀 [GPS DESPACHO] Capturado! Lat:", pos.coords.latitude);
+            resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        (err) => {
+            console.warn("⚠️ [GPS DESPACHO] Falha:", err.message);
+            resolve({ lat: null, lng: null });
+        },
+        { enableHighAccuracy: true, timeout: 5000 }
+    );
+});
+
 // mapa dinamicamente importado para prevenir que falhas no build do pacote quebrem o app
 function App() {
     const [rotaPronta, setRotaPronta] = useState(false);
     const [rotaOrdenadaState, setRotaOrdenadaState] = useState([]);
     const atualizarEntregasOrdenadas = setRotaOrdenadaState;
+
+    const [gpsGestor, setGpsGestor] = useState({ lat: null, lng: null, capturado: false });
+    const gpsGestorRef = useRef({ lat: null, lng: null, capturado: false });
+
+    const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
+
+    // Pre-fetch location whenever we enter 'Nova Carga' or 'Histórico' tabs
+    useEffect(() => {
+        if (abaAtiva === 'Nova Carga' || abaAtiva === 'Histórico') {
+            if ('geolocation' in navigator) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        console.log("🎯 [GPS DASHBOARD] Sucesso nativo do navegador:", pos.coords.latitude, pos.coords.longitude);
+                        const newState = { lat: pos.coords.latitude, lng: pos.coords.longitude, capturado: true };
+                        gpsGestorRef.current = newState;
+                        setGpsGestor(newState);
+                    },
+                    (error) => {
+                        console.error("❌ [GPS DASHBOARD ERRO] O navegador barrou o GPS:", error.message);
+                    },
+                    { enableHighAccuracy: true }
+                );
+            }
+        }
+    }, [abaAtiva]);
 
     // NOTE: modal-driven motorista selection was removed in favor of an inline `<select>`.
 
@@ -154,7 +204,6 @@ function App() {
     const [loadingFrota, setLoadingFrota] = useState(false);
     const [darkMode, setDarkMode] = useState(true);
     const theme = darkMode ? darkTheme : lightTheme;
-    const [abaAtiva, setAbaAtiva] = useState('Visão Geral'); // Mudei o nome pra ficar chique
     // Localização do gestor removida do dashboard: não solicitamos GPS aqui
 
     // Google-related quota/banners disabled — keep a ref stub for legacy checks
@@ -294,7 +343,7 @@ function App() {
         try {
             if (!HAS_SUPABASE_CREDENTIALS) return;
             // Only log when not already fetching to reduce noise
-            if (!fetchInProgressRef.current) console.log('🔄 Recarregando pins do banco...');
+            // if (!fetchInProgressRef.current) console.log('🔄 Recarregando pins do banco...');
             const { data, error } = await supabase
                 .from('entregas')
                 .select('*')
@@ -2147,6 +2196,9 @@ function App() {
             const nomeLimpo = String(nomeCliente || '').trim();
             const enderecoPuro = String(enderecoEntrega || '').trim();
 
+            const localColeta = await getColetaAtual();
+            console.log("🚀 [GPS ORIGEM] Capturado para Insert:", localColeta);
+
             // Garantir que lat/lng sejam doubles e não strings ou zero/NaN
             const payload = {
                 cliente: nomeLimpo,
@@ -2155,8 +2207,17 @@ function App() {
                 tipo: tipoEncomenda || 'Entrega',
                 obs: observacoesGestor || '',
                 lat: (Number.isFinite(coords.lat) && coords.lat !== 0) ? parseFloat(coords.lat) : null,
-                lng: (Number.isFinite(coords.lng) && coords.lng !== 0) ? parseFloat(coords.lng) : null
+                lng: (Number.isFinite(coords.lng) && coords.lng !== 0) ? parseFloat(coords.lng) : null,
+                endereco_coleta: localColeta.lat ? 'Localização Dinâmica (Gestor)' : null,
+                lat_coleta: localColeta.lat || null,
+                lng_coleta: localColeta.lng || null
             };
+
+            console.log("🚀 [SUPABASE PAYLOAD] O que está sendo enviado agora para o banco:", {
+              lat_coleta: payload.lat_coleta,
+              lng_coleta: payload.lng_coleta,
+              endereco_coleta: payload.endereco_coleta
+            });
 
             const { data: inserted, error } = await supabase.from('entregas').insert([payload]).select();
             if (error) throw error;
@@ -2321,12 +2382,25 @@ function App() {
             } else {
                 let updErr = null;
                 try {
-                    // Persist each entrega with motorista_id, status='em_rota' and ordem_logistica (per-index)
+                    // TRAVA DE GPS ÚNICA PARA O LOTE
+                    const gpsData = await obterGpsDespacho();
+
                     const promises = (rotaOtimizada || []).map((item, idx) => {
                         const pid = item && item.id;
                         if (pid === undefined || pid === null) return Promise.resolve({ skipped: true });
                         const pidNorm = Number(pid);
-                        const payload = { motorista_id: String(motoristaIdValRaw), status: statusValue, ordem_logistica: Number(idx + 1) };
+                        const payload = { 
+                            motorista_id: String(motoristaIdValRaw), 
+                            status: statusValue, 
+                            ordem_logistica: Number(idx + 1) 
+                        };
+
+                        if (gpsData.lat) {
+                            payload.endereco_coleta = 'Localização Dinâmica (Gestor)';
+                            payload.lat_coleta = gpsData.lat;
+                            payload.lng_coleta = gpsData.lng;
+                        }
+
                         try {
                             return supabase.from('entregas').update(payload).eq('id', pidNorm);
                         } catch (e) {
@@ -2448,15 +2522,48 @@ function App() {
 
             // 4. Grava a nova ordem no banco de dados
             console.log('💾 Salvando a nova ordem no Supabase...');
+            
+            // BLOQUEIO OBRIGATÓRIO DE GPS ANTES DO PAYLOAD EM MASSA
+            const coordsGestor = await new Promise((resolve) => {
+                if (!navigator.geolocation) {
+                    console.error("❌ [GPS MASTER] Geolocation não disponível no navegador (Contexto não seguro/inseguro?)");
+                    return resolve({ lat: null, lng: null });
+                }
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        console.log("🚀 [GPS MASTER] Trava acionada! Lat:", pos.coords.latitude);
+                        resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                    },
+                    (err) => {
+                        console.warn("⚠️ [GPS MASTER] Erro ou timeout:", err.message);
+                        resolve({ lat: null, lng: null });
+                    },
+                    { enableHighAccuracy: true, timeout: 5000 }
+                );
+            });
+
+            // Exemplo de aplicação obrigatória no array antes de enviar ao Supabase:
+            const payloadFinal = rotaOrdenada.map(item => ({
+                ...item,
+                endereco_coleta: coordsGestor.lat ? 'Localização Dinâmica (Gestor)' : item.endereco_coleta,
+                lat_coleta: coordsGestor.lat || item.lat_coleta,
+                lng_coleta: coordsGestor.lng || item.lng_coleta
+            }));
+
             const sessaoReordem = await supabase.auth.getSession();
             console.log('🔍 [DEBUG RLS] Sessão Atual (Reordenação):', sessaoReordem);
             
-            for (let i = 0; i < rotaOrdenada.length; i++) {
+            for (let i = 0; i < payloadFinal.length; i++) {
                 const novaOrdem = i + 1; // 1, 2, 3, 4... sem duplicatas!
                 await supabase
                     .from('entregas')
-                    .update({ ordem_logistica: novaOrdem })
-                    .eq('id', rotaOrdenada[i].id);
+                    .update({ 
+                        ordem_logistica: novaOrdem,
+                        endereco_coleta: payloadFinal[i].endereco_coleta,
+                        lat_coleta: payloadFinal[i].lat_coleta,
+                        lng_coleta: payloadFinal[i].lng_coleta
+                    })
+                    .eq('id', payloadFinal[i].id);
             }
 
             // 5. Recarrega a tela para o gestor ver a mágica
@@ -2549,12 +2656,20 @@ function App() {
             // em_rota = saiu da Central de Despacho, está a caminho do motorista
             const motoristaUUID = String(motoristaSelecionadoId).trim();
 
-            const sessaoEnvio = await supabase.auth.getSession();
-            console.log('🔍 [DEBUG RLS] Sessão Atual (Envio em Massa):', sessaoEnvio);
+            // TRAVA DE GPS
+            const gpsData = await obterGpsDespacho();
+            const payloadUpdate = { status: 'em_rota', motorista_id: motoristaUUID };
 
-            const { error: upErr } = await supabase
+            if (gpsData.lat) {
+                payloadUpdate.endereco_coleta = 'Localização Dinâmica (Gestor)';
+                payloadUpdate.lat_coleta = gpsData.lat;
+                payloadUpdate.lng_coleta = gpsData.lng;
+            }
+
+            // EXECUTA A ATUALIZAÇÃO
+            const { data, error: upErr } = await supabase
                 .from('entregas')
-                .update({ status: 'em_rota', motorista_id: motoristaUUID })
+                .update(payloadUpdate)
                 .in('id', idsParaAtualizar)
                 .then(({ data, error }) => {
                     if (error) alert('Erro no Banco: ' + error.message);
@@ -2636,8 +2751,6 @@ function App() {
     // Diagnostic: show first pin data to help debug render issues (lat/lng types)
     try { 
         if (entregasMap && entregasMap.length > 0 && entregasMap[0]) {
-        } else {
-            console.warn('📌 Teste de renderização - entregasMap está vazio ou primeiro item é nulo.');
         }
     } catch (e) { }
 

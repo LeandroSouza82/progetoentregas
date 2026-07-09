@@ -177,7 +177,10 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     // Inicializa/normaliza o estado de marcadores a partir da prop `entregas`
     useEffect(() => {
         try {
-            if (!entregas || !Array.isArray(entregas)) return;
+            if (!entregas || !Array.isArray(entregas) || entregas.length === 0) {
+                setEntregaMarkersState([]);
+                return;
+            }
             const list = entregas
                 .filter(e => String(e.status || '').trim().toLowerCase() !== 'arquivado')
                 .map(normalizeEntregaToMarker)
