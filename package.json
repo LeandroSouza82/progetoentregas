@@ -7,7 +7,8 @@
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
-    "test:e2e": "echo 'E2E tests disabled for emergency stability'"
+    "test:e2e": "echo 'E2E tests disabled for emergency stability'",
+    "test:routes": "node --test tests/routeAssignment.test.js tests/addressGeocoding.test.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
