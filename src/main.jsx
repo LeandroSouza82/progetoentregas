@@ -20,7 +20,7 @@ async function start() {
     await import('leaflet/dist/leaflet.css');
     const { default: App } = await import('./App.jsx');
     root.render(<React.StrictMode>
-        {environment.isTest && <div role="status" style={{ background: '#fef3c7', color: '#78350f', padding: 10, textAlign: 'center', fontWeight: 700 }}>V10 Teste · Homologação · Dados de teste</div>}
+        {environment.isTest && <div role="status" style={{ background: '#fef3c7', color: '#78350f', padding: 10, textAlign: 'center', fontWeight: 700 }}>{environment.isSharedTest ? 'V10 Teste · Banco compartilhado · Somente cards TESTE V10' : 'V10 Teste · Homologação · Dados de teste'}</div>}
         <App />
     </React.StrictMode>);
 }

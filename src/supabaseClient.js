@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import { resolveEnvironment } from './environment.js';
+import { createSharedTestFetch, scopedRealtimeClient } from './sharedTest.js';
 
 const isNode = typeof window === 'undefined';
 let environment = null;
@@ -93,6 +94,7 @@ if (isNode) {
             } else {
                 // Criar cliente fixo com localStorage
                 clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
+                    global: environment.isSharedTest ? {fetch: createSharedTestFetch(environment)} : {},
                     auth: {
                         autoRefreshToken: true,
                         persistSession: true,
@@ -226,6 +228,6 @@ export async function buscarTodasEntregas() {
 export const subscribeToTable = subscribeFn;
 
 // ✅ Exportação Principal Clara e Direta (Solicitado)
-export const supabase = clientInstance;
+export const supabase = scopedRealtimeClient(clientInstance, environment);
 export default supabase;
 

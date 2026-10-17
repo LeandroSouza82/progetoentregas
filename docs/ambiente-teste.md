@@ -1,32 +1,40 @@
-# Homologação V10 — etapa 1 (17/10/2026)
+# Rotas offline — testes identificados no banco atual
 
-Branch: `feat/roteiro-offline-seguro`. Não fazer merge, deploy de produção ou executar os scripts históricos de manutenção/diagnóstico contra produção.
+Branch ativa: `feat/roteiro-offline-testes-identificados`. Dashboard 0.2.0, aplicativo correspondente 1.1.4+5.
 
-## O que mudou
+O usuário autorizou testes no banco compartilhado em 17/10/2026. Não criar outro projeto, mudar esquema/RLS/autenticação ou publicar em produção nesta etapa. Todas as operações de teste devem ter identificação visível TESTE.
 
-- Dashboard 0.1.0: configuração padrão de teste, sem URL/chave de produção como fallback.
-- Ausência de configuração, projeto divergente ou chave administrativa interrompem o início do painel antes do carregamento de App e serviços.
-- Teste recusa a referência do projeto de produção conhecido. A sessão de autenticação tem chave local por ambiente/projeto.
-- Selecionar motorista na tabela não faz UPDATE em entregas. Selecionar, reorganizar e enviar continuam sendo passos separados. Motorista offline aprovado pode ser selecionado.
-- A CI executa os testes focados e instala dependências do subprojeto motorista antes do build.
+## Configuração do painel
 
-## Configurar somente o banco separado de homologação
+Copiar `.env.shared-test.example` para `.env.local`. Preencher a chave pública do mesmo projeto e o UUID de um motorista dedicado com nome começando por `TESTE V10 - `. Usar `VITE_APP_ENV=shared-test` explicitamente. Arquivos locais não devem ser versionados.
 
-1. Obter um projeto separado, sem dados pessoais reais, e seu esquema compatível com V10. O esquema real ainda não foi exportado: o projeto V10 não está na conexão Supabase disponível nesta sessão. Não inventar nem aplicar políticas/migrações em produção.
-2. Copiar `.env.example` para `.env.local`. Preencher a referência, URL HTTPS e chave pública do mesmo projeto. Manter `VITE_APP_ENV=test`. Não usar service_role ou sb_secret.
-3. Executar `npm ci`, `npm test`, `npm run dev`.
-4. O painel deve mostrar “V10 Teste · Homologação · Dados de teste”. Sem configuração, mostra bloqueio e não inicia os serviços.
+O painel mostra a faixa “Banco compartilhado · Somente cards TESTE V10”. Cards criados recebem automaticamente o prefixo `TESTE V10 - ` no nome e aviso de que não devem ser executados. Leituras, alterações e exclusões de cards recebem filtro por esse prefixo. Alterar/excluir exige IDs explícitos. Presença/aprovação do motorista fica limitada ao ID de teste e ao nome TESTE. Escritas em outras tabelas e RPCs de manutenção não fazem parte desse modo.
 
-A verificação do cliente evita erros de configuração; não substitui RLS nem comprova isolamento do servidor. Só iniciar testes de dados depois de conferir projeto, permissões, storage e esquema. Os scripts antigos do diretório scripts/ não são certificados para homologação e não devem ser executados nesta etapa.
+Isso é uma restrição do cliente de teste, não uma política do servidor. O aplicativo e o dashboard publicados não foram alterados. Nenhuma garantia de risco zero é feita.
 
-## Verificação local
+## Resultado verificado em 17/10/2026
 
-20 testes Node passaram (12 de rotas/endereços, 8 de configuração/inicialização/seleção). Build principal e build do subprojeto motorista passaram. A inicialização foi exercitada com módulos simulados, confirmando que a configuração inválida não carrega o aplicativo; não é um teste de navegador real. O teste de seleção executa o handler realmente ligado à tabela com um cliente que lança erro em qualquer acesso ao banco. Flutter/Android e banco real ainda precisam de validação.
+- 27 testes Node passaram (serviços, configuração, inicialização, seleção, filtros e integração do SDK com servidor simulado).
+- Build principal passou.
+- Teste real via Supabase JS no banco atual: cards 2196 e 2197, nomes `TESTE V10 - Teste 1 - 20261017` e `TESTE V10 - Teste 2 - 20261017`, foram atribuídos ao motorista `TESTE V10 - Motorista offline 20261017` enquanto `esta_online=false`.
+- Novos clientes recuperaram os mesmos dois pontos em ordem, sem reenvio/duplicação. Consulta com outro motorista não retornou esses pontos.
+- UPDATE de controle fora do prefixo aceito afetou zero linhas; o card de controle permaneceu pendente e sem motorista. Esse controle (ID 2198, também claramente TESTE) foi removido por ID/nome exatos depois da verificação.
+- As 1.441 entregas sem nome TESTE tiveram a mesma assinatura de conteúdo antes/depois da execução. Não houve escrita de nossa execução nos motoristas reais; a assinatura geral deles variou durante a janela, compatível com alterações concorrentes da operação, portanto não afirmamos identidade total desses registros.
 
-## Próximo trabalho
+Os dois cards de rota e o motorista de teste foram preservados para a validação no celular. Nenhuma senha de motorista real foi lida. O usuário de teste tem credencial aleatória de teste, não uma credencial de produção reutilizada.
 
-Configurar o banco isolado com esquema real; corrigir fila offline (logout, concorrência, propriedade, confirmação de escrita, foto/assinatura); homologar dois motoristas e retorno de conexão. A conclusão do fluxo completo permanece pendente.
+## Fluxo de envio
 
-Produção só poderá usar configuração explícita e revisada, após homologação. Esta alteração não foi mesclada nem publicada em produção.
+O gestor seleciona o motorista aprovado, organiza os IDs e envia. O serviço exige retorno de todos os IDs persistidos em `entregas`, com status `em_rota` e vínculo ao motorista. Estar online não é condição para envio. O app consulta ao abrir/reconectar e produz aviso local a partir dos pontos novos.
 
-Referência: https://supabase.com/docs/guides/deployment/managing-environments
+A tabela `avisos_gestor` usa motorista_id bigint, enquanto o cadastro usa UUID. O despacho desta branch usa o roteiro persistido como fonte e não grava UUID nessa coluna legada. Nenhuma migração foi aplicada. Avisos gerais antigos não são alterados por essa mudança.
+
+## Reprodução controlada
+
+`scripts/test-shared-route.mjs ARQUIVO_LOCAL.json` usa a configuração VITE do modo shared-test, `deliveryIds` (no máximo 5 IDs novos de teste, pendentes sem motorista) e `controlId` de um card de controle também TESTE mas fora do prefixo exato. Não executar com cards operacionais nem reutilizar os IDs já enviados como se estivessem pendentes. O script valida o escopo antes de gravar e não é uma rotina de limpeza.
+
+Para excluir dados deste teste, conferir os nomes e usar somente os IDs exatos criados. Não usar DELETE por status, motorista ou por uma palavra genérica.
+
+## Pendências
+
+Teste físico de abrir/reabrir/retornar da falta de internet no V10 Teste; interface completa do gestor; assinatura offline, concorrência da fila e preservação de pendências ao sair. Push com o processo encerrado continua pendente. O teste do SDK/banco não substitui a homologação no celular. Manter PR em rascunho, sem merge/publicação até aprovação.

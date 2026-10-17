@@ -1,11 +1,12 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import HistoricoEntregas from './HistoricoEntregas';
-import supabase, { subscribeToTable, HAS_SUPABASE_CREDENTIALS } from './supabaseClient';
+import supabase, { subscribeToTable, HAS_SUPABASE_CREDENTIALS, environment } from './supabaseClient';
 import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
 import { nearestNeighborRoute, getRouteGeometry, buscarCoordenadas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { assignPreparedRoute, isApprovedDriver } from './services/routeAssignment';
+import { testCardName } from './sharedTest.js';
 
 // Paletas de cores
 const lightTheme = {
@@ -2145,7 +2146,7 @@ function App() {
             const coords = { lat: res.lat, lng: res.lng };
 
             // 3) Payload puro: cliente e endereço salvos exatamente como digitados
-            const nomeLimpo = String(nomeCliente || '').trim();
+            const nomeLimpo = environment?.isSharedTest ? testCardName(nomeCliente) : String(nomeCliente || '').trim();
             const enderecoPuro = String(enderecoEntrega || '').trim();
 
             const localColeta = await getColetaAtual();

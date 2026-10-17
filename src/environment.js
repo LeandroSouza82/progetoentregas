@@ -3,7 +3,7 @@ export const PRODUCTION_PROJECT_REF = 'uqxoadxqcwidxqsfayem';
 
 export function resolveEnvironment(env = {}) {
     const name = env.VITE_APP_ENV || 'test';
-    if (!['test', 'production'].includes(name)) throw new Error('Ambiente inválido. Use test ou production.');
+    if (!['test', 'shared-test', 'production'].includes(name)) throw new Error('Ambiente inválido. Use test, shared-test ou production.');
     const projectRef = (env.VITE_SUPABASE_PROJECT_REF || '').trim();
     const key = (env.VITE_SUPABASE_ANON_KEY || '').trim();
     let url;
@@ -20,6 +20,10 @@ export function resolveEnvironment(env = {}) {
     if (name === 'production' && projectRef !== PRODUCTION_PROJECT_REF) {
         throw new Error('O projeto configurado não corresponde à produção conhecida.');
     }
+    const testDriverId = (env.VITE_TEST_DRIVER_ID || '').trim();
+    if (name === 'shared-test' && (projectRef !== PRODUCTION_PROJECT_REF || !/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(testDriverId))) {
+        throw new Error('Configure o projeto atual e o UUID do motorista TESTE para usar o banco compartilhado.');
+    }
     if (!key) throw new Error('Configure a chave pública do projeto selecionado.');
     // Chaves administrativas nunca pertencem ao navegador.
     if (!key.startsWith('sb_publishable_')) {
@@ -29,5 +33,5 @@ export function resolveEnvironment(env = {}) {
             if (claims.role !== 'anon' || claims.ref !== projectRef) throw new Error();
         } catch { throw new Error('Use a chave pública do mesmo projeto, nunca uma chave administrativa.'); }
     }
-    return Object.freeze({ name, projectRef, url: url.origin, key, isTest: name === 'test' });
+    return Object.freeze({ name, projectRef, url: url.origin, key, isTest: name !== 'production', isSharedTest: name === 'shared-test', testDriverId });
 }
