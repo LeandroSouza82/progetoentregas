@@ -33,3 +33,4 @@ dist-ssr
 
 # Version only the configuration template, never local credentials.
 !.env.example
+!.env.shared-test.example

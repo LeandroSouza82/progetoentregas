@@ -23,16 +23,7 @@ export async function assignPreparedRoute(client, { driverId, deliveryIds, picku
     if (confirmedIds.size !== ids.length || ids.some(id => !confirmedIds.has(id))) {
         throw new Error('Nem todos os pontos puderam ser atribuídos. Atualize a fila para conferir os pontos já enviados antes de tentar novamente.');
     }
-    // O aviso é independente da atribuição; falha no aviso nunca provoca reenvio do roteiro.
-    let warning = null;
-    try {
-        const { error: noticeError } = await client.from('avisos_gestor').insert({
-            titulo: 'Novo roteiro', mensagem: 'Você tem um novo roteiro. Abra o aplicativo para consultar os pontos atribuídos a você.',
-            motorista_id: String(driver.id), lida: false,
-        });
-        if (noticeError) throw noticeError;
-    } catch {
-        warning = 'O roteiro foi salvo, mas o aviso não pôde ser registrado. Ele aparecerá ao abrir o aplicativo.';
-    }
-    return { driver, ids, warning };
+    // O próprio roteiro é o registro persistente. O app consulta os pontos ao abrir
+    // e produz o aviso local; não depende de avisos_gestor (ID bigint no legado).
+    return { driver, ids, warning: null };
 }
