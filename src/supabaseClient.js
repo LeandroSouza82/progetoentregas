@@ -1,46 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
 
-// ==========================================
-// CONFIGURAÇÃO DE AMBIENTE
-// ==========================================
+import { resolveEnvironment } from './environment.js';
 
 const isNode = typeof window === 'undefined';
-
-// Credenciais (Fallback Hardcoded para garantir funcionamento se .env falhar)
-const HARDCODED_URL = 'https://uqxoadxqcwidxqsfayem.supabase.co';
-const HARDCODED_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxeG9hZHhxY3dpZHhxc2ZheWVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxODksImV4cCI6MjA4NDAyMTE4OX0.q9_RqSx4YfJxlblPS9fwrocx3HDH91ff1zJvPbVGI8w';
-
-// Tentativa segura de ler env (Node compatible)
-const getEnv = (key) => {
-    try {
-        if (!isNode && import.meta && import.meta.env) {
-            return import.meta.env[key];
-        }
-    } catch (e) { }
-    return null;
-};
-
-const supabaseUrl = getEnv('VITE_SUPABASE_URL') || HARDCODED_URL;
-const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY') || HARDCODED_KEY;
-
-// ==========================================
-// ✅ VARIÁVEIS DE AMBIENTE - VERCEL
-// ==========================================
-// IMPORTANTE: Certifique-se de que estas variáveis estão configuradas na Vercel:
-// 
-// 1. VITE_SUPABASE_URL = https://uqxoadxqcwidxqsfayem.supabase.co
-// 2. VITE_SUPABASE_ANON_KEY = (sua chave anon key)
-//
-// ⚠️ NÃO adicione Client ID ou Client Secret nas variáveis de ambiente da Vercel.
-//    Essas chaves devem estar APENAS no painel do Supabase (Authentication > Providers > Google).
-//
-// Se adicionadas na Vercel, REMOVA imediatamente:
-//    - GOOGLE_CLIENT_ID
-//    - GOOGLE_CLIENT_SECRET
-//    - Qualquer variável começando com GOOGLE_ ou OAUTH_
-//
-// O fluxo OAuth usa as credenciais configuradas no Supabase, não nas variáveis de ambiente.
-// ==========================================
+let environment = null;
+let configurationError = null;
+if (!isNode) {
+    try { environment = resolveEnvironment(import.meta.env); }
+    catch (error) { configurationError = error; }
+}
+const supabaseUrl = environment?.url;
+const supabaseAnonKey = environment?.key;
+export { environment, configurationError };
 
 // ==========================================
 // INICIALIZAÇÃO DO CLIENTE
@@ -115,7 +86,7 @@ if (isNode) {
     } else {
         // Single instance guard to avoid Multiple GoTrueClient instances across HMR
         try {
-            if (typeof globalThis !== 'undefined' && globalThis.__V10_SUPABASE_CLIENT__) {
+            if (typeof globalThis !== 'undefined' && globalThis.__V10_SUPABASE_CLIENT__ && globalThis.__V10_SUPABASE_ENV__ === environment.url) {
                 clientInstance = globalThis.__V10_SUPABASE_CLIENT__;
                 hasCreds = true;
                 console.log('🔁 [Supabase] Reusing existing global Supabase client instance');
@@ -127,11 +98,15 @@ if (isNode) {
                         persistSession: true,
                         detectSessionInUrl: true,
                         flowType: 'pkce',
-                        storage: window.localStorage  // Force localStorage
+                        storage: window.localStorage,
+                        storageKey: `v10-${environment.name}-${environment.projectRef}-auth`
                     }
                 });
                 hasCreds = true;
-                try { if (typeof globalThis !== 'undefined') globalThis.__V10_SUPABASE_CLIENT__ = clientInstance; } catch (e) { /* ignore */ }
+                try {
+                    globalThis.__V10_SUPABASE_CLIENT__ = clientInstance;
+                    globalThis.__V10_SUPABASE_ENV__ = environment.url;
+                } catch (e) { /* ignore */ }
                 console.log('✅ [V10 Delivery] supabase.auth detectado com sucesso.');
             }
         } catch (e) {

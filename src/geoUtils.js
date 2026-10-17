@@ -1,3 +1,4 @@
+import { geocodeExactAddress } from './services/addressGeocoding';
 // ===== UTILIDADES GEOGRÁFICAS (SEM APIS EXTERNAS) =====
 // Funções matemáticas para cálculo de distância e otimização de rotas
 
@@ -1078,7 +1079,7 @@ export const obterCoordenadasSeguras = async (endereco) => {
 
 // Compatibilidade: wrapper simples com nome solicitado "buscarCoordenadas"
 export const buscarCoordenadas = async (endereco) => {
-    return await obterCoordenadasSeguras(endereco);
+    return await geocodeExactAddress(endereco, import.meta.env.VITE_MAPBOX_ACCESS_TOKEN);
 };
 
 /**

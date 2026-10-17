@@ -26,8 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test route services and environment safety
+        run: npm test
+
       - name: Build root app
         run: npm run build
+
+      - name: Install motorista dependencies
+        run: npm --prefix motorista ci
 
       - name: Build motorista app
         run: npm --prefix motorista run build

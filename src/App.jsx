@@ -1,13 +1,11 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import HistoricoEntregas from './HistoricoEntregas';
-import supabase, { subscribeToTable } from './supabaseClient';
+import supabase, { subscribeToTable, HAS_SUPABASE_CREDENTIALS } from './supabaseClient';
 import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
-import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montarQueryMapbox, buscarCoordenadas } from './geoUtils';
+import { nearestNeighborRoute, getRouteGeometry, buscarCoordenadas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
-
-// Safety: enable Supabase-backed flows during local debugging
-const HAS_SUPABASE_CREDENTIALS = true;
+import { assignPreparedRoute, isApprovedDriver } from './services/routeAssignment';
 
 // Paletas de cores
 const lightTheme = {
@@ -644,6 +642,8 @@ function App() {
     const [driverReadyToSend, setDriverReadyToSend] = useState(null); // motorista com rota calculada
     const [podeEnviar, setPodeEnviar] = useState(false);
     const [motoristaSelecionadoId, setMotoristaSelecionadoId] = useState(null);
+    const routeSendingRef = useRef(false);
+    const [dispatchFeedback, setDispatchFeedback] = useState('');
     const [mensagemGeral, setMensagemGeral] = useState('');
     const [enviandoGeral, setEnviandoGeral] = useState(false);
     const [btnPressed, setBtnPressed] = useState(false);
@@ -934,9 +934,6 @@ function App() {
     useEffect(() => { pontoPartidaRef.current = pontoPartida; }, [pontoPartida]);
     const mapCenterRef = useRef(mapCenterState);
     useEffect(() => { mapCenterRef.current = mapCenterState; }, [mapCenterState]);
-    // Cofre persistente para evitar perda do ID em reloads temporários
-    const motoristaIdRef = useRef(null);
-
     // Ensure Google Maps resizes after the container height changes
     useEffect(() => {
         if (!mapContainerRef.current) return;
@@ -1028,12 +1025,10 @@ function App() {
     const aprovarMotorista = async (id) => {
         try {
             if (!id) return;
-            const sid = Number(id);
+            const sid = String(id).trim();
             const { data, error } = await supabase.from('motoristas').update({ aprovado: true, acesso: 'aprovado' }).eq('id', sid).select();
-            if (error) {
-                console.error('aprovarMotorista db error:', error);
-                return { error };
-            }
+            if (error) throw error;
+            if (!data?.length) throw new Error('A aprovação não foi confirmada pelo banco.');
             // Tenta extrair telefone do registro atualizado
             const motorista = Array.isArray(data) ? data[0] : data;
             const telefone = motorista?.telefone || null;
@@ -1052,6 +1047,7 @@ function App() {
             return { data };
         } catch (e) {
             console.error('aprovarMotorista error:', e);
+            alert('Não foi possível confirmar a aprovação. Confira sua conexão e tente novamente.');
             return { error: e };
         }
     };
@@ -1500,14 +1496,13 @@ function App() {
                     lng: rec.lng != null ? Number(rec.lng) : null
                 };
 
-                if (parsed.lat === null || parsed.lng === null) return;
 
                 setFrota(prev => {
                     const arr = Array.isArray(prev) ? prev : [];
                     const antigo = arr.find(m => String(m.id) === String(parsed.id));
 
                     // 📐 CÁLCULO DE ÂNGULO (BEARING) PARA NÃO ANDAR DE RÉ
-                    if (antigo && antigo.lat && antigo.lng) {
+                    if (antigo && antigo.lat && antigo.lng && parsed.lat != null && parsed.lng != null) {
                         const p1 = { lat: antigo.lat, lng: antigo.lng };
                         const p2 = { lat: parsed.lat, lng: parsed.lng };
 
@@ -1545,14 +1540,26 @@ function App() {
             }
         };
 
+        let cancelled = false;
+        const loadDrivers = async () => {
+            const { data, error } = await supabase.from('motoristas')
+                .select('id,nome,telefone,aprovado,esta_online,lat,lng,ultima_atualizacao,avatar_path');
+            if (!cancelled && !error) (data || []).forEach(record => handleRealtimeMotoristas({ new: record }));
+        };
+        loadDrivers().catch(error => console.warn('Erro ao carregar motoristas:', error));
+        const driverPolling = setInterval(() => loadDrivers().catch(() => {}), 30000);
+        const stopLoading = () => { cancelled = true; clearInterval(driverPolling); };
+
         // Prefer native Supabase realtime channel when available
         if (supabase && typeof supabase.channel === 'function') {
             const canal = supabase
                 .channel('rastreio-v10')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'motoristas' }, handleRealtimeMotoristas)
                 .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'motoristas' }, handleRealtimeMotoristas)
                 .subscribe();
 
             return () => {
+                stopLoading();
                 try { supabase.removeChannel(canal); } catch (e) { canal.unsubscribe && canal.unsubscribe(); }
             };
         }
@@ -1567,7 +1574,7 @@ function App() {
             }
         } catch (e) { /* ignore */ }
 
-        return () => { try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
+        return () => { stopLoading(); try { if (stopPolling) stopPolling(); } catch (e) { /* ignore */ } };
     }, []);
 
     // Route polyline ref (manages drawn optimized route on map)
@@ -2037,27 +2044,17 @@ function App() {
     // Auto-zoom / fitBounds disabled in emergency mode — avoid map re-centering that can trigger freeze
     useEffect(() => { /* disabled (v85 emergency reset) */ }, []);
 
-    // Remover motoristas sem atualização há mais de 2 minutos (evita 'fantasmas')
+    // Presença antiga altera o indicador; nunca exclui o cadastro da seleção/aprovação.
     useEffect(() => {
-        const INTERVAL = 30 * 1000; // checa a cada 30s
-        const MAX_AGE = 2 * 60 * 1000; // 2 minutos
-        const id = setInterval(() => {
-            setFrota(prev => {
-                try {
-                    const now = Date.now();
-                    return (prev || []).filter(m => {
-                        try {
-                            const last = m.ultima_atualizacao || m.ultimo_sinal || m.updated_at || m.last_seen || null;
-                            if (!last) return true; // sem timestamp, mantém (conservador)
-                            const t = new Date(last).getTime();
-                            if (!t || Number.isNaN(t)) return true;
-                            return (now - t) <= MAX_AGE;
-                        } catch (e) { return true; }
-                    });
-                } catch (e) { return prev; }
-            });
-        }, INTERVAL);
-        return () => clearInterval(id);
+        const timer = setInterval(() => {
+            setFrota(previous => (previous || []).map(driver => {
+                const last = driver.ultima_atualizacao || driver.ultimo_sinal;
+                const timestamp = last ? new Date(last).getTime() : NaN;
+                return Number.isFinite(timestamp) && Date.now() - timestamp > 120000
+                    ? { ...driver, esta_online: false } : driver;
+            }));
+        }, 30000);
+        return () => clearInterval(timer);
     }, []);
 
     // NOTE: v42 cleanup: removed automatic clearing of canSendRoute (managed manually)
@@ -2123,26 +2120,6 @@ function App() {
         }
     };
 
-    // 🧠 MEMÓRIA DO MOTORISTA: verifica se já temos coordenadas exatas de conclusão para este endereço
-    const buscarMemoriaDoMotorista = async (enderecoBuscado) => {
-        try {
-            const { data, error } = await supabase
-                .from('entregas')
-                .select('lat_conclusao, lng_conclusao')
-                .eq('status', 'entregue')
-                .ilike('endereco', `%${enderecoBuscado}%`)
-                .not('lat_conclusao', 'is', null)
-                .order('created_at', { ascending: false })
-                .limit(1);
-
-            if (data && data.length > 0 && data[0].lat_conclusao) {
-                console.log("🧠 [MEMÓRIA] Coordenada exata recuperada do histórico!");
-                return { lat: parseFloat(data[0].lat_conclusao), lng: parseFloat(data[0].lng_conclusao) };
-            }
-            return null;
-        } catch (e) { return null; }
-    };
-
     const adicionarAosPendentes = async (e) => {
         if (e && typeof e.preventDefault === 'function') e.preventDefault();
         if (adicionando) return;
@@ -2159,38 +2136,13 @@ function App() {
             const enderecoTrim = String(enderecoEntrega || '').trim();
             console.log("🔍 Preparando endereço e buscando coordenadas para:", enderecoTrim);
 
-            // 1) Limpeza da query para o MAPBOX (pino mais confiável)
-            const enderecoLimpoParaMapa = montarQueryMapbox(enderecoTrim);
-
-            // 2) Buscar coordenadas: primeiro tenta memória do histórico, depois Mapbox
-            let coords = { lat: 0, lng: 0 };
-            try {
-                // 2a) Tenta a memória do motorista (lat_conclusao / lng_conclusao do histórico)
-                const memoriaCoords = await buscarMemoriaDoMotorista(enderecoLimpoParaMapa);
-                if (memoriaCoords) {
-                    coords = memoriaCoords;
-                    console.log("📍 Coordenadas recuperadas da memória do histórico:", coords);
-                } else {
-                    console.log("🗺️ Endereço novo. Buscando no Mapbox...");
-                    const res = await buscarCoordenadas(enderecoLimpoParaMapa);
-                    if (res && res.lat != null && res.lng != null) {
-                        coords = { lat: Number(res.lat), lng: Number(res.lng) };
-                        console.log("📍 Coordenadas encontradas para query de mapa:", enderecoLimpoParaMapa, coords, res.precisao || res.precision || null);
-                        // Validação de município: alerta se resultado for fora da área de atuação
-                        try {
-                            const _AREAS_VALIDAS = ['palhoca', 'sao jose', 'florianopolis', 'biguacu', 'ingleses'];
-                            const _displayNorm = String(res.display_name || res.place_name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
-                            if (_displayNorm && !_AREAS_VALIDAS.some(a => _displayNorm.includes(a))) {
-                                alert('⚠️ Endereço fora da área de atuação!');
-                            }
-                        } catch (_e) { /* ignore */ }
-                    } else {
-                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando como nulo.");
-                    }
-                }
-            } catch (err) {
-                console.error("❌ Erro ao obter coordenadas:", err);
+            // O endereço completo é a referência. Nunca troca número/cidade por regras fixas.
+            const res = await buscarCoordenadas(enderecoTrim);
+            if (!res) {
+                throw new Error('Endereço não localizado com precisão. Confira rua, número, bairro e município antes de salvar.');
             }
+            if (!window.confirm(`Confira o destino encontrado:\n${res.display_name}\n\nCorresponde ao endereço da entrega?`)) return;
+            const coords = { lat: res.lat, lng: res.lng };
 
             // 3) Payload puro: cliente e endereço salvos exatamente como digitados
             const nomeLimpo = String(nomeCliente || '').trim();
@@ -2459,7 +2411,7 @@ function App() {
             const { data: entregasAtuais, error: errBusca } = await supabase
                 .from('entregas')
                 .select('*')
-                .in('status', ['pendente', 'em_rota']);
+                .eq('status', 'pendente').is('motorista_id', null);
 
             if (errBusca) throw errBusca;
 
@@ -2555,7 +2507,7 @@ function App() {
             
             for (let i = 0; i < payloadFinal.length; i++) {
                 const novaOrdem = i + 1; // 1, 2, 3, 4... sem duplicatas!
-                await supabase
+                const { error: orderError } = await supabase
                     .from('entregas')
                     .update({ 
                         ordem_logistica: novaOrdem,
@@ -2563,7 +2515,8 @@ function App() {
                         lat_coleta: payloadFinal[i].lat_coleta,
                         lng_coleta: payloadFinal[i].lng_coleta
                     })
-                    .eq('id', payloadFinal[i].id);
+                    .eq('id', payloadFinal[i].id).eq('status', 'pendente').is('motorista_id', null).select('id').single();
+                if (orderError) throw orderError;
             }
 
             // 5. Recarrega a tela para o gestor ver a mágica
@@ -2584,51 +2537,17 @@ function App() {
         }
     };
 
-    // Seleção imediata do motorista: prioriza UUID e grava código V10 como segurança no HD
-    const aoSelecionarMotorista = async (motorista) => {
-        const uuidReal = motorista?.uuid || motorista?.id;
-        const v10Real = motorista?.codigo_v10;
-
-        if (!uuidReal && !v10Real) {
-            try { alert('Erro: Não foi possível capturar o UUID ou o Código V10.'); } catch (e) { }
-            console.error('aoSelecionarMotorista: UUID e codigo_v10 ausentes', motorista);
-            return;
-        }
-
-        const valorParaGuardar = String(uuidReal || v10Real);
-
-        // Memória blindada (HD do navegador)
-        try { if (typeof window !== 'undefined' && window.localStorage) localStorage.setItem('v10_uuid_seguranca', valorParaGuardar); } catch (e) { /* ignore */ }
-
-        // Estado e ref locais
-        setMotoristaSelecionadoId(valorParaGuardar);
-        try { motoristaIdRef.current = valorParaGuardar; } catch (e) { /* ignore */ }
-
-        console.log('💾 [UUID FIXADO]:', valorParaGuardar);
-
-        setIsCalculating(true);
-        try {
-            // Vincula no Supabase usando o UUID (ou fallback do v10 if UUID não estiver disponível)
-            const { error } = await supabase
-                .from('entregas')
-                .update({ motorista_id: valorParaGuardar })
-                .or('status.eq.pendente,status.eq.em_rota');
-
-            if (error) throw error;
-
-            setPodeEnviar(true);
-            setShowDriverSelect(false);
-            try { alert(`Motorista ${motorista?.nome || ''} vinculado via UUID.`); } catch (e) { }
-
-        } catch (err) {
-            console.error('Erro na seleção:', err);
-            try { alert('Erro ao vincular: ' + (err && err.message ? err.message : String(err))); } catch (e) { }
-        } finally {
-            setIsCalculating(false);
-        }
+    // Selecionar na frota não altera entregas. O despacho acontece em handleEnviarRota.
+    const aoSelecionarMotorista = (motorista) => {
+        if (!isApprovedDriver(motorista) || motorista.id == null) return;
+        setMotoristaSelecionadoId(String(motorista.id));
+        setPodeEnviar(false);
     };
 
     const handleEnviarRota = async () => {
+        if (routeSendingRef.current) return;
+        routeSendingRef.current = true;
+        setDispatchFeedback('');
         setIsSending(true);
         try {
             if (!rotaPronta || !motoristaSelecionadoId) {
@@ -2637,49 +2556,13 @@ function App() {
                 return;
             }
 
-            let idsParaAtualizar = (rotaOrdenadaState || []).map(i => i && i.id).filter(Boolean);
-            
-            if (!idsParaAtualizar || idsParaAtualizar.length === 0) {
-                console.warn("⚠️ [EMERGENCY] rotaOrdenadaState vazio. Usando pedidosPendentes como fallback.");
-                idsParaAtualizar = (pedidosPendentes || []).map(p => p && p.id).filter(Boolean);
-            }
-
-            if (!idsParaAtualizar || idsParaAtualizar.length === 0) {
-                try { alert('Nenhuma entrega válida para enviar (Fila vazia).'); } catch (e) { }
-                return;
-            }
-
-            // Indica que estamos atualizando para evitar handlers realtime conflitantes
+            const deliveryIds = (rotaOrdenadaState || []).map(item => item?.id).filter(id => id != null);
+            if (!deliveryIds.length) throw new Error('Organize o roteiro novamente antes de enviar.');
             isUpdatingRef.current = true;
-
-            // 1) Atualização em massa: associa motorista (UUID) e MUDA status para 'em_rota'
-            // em_rota = saiu da Central de Despacho, está a caminho do motorista
-            const motoristaUUID = String(motoristaSelecionadoId).trim();
-
-            // TRAVA DE GPS
-            const gpsData = await obterGpsDespacho();
-            const payloadUpdate = { status: 'em_rota', motorista_id: motoristaUUID };
-
-            if (gpsData.lat) {
-                payloadUpdate.endereco_coleta = 'Localização Dinâmica (Gestor)';
-                payloadUpdate.lat_coleta = gpsData.lat;
-                payloadUpdate.lng_coleta = gpsData.lng;
-            }
-
-            // EXECUTA A ATUALIZAÇÃO
-            const { data, error: upErr } = await supabase
-                .from('entregas')
-                .update(payloadUpdate)
-                .in('id', idsParaAtualizar)
-                .then(({ data, error }) => {
-                    if (error) alert('Erro no Banco: ' + error.message);
-                    return { data, error };
-                });
-
-            if (upErr) {
-                console.error('Erro Supabase:', upErr);
-                throw upErr;
-            }
+            const assignment = await assignPreparedRoute(supabase, {
+                driverId: motoristaSelecionadoId, deliveryIds, pickup: await obterGpsDespacho(),
+            });
+            const idsParaAtualizar = deliveryIds;
 
             // 2) LIMPEZA IMEDIATA DO ESTADO LOCAL
             // Remove exatamente os itens despachados (otimista) antes do reload
@@ -2697,12 +2580,14 @@ function App() {
             // Libera o guard do formulário agora que os dados foram recarregados
             try { setMapCleared(false); } catch (e) { }
 
-            try { alert('✅ Rota enviada e Dashboard limpo!'); } catch (e) { }
+            setDispatchFeedback(`Roteiro atribuído a ${assignment.driver.nome || 'motorista selecionado'}! Ele poderá consultar os pontos quando abrir o aplicativo.${assignment.warning ? ' ' + assignment.warning : ''}`);
+            try { alert(`Roteiro atribuído a ${assignment.driver.nome || 'motorista selecionado'}! Ele estará disponível quando o motorista abrir o aplicativo.${assignment.warning ? '\n\n' + assignment.warning : ''}`); } catch (e) { }
         } catch (e) {
             console.error('Erro no envio em massa:', e);
-            try { alert(JSON.stringify(e)); } catch (er) { }
+            try { alert(e.message || 'Não foi possível atribuir o roteiro. Confira sua conexão e tente novamente.'); } catch (er) { }
         } finally {
             isUpdatingRef.current = false;
+            routeSendingRef.current = false;
             setIsSending(false);
         }
     };
@@ -2711,7 +2596,7 @@ function App() {
     const motoristas = frota || [];
     // Use explicit aprovado boolean to split lists
     const motoristasAtivos = (frota || []).filter(m => m && m.aprovado === true);
-    const motoristasPendentes = (frota || []).filter(m => m && m.aprovado === false);
+    const motoristasPendentes = (frota || []).filter(m => m && m.aprovado !== true);
 
     // Driver modal handler removed — selection now handled inline via the header select
 
@@ -3150,6 +3035,7 @@ function App() {
 
                                 {/* Esquerda: Seletor de Motorista */}
                                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1, alignItems: 'flex-start' }}>
+                                    {dispatchFeedback && <p role="status" style={{ color: theme.success, maxWidth: 360 }}>{dispatchFeedback}</p>}
                                     <label style={{ color: theme.textLight, fontWeight: '700', marginBottom: '6px', fontSize: '14px' }}>Selecionar Motorista:</label>
                                     <select
                                         value={motoristaSelecionadoId || ''}
@@ -3158,8 +3044,8 @@ function App() {
                                         style={{ height: '48px', fontSize: '15px', cursor: 'pointer', width: '220px' }}
                                     >
                                         <option value="">Selecione...</option>
-                                        {(frota || []).filter(m => m && (m.esta_online === true || String(m.esta_online) === 'true')).map(m => (
-                                            <option key={m.id} value={String(m.uuid || m.id).trim()}>{m.nome}</option>
+                                        {(frota || []).filter(isApprovedDriver).map(m => (
+                                            <option key={m.id} value={String(m.id).trim()}>{m.nome}{m.esta_online === true ? ' — Online' : ' — Offline'}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -3226,7 +3112,7 @@ function App() {
                                     </button>
 
                                     <button
-                                        disabled={!(podeEnviar && rotaPronta && motoristaSelecionadoId)}
+                                        disabled={isSending || !(podeEnviar && rotaPronta && motoristaSelecionadoId)}
                                         onClick={(e) => { handleEnviarRota(e); }}
                                         style={{
                                             backgroundColor: (podeEnviar && rotaPronta && motoristaSelecionadoId) ? '#16a34a' : '#4b5563',
@@ -3398,7 +3284,7 @@ function App() {
                                 <select value={destinatario} onChange={(e) => setDestinatario(e.target.value)} style={{ padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', minWidth: '220px' }}>
                                     <option value="all">📢 Enviar para Todos</option>
                                     {motoristasAtivos?.map(m => (
-                                        <option key={m.id} value={String(m.id)}>{m.nome}</option>
+                                        <option key={m.id} value={String(m.id)}>{m.nome}{m.esta_online === true ? ' — Online' : ' — Offline'}</option>
                                     ))}
                                 </select>
                                 <div style={{ flex: 1 }}>
