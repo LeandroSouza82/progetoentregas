@@ -30,3 +30,6 @@ dist-ssr
 *.sw?
 .vercel
 .env*.local
+
+# Version only the configuration template, never local credentials.
+!.env.example

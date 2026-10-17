@@ -1,14 +1,11 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import HistoricoEntregas from './HistoricoEntregas';
-import supabase, { subscribeToTable } from './supabaseClient';
+import supabase, { subscribeToTable, HAS_SUPABASE_CREDENTIALS } from './supabaseClient';
 import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
 import { nearestNeighborRoute, getRouteGeometry, buscarCoordenadas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { assignPreparedRoute, isApprovedDriver } from './services/routeAssignment';
-
-// Safety: enable Supabase-backed flows during local debugging
-const HAS_SUPABASE_CREDENTIALS = true;
 
 // Paletas de cores
 const lightTheme = {
@@ -937,9 +934,6 @@ function App() {
     useEffect(() => { pontoPartidaRef.current = pontoPartida; }, [pontoPartida]);
     const mapCenterRef = useRef(mapCenterState);
     useEffect(() => { mapCenterRef.current = mapCenterState; }, [mapCenterState]);
-    // Cofre persistente para evitar perda do ID em reloads temporários
-    const motoristaIdRef = useRef(null);
-
     // Ensure Google Maps resizes after the container height changes
     useEffect(() => {
         if (!mapContainerRef.current) return;
@@ -2543,48 +2537,11 @@ function App() {
         }
     };
 
-    // Seleção imediata do motorista: prioriza UUID e grava código V10 como segurança no HD
-    const aoSelecionarMotorista = async (motorista) => {
-        const uuidReal = motorista?.uuid || motorista?.id;
-        const v10Real = motorista?.codigo_v10;
-
-        if (!uuidReal && !v10Real) {
-            try { alert('Erro: Não foi possível capturar o UUID ou o Código V10.'); } catch (e) { }
-            console.error('aoSelecionarMotorista: UUID e codigo_v10 ausentes', motorista);
-            return;
-        }
-
-        const valorParaGuardar = String(uuidReal || v10Real);
-
-        // Memória blindada (HD do navegador)
-        try { if (typeof window !== 'undefined' && window.localStorage) localStorage.setItem('v10_uuid_seguranca', valorParaGuardar); } catch (e) { /* ignore */ }
-
-        // Estado e ref locais
-        setMotoristaSelecionadoId(valorParaGuardar);
-        try { motoristaIdRef.current = valorParaGuardar; } catch (e) { /* ignore */ }
-
-        console.log('💾 [UUID FIXADO]:', valorParaGuardar);
-
-        setIsCalculating(true);
-        try {
-            // Vincula no Supabase usando o UUID (ou fallback do v10 if UUID não estiver disponível)
-            const { error } = await supabase
-                .from('entregas')
-                .update({ motorista_id: valorParaGuardar })
-                .or('status.eq.pendente,status.eq.em_rota');
-
-            if (error) throw error;
-
-            setPodeEnviar(true);
-            setShowDriverSelect(false);
-            try { alert(`Motorista ${motorista?.nome || ''} vinculado via UUID.`); } catch (e) { }
-
-        } catch (err) {
-            console.error('Erro na seleção:', err);
-            try { alert('Erro ao vincular: ' + (err && err.message ? err.message : String(err))); } catch (e) { }
-        } finally {
-            setIsCalculating(false);
-        }
+    // Selecionar na frota não altera entregas. O despacho acontece em handleEnviarRota.
+    const aoSelecionarMotorista = (motorista) => {
+        if (!isApprovedDriver(motorista) || motorista.id == null) return;
+        setMotoristaSelecionadoId(String(motorista.id));
+        setPodeEnviar(false);
     };
 
     const handleEnviarRota = async () => {

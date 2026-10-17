@@ -1,14 +1,16 @@
 {
   "name": "dashboard-logistica",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
     "test:e2e": "echo 'E2E tests disabled for emergency stability'",
-    "test:routes": "node --test tests/routeAssignment.test.js tests/addressGeocoding.test.js"
+    "test:routes": "node --test tests/routeAssignment.test.js tests/addressGeocoding.test.js",
+    "test:safety": "node --test tests/environment.test.js tests/environmentStartup.test.js tests/driverSelection.test.js",
+    "test": "npm run test:routes && npm run test:safety"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
