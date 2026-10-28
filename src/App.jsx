@@ -766,9 +766,10 @@ function App() {
     }, [recentList]);
 
     const [historyFilter, setHistoryFilter] = useState('');
+    const [showClienteSuggestions, setShowClienteSuggestions] = useState(false);
     const [gpsValidationMap, setGpsValidationMap] = useState({});
     const fileInputRef = useRef(null);
-    // Busca reativa e normalizada para o Histórico (v157/v158)
+    // Busca reativa e normalizada para o Histórico (v157/v158) — filtra a partir da 1ª letra
     const filteredRecentList = React.useMemo(() => {
         try {
             const q = String(historyFilter || '').trim();
@@ -785,7 +786,32 @@ function App() {
         } catch (e) { return recentList || []; }
     }, [recentList, historyFilter]);
 
-    // ✅ PASSO 2: Carga inicial do Histórico de Clientes diretamente do banco (lista completa e distinta)
+    // Sugestões de clientes a partir da 1ª letra digitada no campo "Nome do Cliente"
+    const clienteSuggestions = React.useMemo(() => {
+        try {
+            const q = String(nomeCliente || '').trim();
+            if (!q) return [];
+            const normalize = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+            const nq = normalize(q);
+            const matches = (recentList || []).filter(it => {
+                try {
+                    const c = normalize(it && it.cliente || '');
+                    const a = normalize(it && it.endereco || '');
+                    return c.includes(nq) || a.includes(nq);
+                } catch (e) { return false; }
+            });
+            matches.sort((a, b) => {
+                const ca = normalize(a.cliente || '').replace(/^\*+/, '');
+                const cb = normalize(b.cliente || '').replace(/^\*+/, '');
+                const aStarts = ca.startsWith(nq) ? 0 : 1;
+                const bStarts = cb.startsWith(nq) ? 0 : 1;
+                return aStarts - bStarts;
+            });
+            return matches.slice(0, 8);
+        } catch (e) { return []; }
+    }, [recentList, nomeCliente]);
+
+    // ✅ PASSO 2: Carga completa do Histórico de Clientes diretamente do banco (todos os status)
     useEffect(() => {
         if (!HAS_SUPABASE_CREDENTIALS) return;
         let cancelled = false;
@@ -793,12 +819,26 @@ function App() {
             try {
                 const { data, error } = await supabase
                     .from('entregas')
-                    .select('cliente, endereco, lat, lng')
-                    .not('status', 'eq', 'arquivado')
+                    .select('cliente, endereco, lat, lng, created_at')
                     .not('cliente', 'is', null)
                     .neq('cliente', '')
-                    .order('created_at', { ascending: false });
-                if (cancelled || error || !data) return;
+                    .order('id', { ascending: false })
+                    .limit(2000);
+
+                if (cancelled) return;
+
+                if (error) {
+                    console.error('[Histórico de Clientes] Erro ao buscar dados do Supabase:', error);
+                    return;
+                }
+
+                if (!data || data.length === 0) {
+                    console.warn('[Histórico de Clientes] Nenhum registro retornado pelo Supabase.');
+                    return;
+                }
+
+                console.log(`[Histórico de Clientes] ${data.length} registros recebidos do Supabase.`);
+
                 // Deduplica por nome do cliente (case-insensitive) — mantém o mais recente
                 const seen = new Set();
                 const unicos = [];
@@ -813,20 +853,64 @@ function App() {
                         lng: row.lng
                     });
                 }
+
                 if (cancelled || unicos.length === 0) return;
-                // Mescla: registros existentes (localStorage) têm prioridade; novos do banco são acrescentados
+
+                // Mescla: garante que todos os clientes do banco estejam presentes
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
                     const prevKeys = new Set(lista.map(p => String(p.cliente || '').toLowerCase().trim()));
                     const novos = unicos.filter(u => !prevKeys.has(String(u.cliente || '').toLowerCase().trim()));
+                    if (lista.length === 0) return unicos;
                     if (novos.length === 0) return lista;
                     return [...lista, ...novos];
                 });
-            } catch (e) { console.error('[Histórico] erro ao carregar do banco:', e); }
+            } catch (e) {
+                console.error('[Histórico de Clientes] Exceção ao carregar dados do banco:', e);
+            }
         };
         carregarHistoricoClientes();
         return () => { cancelled = true; };
-    }, []); // executa apenas uma vez no mount
+    }, [abaAtiva]);
+
+    // Busca dinâmica no Supabase ao digitar a partir da 1ª letra (em Nome do Cliente ou Pesquisar)
+    useEffect(() => {
+        if (!HAS_SUPABASE_CREDENTIALS) return;
+        const termo = String(historyFilter || nomeCliente || '').trim();
+        if (termo.length < 1) return;
+        let cancelled = false;
+        const timer = setTimeout(async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('entregas')
+                    .select('cliente, endereco, lat, lng')
+                    .or(`cliente.ilike.%${termo}%,endereco.ilike.%${termo}%`)
+                    .not('cliente', 'is', null)
+                    .neq('cliente', '')
+                    .order('id', { ascending: false })
+                    .limit(50);
+                if (cancelled || error || !data || data.length === 0) return;
+                setRecentList(prev => {
+                    const lista = Array.isArray(prev) ? prev : [];
+                    const prevKeys = new Set(lista.map(p => String(p.cliente || '').toLowerCase().trim()));
+                    const novos = [];
+                    for (const row of data) {
+                        const chave = String(row.cliente || '').toLowerCase().trim();
+                        if (!chave || prevKeys.has(chave)) continue;
+                        prevKeys.add(chave);
+                        novos.push({
+                            cliente: row.cliente,
+                            endereco: row.endereco || '',
+                            lat: row.lat,
+                            lng: row.lng
+                        });
+                    }
+                    return novos.length > 0 ? [...lista, ...novos] : lista;
+                });
+            } catch (e) { /* ignore */ }
+        }, 200);
+        return () => { cancelled = true; clearTimeout(timer); };
+    }, [historyFilter, nomeCliente]);
 
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
@@ -2989,7 +3073,61 @@ function App() {
                                         <option>Outros</option>
                                     </select>
                                 </label>
-                                <input ref={clienteInputRef} name="cliente" placeholder="Nome do Cliente" style={inputStyle} required value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} />
+                                <div style={{ position: 'relative' }}>
+                                    <input
+                                        ref={clienteInputRef}
+                                        name="cliente"
+                                        placeholder="Nome do Cliente"
+                                        style={inputStyle}
+                                        required
+                                        value={nomeCliente}
+                                        onFocus={() => setShowClienteSuggestions(true)}
+                                        onBlur={() => setTimeout(() => setShowClienteSuggestions(false), 180)}
+                                        onChange={(e) => {
+                                            setNomeCliente(e.target.value);
+                                            setShowClienteSuggestions(true);
+                                        }}
+                                    />
+                                    {showClienteSuggestions && String(nomeCliente || '').trim().length >= 1 && clienteSuggestions.length > 0 && (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: '100%',
+                                            left: 0,
+                                            right: 0,
+                                            marginTop: '-10px',
+                                            background: '#0f172a',
+                                            border: '1px solid rgba(96,165,250,0.35)',
+                                            borderRadius: '10px',
+                                            boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+                                            zIndex: 1200,
+                                            maxHeight: '240px',
+                                            overflowY: 'auto'
+                                        }}>
+                                            {clienteSuggestions.map((sug, sIdx) => (
+                                                <div
+                                                    key={sIdx}
+                                                    onMouseDown={(ev) => {
+                                                        ev.preventDefault();
+                                                        setNomeCliente(sug.cliente || '');
+                                                        setEnderecoEntrega(sug.endereco || '');
+                                                        setShowClienteSuggestions(false);
+                                                    }}
+                                                    style={{
+                                                        padding: '10px 14px',
+                                                        cursor: 'pointer',
+                                                        borderBottom: sIdx < clienteSuggestions.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                                                        transition: 'background 0.15s'
+                                                    }}
+                                                    onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(59,130,246,0.18)'; }}
+                                                    onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
+                                                >
+                                                    <div style={{ fontWeight: 700, color: '#f8fafc', fontSize: '14px' }}>{sug.cliente}</div>
+                                                    <div style={{ fontSize: '12px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sug.endereco}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                                 <div style={{ position: 'relative' }}>
                                     <div style={{ width: '93% !important', boxSizing: 'border-box' }}>
                                         <input
