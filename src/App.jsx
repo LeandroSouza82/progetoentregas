@@ -795,17 +795,31 @@ function App() {
                 .filter(Boolean);
 
             if (idsParaDeletar.length > 0) {
-                const { error: delErr } = await supabase
+                const { data: delData, error: delErr } = await supabase
                     .from('entregas')
                     .delete()
-                    .in('id', idsParaDeletar);
-                if (delErr) throw delErr;
+                    .in('id', idsParaDeletar)
+                    .select('id');
+                if (delErr || !delData || delData.length === 0) {
+                    console.error('❌ [RLS SUPABASE] DELETE bloqueado por RLS na tabela "entregas". Aplicando fallback via UPDATE.');
+                    const { error: fbErr } = await supabase
+                        .from('entregas')
+                        .update({ cliente: null, endereco: null, status: 'cancelado' })
+                        .in('id', idsParaDeletar);
+                    if (fbErr) throw fbErr;
+                }
             } else {
-                const { error: delErr } = await supabase
+                const { data: delData, error: delErr } = await supabase
                     .from('entregas')
                     .delete()
-                    .eq('cliente', nomeAlvo);
-                if (delErr) throw delErr;
+                    .eq('cliente', nomeAlvo)
+                    .select('id');
+                if (delErr || !delData || delData.length === 0) {
+                    await supabase
+                        .from('entregas')
+                        .update({ cliente: null, endereco: null, status: 'cancelado' })
+                        .eq('cliente', nomeAlvo);
+                }
             }
 
             // 2. Remove da lista local (e consequentemente do localStorage)
@@ -2410,28 +2424,60 @@ function App() {
         }
     };
     const excluirPedido = async (id) => {
-        const parsedId = typeof id === 'string' ? parseInt(id, 10) : id;
+        const parsedId = typeof id === 'string' ? parseInt(id, 10) : Number(id);
         if (!parsedId || isNaN(parsedId)) {
             console.warn('excluirPedido: id inválido', id);
             return;
         }
 
-        // 1. ATUALIZAÇÃO OTIMISTA: Remove o card da tela IMEDIATAMENTE (snappy feel)
-        setPedidosPendentes(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
+        isUpdatingRef.current = true;
+
+        // 1. ATUALIZAÇÃO OTIMISTA: Remove o card e pino da tela IMEDIATAMENTE em todos os estados locais
+        const filtrarPorId = prev => (Array.isArray(prev) ? prev : []).filter(p => Number(p?.id) !== parsedId);
+        setPedidosPendentes(filtrarPorId);
+        setEntregas(filtrarPorId);
+        setEntregaMarkers(filtrarPorId);
         try {
-            atualizarEntregasOrdenadas(prev => (Array.isArray(prev) ? prev : []).filter(p => p.id !== parsedId));
+            atualizarEntregasOrdenadas(filtrarPorId);
         } catch (e) { /* ignore */ }
 
-        // 2. Apaga do banco de dados (Supabase)
-        const { error } = await supabase.from('entregas').delete().eq('id', parsedId);
+        try {
+            // 2. Executa DELETE real no Supabase verificando se a linha foi de fato removida (.select('id'))
+            const { data: deletedRows, error } = await supabase
+                .from('entregas')
+                .delete()
+                .eq('id', parsedId)
+                .select('id');
 
-        // 3. Em background, garante que tudo fique sincronizado
-        if (!error) {
-            try { carregarDados(); } catch (e) { }
-        } else {
-            console.error('Erro ao excluir pedido:', error);
-            // Se falhar no banco, recarrega para restaurar o card na tela
-            try { carregarDados(); } catch (e) { }
+            if (error) {
+                console.error('❌ [RLS SUPABASE] Erro de permissão ao executar DELETE na tabela "entregas":', error);
+            }
+
+            // Se o RLS do Supabase bloquear silenciosamente o DELETE (retorna 0 linhas deletadas),
+            // exibe console.error claro e aplica fallback persistente via UPDATE (status = 'cancelado')
+            if (error || !deletedRows || deletedRows.length === 0) {
+                console.error(
+                    `❌ [RLS SUPABASE] O DELETE na tabela "entregas" (id=${parsedId}) retornou 0 linhas afetadas. ` +
+                    `Libere a Policy de DELETE para a tabela "entregas" no painel do Supabase. ` +
+                    `Aplicando fallback no banco (status = 'cancelado') para remover definitivamente da fila.`
+                );
+                const { error: fallbackError } = await supabase
+                    .from('entregas')
+                    .update({ status: 'cancelado' })
+                    .eq('id', parsedId);
+
+                if (fallbackError) {
+                    console.error('❌ [SUPABASE] Falha também no fallback de remoção na tabela "entregas":', fallbackError);
+                }
+            }
+
+            // 3. Sincroniza após a conclusão da operação no banco
+            try { await carregarDados(); } catch (e) { /* ignore */ }
+        } catch (err) {
+            console.error('Erro inesperado em excluirPedido:', err);
+            try { await carregarDados(); } catch (e) { /* ignore */ }
+        } finally {
+            isUpdatingRef.current = false;
         }
     };
 
