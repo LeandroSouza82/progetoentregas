@@ -5,6 +5,7 @@ import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
 import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montarQueryMapbox, buscarCoordenadas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
+import BarraAtalhosObs from './components/BarraAtalhosObs.jsx';
 
 // Safety: enable Supabase-backed flows during local debugging
 const HAS_SUPABASE_CREDENTIALS = true;
@@ -3202,6 +3203,7 @@ function App() {
                                     </div>
                                 </div>
                                 <textarea name="obs" placeholder="Observações do Gestor (ex: Cuidado com o cachorro)" value={observacoesGestor} onChange={(e) => setObservacoesGestor(e.target.value)} style={{ ...inputStyle, minHeight: '92px', resize: 'vertical', width: '95% !important', boxSizing: 'border-box' }} />
+                                <BarraAtalhosObs setObservacoesGestor={setObservacoesGestor} />
                                 {/* Disable add if address has no number */}
                                 <button
                                     type="submit"
