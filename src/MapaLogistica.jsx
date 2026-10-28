@@ -9,11 +9,7 @@ import createCustomPinIcon from './CustomPin.jsx';
 // Disponibiliza `MapboxMap`, `MapboxMarker` e `MapboxPopup` se você quiser usar Mapbox GL React
 import MapboxMap, { Marker as MapboxMarker, Popup as MapboxPopup } from 'react-map-gl';
 
-const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
-
-if (!token) {
-  console.error("❌ Erro Crítico: Token do Mapbox não encontrado nas variáveis de ambiente.");
-}
+const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
 
 const isValidSC = (lat, lng) => {
     if (lat == null || lng == null) return false;
