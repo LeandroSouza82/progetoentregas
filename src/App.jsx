@@ -770,6 +770,8 @@ function App() {
     const [showClienteSuggestions, setShowClienteSuggestions] = useState(false);
     const [clienteParaExcluir, setClienteParaExcluir] = useState(null);
     const [excluindoCliente, setExcluindoCliente] = useState(false);
+    const [pedidoParaRemover, setPedidoParaRemover] = useState(null);
+    const [removendoPedido, setRemovendoPedido] = useState(false);
     const [gpsValidationMap, setGpsValidationMap] = useState({});
     const fileInputRef = useRef(null);
 
@@ -3737,7 +3739,7 @@ function App() {
                                                     >{cardCopiado === p.id ? '✅' : '📋'}</button>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                                                    <button onClick={() => excluirPedido(p.id)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
+                                                    <button onClick={() => setPedidoParaRemover(p)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
                                                     {(p.lat && p.lng) ? (
                                                         <button onClick={() => { try { window.open('https://www.google.com/maps/dir/?api=1&destination=' + Number(p.lat) + ',' + Number(p.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ background: '#0ea5e9', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
                                                     ) : null}
@@ -3745,6 +3747,102 @@ function App() {
                                             </div>
                                         );
                                     })}
+                            </div>
+                        )}
+
+                        {/* Modal de Confirmação ao clicar em Remover na Fila de Preparação */}
+                        {pedidoParaRemover && (
+                            <div
+                                onClick={() => { if (!removendoPedido) setPedidoParaRemover(null); }}
+                                style={{
+                                    position: 'fixed',
+                                    inset: 0,
+                                    background: 'rgba(0, 0, 0, 0.65)',
+                                    backdropFilter: 'blur(4px)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    zIndex: 13000
+                                }}
+                            >
+                                <div
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{
+                                        width: '440px',
+                                        maxWidth: '92%',
+                                        background: '#0f172a',
+                                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                                        borderRadius: '14px',
+                                        padding: '24px',
+                                        boxShadow: '0 16px 40px rgba(0, 0, 0, 0.65)',
+                                        color: '#f8fafc'
+                                    }}
+                                >
+                                    <h3 style={{ margin: '0 0 10px 0', fontSize: '18px', fontWeight: 800, color: '#f87171', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        🗑️ Confirmar Exclusão
+                                    </h3>
+                                    <p style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#cbd5e1', lineHeight: 1.5 }}>
+                                        Tem certeza que é isso mesmo que você quer excluir da Fila de Preparação?
+                                    </p>
+                                    <div style={{
+                                        background: 'rgba(255, 255, 255, 0.04)',
+                                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                                        borderRadius: '10px',
+                                        padding: '12px',
+                                        marginBottom: '20px'
+                                    }}>
+                                        <div style={{ fontWeight: 700, color: '#fff', fontSize: '15px', marginBottom: '4px' }}>
+                                            {pedidoParaRemover.cliente || 'Cliente'}
+                                        </div>
+                                        <div style={{ fontSize: '13px', color: '#94a3b8' }}>
+                                            📍 {pedidoParaRemover.endereco || ''}
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                        <button
+                                            type="button"
+                                            disabled={removendoPedido}
+                                            onClick={() => setPedidoParaRemover(null)}
+                                            style={{
+                                                padding: '10px 16px',
+                                                borderRadius: '8px',
+                                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                                background: 'transparent',
+                                                color: '#cbd5e1',
+                                                fontWeight: 700,
+                                                cursor: removendoPedido ? 'not-allowed' : 'pointer'
+                                            }}
+                                        >
+                                            Cancelar
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={removendoPedido}
+                                            onClick={async () => {
+                                                setRemovendoPedido(true);
+                                                try {
+                                                    await excluirPedido(pedidoParaRemover.id);
+                                                    setPedidoParaRemover(null);
+                                                } finally {
+                                                    setRemovendoPedido(false);
+                                                }
+                                            }}
+                                            style={{
+                                                padding: '10px 18px',
+                                                borderRadius: '8px',
+                                                border: 'none',
+                                                background: '#ef4444',
+                                                color: '#ffffff',
+                                                fontWeight: 800,
+                                                cursor: removendoPedido ? 'not-allowed' : 'pointer',
+                                                opacity: removendoPedido ? 0.6 : 1,
+                                                boxShadow: '0 4px 14px rgba(239, 68, 68, 0.35)'
+                                            }}
+                                        >
+                                            {removendoPedido ? 'Excluindo...' : 'Sim, Excluir'}
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </div>
