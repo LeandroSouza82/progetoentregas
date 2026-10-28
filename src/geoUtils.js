@@ -1,63 +1,185 @@
-// ===== UTILIDADES GEOGRÁFICAS (SEM APIS EXTERNAS) =====
-// Funções matemáticas para cálculo de distância e otimização de rotas
+// ===== UTILIDADES GEOGRÁFICAS =====
+// Funções de higienização de endereços, geocodificação com fallback em 3 níveis e otimização de rotas
 
-export const limparEnderecoParaMapbox = (enderecoBruto) => {
+const getMapboxToken = () => {
+    try {
+        if (typeof import.meta !== 'undefined' && import.meta.env) {
+            return import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || import.meta.env.VITE_MAPBOX_TOKEN || '';
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+};
+
+/**
+ * Higieniza e padroniza uma string de endereço antes de enviá-la para APIs de geocodificação.
+ * - Remove prefixos ("Endereço:", "Endereçõ:", "End:")
+ * - Remove "nº", "n°", "numero", "número" antes dos dígitos
+ * - Expande abreviações ("R.", "Av.", "Rod.", "Serv.")
+ * - Substitui "Fpolis" / "Floripa" por "Florianópolis"
+ * - Garante o sufixo ", SC, Brasil"
+ */
+export const higienizarEnderecoParaGeocoding = (enderecoBruto, garantirSufixoSC = true) => {
     if (!enderecoBruto) return '';
 
-    // 1. Remove termos que confundem o Mapbox
-    let texto = String(enderecoBruto)
-        .replace(/ - Palhoça.*/gi, '')
-        .replace(/Palhoça, SC, Brasil/gi, '')
-        .replace(/Florianópolis, SC, Brasil/gi, '')
-        .replace(/São José, SC, Brasil/gi, '');
+    let texto = String(enderecoBruto).trim();
 
-    // 2. Limpa espaços extras, vírgulas duplicadas e retorna
+    // 1. Remover prefixos iniciais como "Endereço:", "Endereçõ:", "End:" (case-insensitive)
+    texto = texto
+        .replace(/^\s*(?:endere[cç][oõ]s?\s*:?|end\.?\s*:?)\s*/gi, '')
+        .replace(/\b(?:endere[cç][oõ]s?\s*:|end\.?\s*:)\s*/gi, '');
+
+    // 2. Remover "CEP:" / rótulos de CEP mantendo ou limpando excessos
+    texto = texto.replace(/\bcep\s*:?\s*\d{5}-?\d{3}\b/gi, '');
+
+    // 3. Remover "nº", "n°", "numero", "número" antes dos dígitos (ou isolados)
+    texto = texto
+        .replace(/\b(?:n[º°ª.]?|n[uú]mero|num\.?)\s*(?=\d)/gi, '')
+        .replace(/\bn[º°ª]\s*/gi, '');
+
+    // 4. Substituir abreviações de logradouro no início ou meio do texto
+    texto = texto
+        .replace(/\bR\.?\s+/gi, 'Rua ')
+        .replace(/\bAv\.?\s+/gi, 'Avenida ')
+        .replace(/\bRod\.?\s+/gi, 'Rodovia ')
+        .replace(/\bServ\.?\s+/gi, 'Servidão ')
+        .replace(/\bRua\s+Avenida\b/gi, 'Avenida')
+        .replace(/\bRua\s*:\s*/gi, 'Rua ');
+
+    // 5. Substituir "Fpolis" ou "Floripa" por "Florianópolis"
+    texto = texto.replace(/\b(?:fpolis|f\.?\s*polis|floripa)\b/gi, 'Florianópolis');
+
+    // 6. Remover complementos internos que confundem geocoders (ex: "sala 308", "1º andar", "Bloco A", "apto 202")
+    texto = texto
+        .replace(/\b(?:sala|sl|apto?|apartamento|bloco|bl|torre|andar|loja|lj|box|casa|lote|quadra)\s*[0-9A-Za-zº°ª\-]+/gi, '')
+        .replace(/\b\d+[º°ª]\s*andar\b/gi, '');
+
+    // 7. Normalizar separadores (" - " por ", "), vírgulas duplicadas e espaços
+    texto = texto
+        .replace(/\s+-\s+/g, ', ')
+        .replace(/,\s*,+/g, ',')
+        .replace(/\s*,\s*/g, ', ')
+        .replace(/^,\s*|\s*,$/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+    // 8. Garantir que ", SC, Brasil" esteja presente ao final quando solicitado
+    if (garantirSufixoSC && texto) {
+        const lower = texto.toLowerCase();
+        if (!lower.includes('brasil')) {
+            if (/\b(?:sc|santa catarina)\s*$/i.test(texto)) {
+                texto = `${texto}, Brasil`;
+            } else {
+                texto = `${texto}, SC, Brasil`;
+            }
+        }
+    }
+
     return texto
-        .replace(/, ,/g, ',')
-        .replace(/,,/g, ',')
-        .replace(/\s+/g, ' ')
-        .replace(/,$/, '')
+        .replace(/,\s*,+/g, ',')
+        .replace(/\s*,\s*/g, ', ')
+        .replace(/\s{2,}/g, ' ')
         .trim();
 };
 
-// Exportada: monta a query curta/limpa enviada ao Mapbox (evita repetir bairro)
-export const montarQueryMapbox = (enderecoBruto) => {
-    if (!enderecoBruto) return '';
+/**
+ * Detecta a cidade da Grande Florianópolis a partir do endereço (com fallback inteligente por bairros conhecidos).
+ */
+export const detectarCidadeGrandeFlorianopolis = (endereco) => {
+    const norm = String(endereco || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
 
-    // 1. Limpeza inicial
-    let d = enderecoBruto.replace(/Rua Avenida/gi, 'Avenida').trim();
-    let textoMinusculo = d.toLowerCase();
+    if (norm.includes('florianopolis') || norm.includes('fpolis') || norm.includes('floripa')) return 'Florianópolis';
+    if (norm.includes('sao jose')) return 'São José';
+    if (norm.includes('biguacu')) return 'Biguaçu';
+    if (norm.includes('santo amaro')) return 'Santo Amaro da Imperatriz';
+    if (norm.includes('governador celso ramos') || norm.includes('gov celso ramos')) return 'Governador Celso Ramos';
+    if (norm.includes('palhoca')) return 'Palhoça';
 
-    // 2. DETECTOR DE CIDADES (A Peneira de Região)
-    let cidadeDetectada = 'Palhoça'; // Cidade padrão
-
-    if (textoMinusculo.includes('fpolis') || textoMinusculo.includes('florianopolis') || textoMinusculo.includes('florianópolis')) {
-        cidadeDetectada = 'Florianópolis';
-    } else if (textoMinusculo.includes('sao jose') || textoMinusculo.includes('são josé')) {
-        cidadeDetectada = 'São José';
-    } else if (textoMinusculo.includes('biguacu') || textoMinusculo.includes('biguaçu')) {
-        cidadeDetectada = 'Biguaçu';
-    } else if (textoMinusculo.includes('santo amaro')) {
-        cidadeDetectada = 'Santo Amaro da Imperatriz';
+    // Inferência por bairros conhecidos quando o nome da cidade foi omitido
+    if (/\b(campinas|kobrasol|barreiros|forquilhinha|forquilhinhas|serraria|praia comprida|roçado|rocado|fazenda santo antonio|ipiranga|areias)\b/.test(norm)) {
+        return 'São José';
+    }
+    if (/\b(coqueiros|estreito|abraao|capoeiras|ingleses|jurere|canasvieiras|trindade|itacorubi|campeche| Agronomica|agronomica|saco dos limoes|lagoa da conceicao|monte cristo|jardim atlantico)\b/.test(norm)) {
+        return 'Florianópolis';
+    }
+    if (/\b(pagani|pedra branca|ponte do imaruim|ponte imaruim|ponte do imarui|caminho novo|aririu|nova palhoca|madri|passa vinte|eldorado|brejaru|bela vista)\b/.test(norm)) {
+        return 'Palhoça';
     }
 
-    // 3. SEPARAÇÃO DE RUA E NÚMERO
-    let partes = d.split(/[,\-]/).map(p => p.trim());
-    const rua = partes[0] || '';
-    let numero = '';
+    return 'Palhoça';
+};
 
-    if (partes[1] && /\d/.test(partes[1])) {
-        numero = partes[1].split(' ')[0];
-    }
+/**
+ * Gera as 3 tentativas progressivas de busca para o Fallback Inteligente:
+ * - Tentativa 1: Endereço limpo completo + ", Santa Catarina, Brasil"
+ * - Tentativa 2: Endereço limpo SEM o nome do bairro (apenas Rua + Número + Cidade + ", SC, Brasil")
+ * - Tentativa 3: Apenas o nome da Rua + Cidade + ", SC, Brasil"
+ */
+export const gerarTentativasGeocoding = (enderecoBruto) => {
+    if (!enderecoBruto || !String(enderecoBruto).trim()) return [];
 
-    // 4. MONTAGEM DA QUERY (Sempre com o estado SC e Brasil para não ter erro)
-    const queryFinal = `${rua}, ${numero}, ${cidadeDetectada}, SC, Brasil`
-        .replace(/ ,/g, ',')
-        .replace(/,,/g, ',')
-        .replace(/\s+/g, ' ')
+    const cidade = detectarCidadeGrandeFlorianopolis(enderecoBruto);
+    const baseSemSufixo = higienizarEnderecoParaGeocoding(enderecoBruto, false)
+        .replace(/,\s*(?:sc|santa catarina|brasil)\b/gi, '')
         .trim();
 
-    console.log(`🎯 [GEO REGIONAL] Cidade: ${cidadeDetectada} | Query: ${queryFinal}`);
+    // Extrair Rua e Número
+    const partes = baseSemSufixo.split(',').map(p => p.trim()).filter(Boolean);
+    let rua = partes[0] || '';
+    let numero = '';
+
+    // Caso o número esteja colado na primeira parte (ex: "Avenida Presidente Kenedy 1333")
+    const matchNumeroNaRua = rua.match(/^(.*?)\s+(\d+[A-Za-z0-9\/\-]*)(?:\s+.*)?$/);
+    if (matchNumeroNaRua && matchNumeroNaRua[1].trim().length >= 3) {
+        rua = matchNumeroNaRua[1].trim();
+        numero = matchNumeroNaRua[2].trim();
+    } else if (partes.length > 1) {
+        for (let i = 1; i < partes.length; i++) {
+            const m = partes[i].match(/^(\d+[A-Za-z0-9\/\-]*)/) || partes[i].match(/\b(\d{1,5})\b/);
+            if (m && m[1].length < 6) { // evita confundir CEP de 8 dígitos com número
+                numero = m[1];
+                break;
+            }
+        }
+    }
+
+    // Limpar eventual nome de bairro colado após o número na rua
+    rua = rua.replace(/\d+/g, '').replace(/\s{2,}/g, ' ').trim();
+
+    // Tentativa 1: Endereço limpo completo + ", Santa Catarina, Brasil"
+    let tentativa1 = baseSemSufixo;
+    if (!tentativa1.toLowerCase().includes(cidade.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')) &&
+        !tentativa1.toLowerCase().includes(cidade.toLowerCase())) {
+        tentativa1 = `${tentativa1}, ${cidade}`;
+    }
+    tentativa1 = `${tentativa1}, Santa Catarina, Brasil`
+        .replace(/,\s*,+/g, ',')
+        .replace(/\s*,\s*/g, ', ')
+        .trim();
+
+    // Tentativa 2: SEM o nome do bairro (apenas Rua + Número + Cidade + ", SC, Brasil")
+    const tentativa2 = numero
+        ? `${rua}, ${numero}, ${cidade}, SC, Brasil`
+        : `${rua}, ${cidade}, SC, Brasil`;
+
+    // Tentativa 3: Apenas o nome da Rua + Cidade + ", SC, Brasil"
+    const tentativa3 = `${rua}, ${cidade}, SC, Brasil`;
+
+    return Array.from(new Set([tentativa1, tentativa2, tentativa3].filter(q => q && q.length > 5)));
+};
+
+export const limparEnderecoParaMapbox = (enderecoBruto) => {
+    return higienizarEnderecoParaGeocoding(enderecoBruto, true);
+};
+
+// Exportada: monta a query curta/limpa enviada ao Mapbox
+export const montarQueryMapbox = (enderecoBruto) => {
+    if (!enderecoBruto) return '';
+    const tentativas = gerarTentativasGeocoding(enderecoBruto);
+    const queryFinal = tentativas[1] || tentativas[0] || higienizarEnderecoParaGeocoding(enderecoBruto, true);
+    console.log(`🎯 [GEO REGIONAL] Query preparada: ${queryFinal}`);
     return queryFinal;
 };
 
@@ -366,7 +488,7 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
     if (!address || address.trim().length < 3) return null;
 
     try {
-        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
+        const MAPBOX_TOKEN = getMapboxToken();
 
         // v45/v48: regras agressivas para casos conhecidos
         try {
@@ -403,10 +525,8 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                 } catch (e) { /* fallthrough */ }
             }
 
-            // Regra agressiva para Ponte do Imaruí (usa CEP e endereço fixo)
             // Regra agressiva para Morro das Feiticeiras (forçar Florianópolis + CEP)
             if (lower.indexOf('morro das feiticeiras') !== -1 || lower.indexOf('feiticeiras') !== -1) {
-                // Forçar busca para Ingleses Norte quando aparecer Feiticeiras
                 const fixedMorro = 'Rua Morro das Feiticeiras, Ingleses Norte, Florianópolis, SC, 88058-583, Brasil';
                 try {
                     const cityCenter = getCityCenter('Florianópolis') || { lat: -27.59, lng: -48.54 };
@@ -427,29 +547,6 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
                         }
                     }
                 } catch (e) { /* fallthrough */ }
-            }
-            if (lower.indexOf('ponte imaruim') !== -1 || lower.indexOf('ponte do imarui') !== -1 || lower.indexOf('ponte do imaruí') !== -1) {
-                // endereço fixo com CEP para evitar ambiguidade do Mapbox
-                const fixed = 'Rua Graciliano Ramos, 177, Ponte do Imaruí, Palhoça, SC, 88130-490';
-                try {
-                    const cityCenter = getCityCenter('Palhoça') || { lat: -27.64, lng: -48.67 };
-                    const d = 0.03;
-                    const cityBounds = { west: cityCenter.lng - d, south: cityCenter.lat - d, east: cityCenter.lng + d, north: cityCenter.lat + d };
-                    const bbox = `${cityBounds.west},${cityBounds.south},${cityBounds.east},${cityBounds.north}`;
-                    const proximityParam = `${Number(cityCenter.lng)},${Number(cityCenter.lat)}`;
-                    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(fixed))}.json?access_token=${MAPBOX_TOKEN}&proximity=${proximityParam}&bbox=${bbox}&types=address&language=pt&limit=1`;
-                    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
-                    if (resp && resp.ok) {
-                        const jd = await resp.json();
-                        if (jd && jd.features && jd.features.length > 0) {
-                            const r = jd.features[0];
-                            if (r && r.center && r.center.length >= 2) {
-                                const lng = r.center[0], lat = r.center[1];
-                                return { lat, lng, display_name: r.place_name || fixed };
-                            }
-                        }
-                    }
-                } catch (e) { /* fallthrough to normal flow if fixed search fails */ }
             }
         } catch (e) { /* ignore aggressive rule errors */ }
 
@@ -926,60 +1023,94 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
     try {
         if (!enderecoBruto || !String(enderecoBruto).trim()) return null;
 
-        // 1. Limpeza: Remove complementos, mas preserva números de endereço
-        let query = String(enderecoBruto)
-            .replace(/\b(casa|fundos|apto|apartamento|bloco|ao lado de|n°|num|numero)\b/gi, '')
-            .replace(/\s{2,}/g, ' ')
-            .trim();
+        const MAPBOX_TOKEN = getMapboxToken();
+        const tentativas = gerarTentativasGeocoding(enderecoBruto);
 
-        // 2. Inteligência de Localidade: Evita duplicar a cidade
-        const defaultCity = 'São José, SC, Brasil';
-        if (!query.toLowerCase().includes('são josé') && !query.toLowerCase().includes('sao jose')) {
-            query = `${query}, ${defaultCity}`;
-        }
+        const estaNaRegiaoSC = (lat, lng) => {
+            const nLat = Number(lat);
+            const nLng = Number(lng);
+            if (!Number.isFinite(nLat) || !Number.isFinite(nLng)) return false;
+            return nLat >= -29.4 && nLat <= -25.9 && nLng >= -53.9 && nLng <= -48.0;
+        };
 
-        const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
-        if (!MAPBOX_TOKEN) {
-            console.warn('buscarCoordenadasMelhoradas: VITE_MAPBOX_ACCESS_TOKEN não está definido');
-            return null;
-        }
+        for (let idx = 0; idx < tentativas.length; idx++) {
+            const queryTentativa = tentativas[idx];
+            const isTentativaRua = idx === 2;
+            console.log(`🔎 [GEO Tentativa ${idx + 1}/${tentativas.length}] Buscando: "${queryTentativa}"`);
 
-        // Aplicar limpeza centralizada antes de enviar ao Mapbox (mesma função usada no fluxo principal)
-        const enderecoFiltradoMelhorado = limparEnderecoParaMapbox(query);
-        console.log(`🧹 Endereço limpo (melhoradas): de "${query}" para "${enderecoFiltradoMelhorado}"`);
-        query = enderecoFiltradoMelhorado;
+            // 1) Tentar via Mapbox Geocoding API
+            if (MAPBOX_TOKEN) {
+                try {
+                    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(queryTentativa)}.json`);
+                    url.searchParams.append('access_token', MAPBOX_TOKEN);
+                    url.searchParams.append('proximity', '-48.61,-27.60');
+                    url.searchParams.append('bbox', '-48.98,-27.90,-48.30,-27.35');
+                    url.searchParams.append('country', 'br');
+                    url.searchParams.append('types', isTentativaRua ? 'street,address,poi' : 'address,street,poi');
+                    url.searchParams.append('language', 'pt');
+                    url.searchParams.append('autocomplete', 'true');
+                    url.searchParams.append('fuzzyMatch', 'true');
+                    url.searchParams.append('limit', '1');
 
-        // 3. Parâmetros de Alta Precisão
-        const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(limparEnderecoParaMapbox(query))}.json`);
-        url.searchParams.append('access_token', MAPBOX_TOKEN);
-        url.searchParams.append('proximity', '-48.67,-27.64'); // Foco na sua região (Palhoça)
-        url.searchParams.append('country', 'br');
-        url.searchParams.append('types', 'address,poi');
-        url.searchParams.append('language', 'pt');
-        url.searchParams.append('autocomplete', 'true'); // Ajuda com erros de digitação
-        url.searchParams.append('fuzzyMatch', 'true');   // CORRIGE: "Aveida" -> "Avenida"
-        url.searchParams.append('limit', '1');
-
-        const resp = await fetch(url.toString());
-        if (!resp || !resp.ok) return null;
-        const data = await resp.json();
-
-        if (data && data.features && data.features.length > 0) {
-            const feat = data.features[0];
-            const [lng, lat] = feat.center || [];
-            const precisao = typeof feat.relevance === 'number' ? feat.relevance : (feat.properties && feat.properties.accuracy) || 0;
-
-            if (precisao < 0.8) {
-                console.warn('⚠️ Endereço com baixa precisão:', query, 'precisão:', precisao);
+                    const resp = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
+                    if (resp && resp.ok) {
+                        const data = await resp.json();
+                        if (data && data.features && data.features.length > 0) {
+                            const feat = data.features[0];
+                            const [lng, lat] = feat.center || [];
+                            const precisao = typeof feat.relevance === 'number'
+                                ? feat.relevance
+                                : ((feat.properties && feat.properties.accuracy) || 0.7);
+                            // Na tentativa 1 (com bairro), exige relevância mínima para não aceitar falso positivo antes de tentar sem bairro
+                            const minRelevance = idx === 0 ? 0.65 : 0.45;
+                            if (estaNaRegiaoSC(lat, lng) && precisao >= minRelevance) {
+                                console.log(`✅ [GEO Tentativa ${idx + 1} - Mapbox] Coordenadas encontradas:`, { lat, lng, place_name: feat.place_name });
+                                return {
+                                    lat: Number(lat),
+                                    lng: Number(lng),
+                                    precisao,
+                                    place_name: feat.place_name,
+                                    display_name: feat.place_name,
+                                    context: feat.context || null,
+                                    tentativa: idx + 1
+                                };
+                            }
+                        }
+                    }
+                } catch (errMapbox) {
+                    console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Mapbox] Falha:`, errMapbox);
+                }
             }
 
-            return {
-                lat,
-                lng,
-                precisao,
-                place_name: feat.place_name,
-                context: feat.context || null
-            };
+            // 2) Tentar via OpenStreetMap / Nominatim (excelente para Tentativa 2 sem bairro e Tentativa 3 nível rua)
+            try {
+                const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(queryTentativa)}&countrycodes=br&viewbox=-48.98,-27.35,-48.30,-27.90&bounded=0&limit=1`;
+                const nomResp = await fetch(nomUrl, {
+                    headers: { 'Accept': 'application/json', 'Accept-Language': 'pt-BR,pt;q=0.9' }
+                });
+                if (nomResp && nomResp.ok) {
+                    const nomData = await nomResp.json();
+                    if (Array.isArray(nomData) && nomData.length > 0) {
+                        const first = nomData[0];
+                        const lat = parseFloat(first.lat);
+                        const lng = parseFloat(first.lon);
+                        if (estaNaRegiaoSC(lat, lng)) {
+                            console.log(`✅ [GEO Tentativa ${idx + 1} - Nominatim] Coordenadas encontradas:`, { lat, lng, display_name: first.display_name });
+                            return {
+                                lat,
+                                lng,
+                                precisao: isTentativaRua ? 0.75 : 0.9,
+                                place_name: first.display_name,
+                                display_name: first.display_name,
+                                source: 'nominatim',
+                                tentativa: idx + 1
+                            };
+                        }
+                    }
+                }
+            } catch (errNom) {
+                console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Nominatim] Falha:`, errNom);
+            }
         }
 
         return null;
@@ -990,7 +1121,7 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
 };
 
 /**
- * Wrapper que tenta `geocodeMapbox` primeiro e cai para `buscarCoordenadasMelhoradas` como fallback.
+ * Wrapper que tenta o fallback inteligente de 3 níveis (`buscarCoordenadasMelhoradas`) e `geocodeMapbox`.
  * @param {string} endereco - Endereço bruto
  * @param {object} opts - Opcional: { bounds, proximity }
  * @returns {Promise<object|null>} Objeto unificado: { lat, lng, display_name, precisao, context }
@@ -999,37 +1130,36 @@ export async function buscarCoordenadasComFallback(endereco, opts = {}) {
     try {
         if (!endereco || !String(endereco).trim()) return null;
 
-        // 1) Primeiro tentar o fluxo completo e agressivo do geocodeMapbox (ele já aplica heurísticas)
-        try {
-            const gm = await geocodeMapbox(endereco, opts.bounds || null, opts.proximity || null);
-            if (gm && (gm.lat != null && gm.lng != null)) {
-                // Normalizar retorno para incluir 'precisao' e 'display_name' quando possível
-                return {
-                    lat: gm.lat,
-                    lng: gm.lng,
-                    display_name: gm.display_name || gm.place_name || null,
-                    precisao: gm.precisao || gm.precision || null,
-                    context: gm.context || null
-                };
-            }
-        } catch (e) {
-            console.warn('buscarCoordenadasComFallback: geocodeMapbox falhou, tentando fallback otimizado', e);
-        }
-
-        // 2) Fallback para a versão otimizada e tolerante
+        // 1) Tentar o Fallback Inteligente de 3 níveis (Completo -> Sem Bairro -> Apenas Rua + Cidade)
         try {
             const fb = await buscarCoordenadasMelhoradas(endereco);
-            if (fb && (fb.lat != null && fb.lng != null)) {
+            if (fb && fb.lat != null && fb.lng != null) {
                 return {
-                    lat: fb.lat,
-                    lng: fb.lng,
-                    display_name: fb.place_name || null,
+                    lat: Number(fb.lat),
+                    lng: Number(fb.lng),
+                    display_name: fb.display_name || fb.place_name || null,
                     precisao: fb.precisao || null,
                     context: fb.context || null
                 };
             }
         } catch (e) {
             console.warn('buscarCoordenadasComFallback: buscarCoordenadasMelhoradas falhou', e);
+        }
+
+        // 2) Fallback secundário para geocodeMapbox com heurísticas de CEP/fuzzy
+        try {
+            const gm = await geocodeMapbox(endereco, opts.bounds || null, opts.proximity || null);
+            if (gm && gm.lat != null && gm.lng != null) {
+                return {
+                    lat: Number(gm.lat),
+                    lng: Number(gm.lng),
+                    display_name: gm.display_name || gm.place_name || null,
+                    precisao: gm.precisao || gm.precision || null,
+                    context: gm.context || null
+                };
+            }
+        } catch (e) {
+            console.warn('buscarCoordenadasComFallback: geocodeMapbox falhou', e);
         }
 
         return null;
@@ -1039,37 +1169,11 @@ export async function buscarCoordenadasComFallback(endereco, opts = {}) {
     }
 }
 
-// Wrapper consolidado para uso no App.jsx: tenta a versão estrita e cai para a versão melhorada
+// Wrapper consolidado para uso no App.jsx: executa higienização + Fallback Inteligente em 3 tentativas
 export const obterCoordenadasSeguras = async (endereco) => {
     try {
         if (!endereco || !String(endereco).trim()) return null;
-
-        // Tentativa 1: Função original/estrita
-        let resultado = null;
-        try {
-            resultado = await geocodeMapbox(endereco);
-        } catch (e) {
-            console.warn('obterCoordenadasSeguras: geocodeMapbox lançou erro', e);
-            resultado = null;
-        }
-
-        // Se falhou ou a precisão for ruim (ex: menor que 0.8), aciona a "equipe de resgate"
-        const precisao = resultado && (resultado.precisao || resultado.precision || resultado.relevance || null);
-        const precisaFallback = !resultado || !(resultado.lat != null && resultado.lng != null) || (typeof precisao === 'number' && precisao < 0.8);
-
-        if (precisaFallback) {
-            console.log(`🔄 [GEO] Busca exata falhou ou imprecisa para "${endereco}". Acionando busca melhorada (Fuzzy)...`);
-            try {
-                const resultadoMelhorado = await buscarCoordenadasMelhoradas(endereco);
-                if (resultadoMelhorado && resultadoMelhorado.lat != null && resultadoMelhorado.lng != null) {
-                    resultado = resultadoMelhorado;
-                }
-            } catch (e) {
-                console.warn('obterCoordenadasSeguras: buscarCoordenadasMelhoradas lançou erro', e);
-            }
-        }
-
-        return resultado;
+        return await buscarCoordenadasComFallback(endereco);
     } catch (error) {
         console.error('❌ Erro no wrapper de coordenadas:', error);
         return null;
