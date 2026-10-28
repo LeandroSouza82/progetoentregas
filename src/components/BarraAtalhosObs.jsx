@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const OPCOES_OUTROS = [
+    'Comunicado',
+    'Pasta de Leitura',
+    'Editais',
+    'Solicitação de Matrícula',
     'Malote',
     'Pasta de Prestação de Contas',
     'Ata de Assembleia',
