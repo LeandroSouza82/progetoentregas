@@ -767,8 +767,64 @@ function App() {
 
     const [historyFilter, setHistoryFilter] = useState('');
     const [showClienteSuggestions, setShowClienteSuggestions] = useState(false);
+    const [clienteParaExcluir, setClienteParaExcluir] = useState(null);
+    const [excluindoCliente, setExcluindoCliente] = useState(false);
     const [gpsValidationMap, setGpsValidationMap] = useState({});
     const fileInputRef = useRef(null);
+
+    const confirmarExclusaoClienteHistorico = async () => {
+        if (!clienteParaExcluir || excluindoCliente) return;
+        const nomeAlvo = String(clienteParaExcluir.cliente || '');
+        const chaveAlvo = nomeAlvo.toLowerCase().trim();
+        if (!chaveAlvo) {
+            setClienteParaExcluir(null);
+            return;
+        }
+        setExcluindoCliente(true);
+        try {
+            // 1. Busca todos os IDs desse cliente no banco (case-insensitive / sem espaços extras)
+            const { data: rows } = await supabase
+                .from('entregas')
+                .select('id, cliente')
+                .ilike('cliente', `%${nomeAlvo.trim()}%`);
+
+            const idsParaDeletar = (rows || [])
+                .filter(r => String(r.cliente || '').toLowerCase().trim() === chaveAlvo)
+                .map(r => r.id)
+                .filter(Boolean);
+
+            if (idsParaDeletar.length > 0) {
+                const { error: delErr } = await supabase
+                    .from('entregas')
+                    .delete()
+                    .in('id', idsParaDeletar);
+                if (delErr) throw delErr;
+            } else {
+                const { error: delErr } = await supabase
+                    .from('entregas')
+                    .delete()
+                    .eq('cliente', nomeAlvo);
+                if (delErr) throw delErr;
+            }
+
+            // 2. Remove da lista local (e consequentemente do localStorage)
+            setRecentList(prev =>
+                (Array.isArray(prev) ? prev : []).filter(
+                    it => String(it && it.cliente || '').toLowerCase().trim() !== chaveAlvo
+                )
+            );
+
+            // 3. Atualiza os dados da tela caso houvesse entrega ativa desse cliente
+            try { if (typeof carregarDados === 'function') await carregarDados(); } catch (e) { /* ignore */ }
+
+            setClienteParaExcluir(null);
+        } catch (err) {
+            console.error('[Histórico de Clientes] Erro ao excluir do banco:', err);
+            alert('Erro ao excluir cliente do banco de dados: ' + (err?.message || String(err)));
+        } finally {
+            setExcluindoCliente(false);
+        }
+    };
     // Busca reativa e normalizada para o Histórico (v157/v158) — filtra a partir da 1ª letra
     const filteredRecentList = React.useMemo(() => {
         try {
@@ -3229,6 +3285,7 @@ function App() {
                                         return (
                                             <div key={idx}
                                                 className="v10-history-card"
+                                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}
                                                 onClick={async () => {
                                                     try {
                                                         setNomeCliente(it.cliente || '');
@@ -3236,38 +3293,161 @@ function App() {
                                                     } catch (e) { }
                                                 }}
                                             >
-                                                <div className="title" style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
-                                                <div className="addr" style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
-                                                {precisaCorrecao && (
-                                                    <button
-                                                        onClick={(e) => corrigirEnderecoCliente(e, it.cliente, gpsInfo.entregaId, gpsInfo.latConclusao, gpsInfo.lngConclusao)}
-                                                        style={{
-                                                            marginTop: 8,
-                                                            padding: '5px 11px',
-                                                            borderRadius: 6,
-                                                            background: '#f97316',
-                                                            border: 'none',
-                                                            color: '#fff',
-                                                            fontSize: 12,
-                                                            fontWeight: 700,
-                                                            cursor: 'pointer',
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: 4
-                                                        }}
-                                                        title={`GPS real desviou ${Math.round(gpsInfo.distMetros)}m do endereço registrado`}
-                                                    >
-                                                        ⚠️ Corrigir Endereço
-                                                    </button>
-                                                )}
-                                                {foiValidado && (
-                                                    <div style={{ marginTop: 8, fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✅ Validado</div>
-                                                )}
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div className="title" style={{ fontWeight: 700, color: theme.textMain }}>{it.cliente}</div>
+                                                    <div className="addr" style={{ fontSize: '13px', color: theme.textLight }}>{it.endereco}</div>
+                                                    {precisaCorrecao && (
+                                                        <button
+                                                            onClick={(e) => corrigirEnderecoCliente(e, it.cliente, gpsInfo.entregaId, gpsInfo.latConclusao, gpsInfo.lngConclusao)}
+                                                            style={{
+                                                                marginTop: 8,
+                                                                padding: '5px 11px',
+                                                                borderRadius: 6,
+                                                                background: '#f97316',
+                                                                border: 'none',
+                                                                color: '#fff',
+                                                                fontSize: 12,
+                                                                fontWeight: 700,
+                                                                cursor: 'pointer',
+                                                                display: 'inline-flex',
+                                                                alignItems: 'center',
+                                                                gap: 4
+                                                            }}
+                                                            title={`GPS real desviou ${Math.round(gpsInfo.distMetros)}m do endereço registrado`}
+                                                        >
+                                                            ⚠️ Corrigir Endereço
+                                                        </button>
+                                                    )}
+                                                    {foiValidado && (
+                                                        <div style={{ marginTop: 8, fontSize: 12, color: '#22c55e', fontWeight: 600 }}>✅ Validado</div>
+                                                    )}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    title={`Excluir "${it.cliente}" do banco de dados`}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setClienteParaExcluir(it);
+                                                    }}
+                                                    style={{
+                                                        flexShrink: 0,
+                                                        width: '32px',
+                                                        height: '32px',
+                                                        borderRadius: '8px',
+                                                        border: '1px solid rgba(239, 68, 68, 0.35)',
+                                                        background: 'rgba(239, 68, 68, 0.12)',
+                                                        color: '#f87171',
+                                                        cursor: 'pointer',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'center',
+                                                        fontSize: '14px',
+                                                        transition: 'all 0.18s ease'
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.background = '#ef4444';
+                                                        e.currentTarget.style.color = '#ffffff';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)';
+                                                        e.currentTarget.style.color = '#f87171';
+                                                    }}
+                                                >
+                                                    🗑️
+                                                </button>
                                             </div>
                                         );
                                     })
                                 )}
                             </div>
+
+                            {/* Modal de Confirmação de Exclusão do Banco de Dados */}
+                            {clienteParaExcluir && (
+                                <div
+                                    onClick={() => { if (!excluindoCliente) setClienteParaExcluir(null); }}
+                                    style={{
+                                        position: 'fixed',
+                                        inset: 0,
+                                        background: 'rgba(0, 0, 0, 0.65)',
+                                        backdropFilter: 'blur(4px)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        zIndex: 13000
+                                    }}
+                                >
+                                    <div
+                                        onClick={(e) => e.stopPropagation()}
+                                        style={{
+                                            width: '440px',
+                                            maxWidth: '92%',
+                                            background: '#0f172a',
+                                            border: '1px solid rgba(239, 68, 68, 0.4)',
+                                            borderRadius: '14px',
+                                            padding: '24px',
+                                            boxShadow: '0 16px 40px rgba(0, 0, 0, 0.65)',
+                                            color: '#f8fafc'
+                                        }}
+                                    >
+                                        <h3 style={{ margin: '0 0 10px 0', fontSize: '18px', fontWeight: 800, color: '#f87171', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            🗑️ Excluir do Banco de Dados
+                                        </h3>
+                                        <p style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#cbd5e1', lineHeight: 1.5 }}>
+                                            Tem certeza que deseja excluir permanentemente este cliente do histórico e do banco de dados?
+                                        </p>
+                                        <div style={{
+                                            background: 'rgba(255, 255, 255, 0.04)',
+                                            border: '1px solid rgba(255, 255, 255, 0.08)',
+                                            borderRadius: '10px',
+                                            padding: '12px',
+                                            marginBottom: '20px'
+                                        }}>
+                                            <div style={{ fontWeight: 700, color: '#fff', fontSize: '15px', marginBottom: '4px' }}>
+                                                {clienteParaExcluir.cliente}
+                                            </div>
+                                            <div style={{ fontSize: '13px', color: '#94a3b8' }}>
+                                                {clienteParaExcluir.endereco}
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                            <button
+                                                type="button"
+                                                disabled={excluindoCliente}
+                                                onClick={() => setClienteParaExcluir(null)}
+                                                style={{
+                                                    padding: '10px 16px',
+                                                    borderRadius: '8px',
+                                                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                                                    background: 'transparent',
+                                                    color: '#cbd5e1',
+                                                    fontWeight: 700,
+                                                    cursor: excluindoCliente ? 'not-allowed' : 'pointer'
+                                                }}
+                                            >
+                                                Cancelar
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={excluindoCliente}
+                                                onClick={confirmarExclusaoClienteHistorico}
+                                                style={{
+                                                    padding: '10px 18px',
+                                                    borderRadius: '8px',
+                                                    border: 'none',
+                                                    background: '#ef4444',
+                                                    color: '#ffffff',
+                                                    fontWeight: 800,
+                                                    cursor: excluindoCliente ? 'not-allowed' : 'pointer',
+                                                    opacity: excluindoCliente ? 0.6 : 1,
+                                                    boxShadow: '0 4px 14px rgba(239, 68, 68, 0.35)'
+                                                }}
+                                            >
+                                                {excluindoCliente ? 'Excluindo...' : 'Sim, Excluir'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
