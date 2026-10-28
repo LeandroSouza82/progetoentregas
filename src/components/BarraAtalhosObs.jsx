@@ -5,6 +5,7 @@ const OPCOES_OUTROS = [
     'Pasta de Leitura',
     'Editais',
     'Solicitação de Matrícula',
+    'Registro de Atas',
     'Malote',
     'Pasta de Prestação de Contas',
     'Ata de Assembleia',
