@@ -930,14 +930,12 @@ function App() {
 
                 if (cancelled || unicos.length === 0) return;
 
-                // Mescla: garante que todos os clientes do banco estejam presentes
+                // Mescla: prioriza SEMPRE o endereço/coordenada mais recente do banco sobre o cache antigo do localStorage
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
-                    const prevKeys = new Set(lista.map(p => String(p.cliente || '').toLowerCase().trim()));
-                    const novos = unicos.filter(u => !prevKeys.has(String(u.cliente || '').toLowerCase().trim()));
-                    if (lista.length === 0) return unicos;
-                    if (novos.length === 0) return lista;
-                    return [...lista, ...novos];
+                    const bancoKeys = new Set(unicos.map(u => String(u.cliente || '').toLowerCase().trim()));
+                    const apenasLocais = lista.filter(p => !bancoKeys.has(String(p && p.cliente || '').toLowerCase().trim()));
+                    return [...unicos, ...apenasLocais];
                 });
             } catch (e) {
                 console.error('[Histórico de Clientes] Exceção ao carregar dados do banco:', e);
@@ -964,22 +962,43 @@ function App() {
                     .order('id', { ascending: false })
                     .limit(50);
                 if (cancelled || error || !data || data.length === 0) return;
+
+                // Pega sempre o registro mais recente (id DESC) de cada cliente retornado pelo banco
+                const maisRecentesBanco = new Map();
+                for (const row of data) {
+                    const chave = String(row.cliente || '').toLowerCase().trim();
+                    if (!chave || maisRecentesBanco.has(chave)) continue;
+                    maisRecentesBanco.set(chave, {
+                        cliente: row.cliente,
+                        endereco: row.endereco || '',
+                        lat: row.lat,
+                        lng: row.lng
+                    });
+                }
+
+                if (maisRecentesBanco.size === 0) return;
+
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
-                    const prevKeys = new Set(lista.map(p => String(p.cliente || '').toLowerCase().trim()));
+                    const jaVistos = new Set();
+                    // Atualiza clientes já existentes com o endereço mais recente do banco
+                    const atualizada = lista.map(item => {
+                        const chave = String(item && item.cliente || '').toLowerCase().trim();
+                        if (chave && maisRecentesBanco.has(chave)) {
+                            jaVistos.add(chave);
+                            return maisRecentesBanco.get(chave);
+                        }
+                        if (chave) jaVistos.add(chave);
+                        return item;
+                    });
+                    // Adiciona clientes do banco que ainda não estavam na lista local
                     const novos = [];
-                    for (const row of data) {
-                        const chave = String(row.cliente || '').toLowerCase().trim();
-                        if (!chave || prevKeys.has(chave)) continue;
-                        prevKeys.add(chave);
-                        novos.push({
-                            cliente: row.cliente,
-                            endereco: row.endereco || '',
-                            lat: row.lat,
-                            lng: row.lng
-                        });
-                    }
-                    return novos.length > 0 ? [...lista, ...novos] : lista;
+                    maisRecentesBanco.forEach((val, chave) => {
+                        if (!jaVistos.has(chave)) {
+                            novos.push(val);
+                        }
+                    });
+                    return novos.length > 0 ? [...atualizada, ...novos] : atualizada;
                 });
             } catch (e) { /* ignore */ }
         }, 200);
@@ -2456,7 +2475,36 @@ function App() {
 
             const newPedido = inserted[0];
 
-            // ✅ PASSO 1: Atualiza a barra lateral em tempo real — adiciona o novo cliente no TOPO
+            // ✅ Atualiza também registros anteriores do mesmo cliente (case-insensitive + trim) no Supabase
+            // para garantir que o Histórico de Clientes nunca volte a puxar um endereço antigo
+            try {
+                const chaveCliente = nomeLimpo.toLowerCase().trim();
+                if (chaveCliente) {
+                    const { data: existentes } = await supabase
+                        .from('entregas')
+                        .select('id, cliente')
+                        .ilike('cliente', `%${nomeLimpo}%`);
+                    const idsAntigos = (existentes || [])
+                        .filter(r => r && r.id !== (newPedido && newPedido.id) && String(r.cliente || '').toLowerCase().trim() === chaveCliente)
+                        .map(r => r.id);
+                    if (idsAntigos.length > 0) {
+                        await supabase
+                            .from('entregas')
+                            .update({
+                                cliente: nomeLimpo,
+                                endereco: enderecoPuro,
+                                lat: payload.lat,
+                                lng: payload.lng
+                            })
+                            .in('id', idsAntigos);
+                    }
+                }
+            } catch (errUpdHist) {
+                console.warn('⚠️ [Histórico de Clientes] Falha não-bloqueante ao sincronizar endereço antigo no banco:', errUpdHist);
+            }
+
+            // ✅ PASSO 1: Atualiza a barra lateral e o localStorage em tempo real —
+            // se o cliente já existir (case-insensitive + trim), SUBSTITUI pelo novo endereço/coordenadas no TOPO
             try {
                 const novoRegistroHistorico = {
                     cliente: nomeLimpo,
@@ -2464,13 +2512,13 @@ function App() {
                     lat: payload.lat,
                     lng: payload.lng
                 };
+                const chaveNova = nomeLimpo.toLowerCase().trim();
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
-                    const jaExiste = lista.some(it =>
-                        String(it.cliente || '').toLowerCase().trim() === nomeLimpo.toLowerCase().trim()
+                    const semAntigo = lista.filter(it =>
+                        String(it && it.cliente || '').toLowerCase().trim() !== chaveNova
                     );
-                    if (jaExiste) return lista;
-                    return [novoRegistroHistorico, ...lista];
+                    return [novoRegistroHistorico, ...semAntigo];
                 });
             } catch (e) { /* ignore */ }
 
