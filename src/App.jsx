@@ -9,6 +9,18 @@ import BarraAtalhosObs from './components/BarraAtalhosObs.jsx';
 import SeletorTipoCard from './components/SeletorTipoCard.jsx';
 import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota, gerarChaveRota } from './services/routeService.js';
 
+// O endereço digitado preserva o número do imóvel na navegação externa.
+const montarUrlNavegacao = (endereco, lat, lng) => {
+    let limpo = String(endereco ?? '').trim()
+        .replace(/^(?:endere[cç][oõ]\s*:?|end\s*:?)\s*/i, '')
+        .replace(/\b(?:fpolis|floripa)\b/gi, 'Florianópolis').trim();
+    if (limpo && !/\b(?:SC|Santa Catarina)\b/i.test(limpo)) {
+        limpo = limpo.replace(/[,\s]+$/, '') + ', SC, Brasil';
+    }
+    const destino = limpo || `${Number(lat)},${Number(lng)}`;
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destino)}&travelmode=driving`;
+};
+
 // Safety: enable Supabase-backed flows during local debugging
 const HAS_SUPABASE_CREDENTIALS = true;
 
@@ -789,10 +801,11 @@ function App() {
         setExcluindoCliente(true);
         try {
             // 1. Busca apenas os IDs que combinam exatamente o cliente E o endereço clicado (case-insensitive / trim)
-            const { data: rows } = await supabase
+            const { data: rows, error: buscaErro } = await supabase
                 .from('entregas')
                 .select('id, cliente, endereco')
-                .ilike('cliente', `%${nomeAlvo}%`);
+                .ilike('cliente', `%${nomeAlvo.replace(/[\\%_]/g, '\\$&')}%`);
+            if (buscaErro) throw buscaErro;
 
             const idsParaDeletar = (rows || [])
                 .filter(r =>
@@ -815,20 +828,6 @@ function App() {
                         .update({ cliente: null, endereco: null, status: 'cancelado' })
                         .in('id', idsParaDeletar);
                     if (fbErr) throw fbErr;
-                }
-            } else if (enderecoAlvo) {
-                const { data: delData, error: delErr } = await supabase
-                    .from('entregas')
-                    .delete()
-                    .ilike('cliente', nomeAlvo)
-                    .ilike('endereco', enderecoAlvo)
-                    .select('id');
-                if (delErr || !delData || delData.length === 0) {
-                    await supabase
-                        .from('entregas')
-                        .update({ cliente: null, endereco: null, status: 'cancelado' })
-                        .ilike('cliente', nomeAlvo)
-                        .ilike('endereco', enderecoAlvo);
                 }
             }
 
@@ -3877,8 +3876,8 @@ function App() {
                                                 </div>
                                                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                                                     <button onClick={() => setPedidoParaRemover(p)} style={{ background: 'none', border: 'none', color: theme.danger, cursor: 'pointer', fontSize: '12px' }}>Remover</button>
-                                                    {(p.lat && p.lng) ? (
-                                                        <button onClick={() => { try { window.open('https://www.google.com/maps/dir/?api=1&destination=' + Number(p.lat) + ',' + Number(p.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ background: '#0ea5e9', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
+                                                    {(String(p.endereco ?? '').trim() || (p.lat && p.lng)) ? (
+                                                        <button onClick={() => { try { window.open(montarUrlNavegacao(p.endereco, p.lat, p.lng), '_blank', 'noopener'); } catch (e) { } }} style={{ background: '#0ea5e9', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12 }}>Navegar</button>
                                                     ) : null}
                                                 </div>
                                             </div>
