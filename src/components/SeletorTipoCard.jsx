@@ -114,3 +114,4 @@ export default function SeletorTipoCard({ tipo, getColorForType, getContrastText
         </div>
     );
 }
+
