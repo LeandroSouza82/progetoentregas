@@ -7,7 +7,7 @@ import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montar
 import ErrorBoundary from './ErrorBoundary.jsx';
 import BarraAtalhosObs from './components/BarraAtalhosObs.jsx';
 import SeletorTipoCard from './components/SeletorTipoCard.jsx';
-import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota } from './services/routeService.js';
+import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota, gerarChaveRota } from './services/routeService.js';
 
 // Safety: enable Supabase-backed flows during local debugging
 const HAS_SUPABASE_CREDENTIALS = true;
@@ -2131,14 +2131,29 @@ function App() {
     }
     // (Optimização e persistência já executadas dentro desta função.)
     // Recálculo automático da polilinha OSRM, distância total e tempo estimado a partir da posição do motorista
-    useEffect(() => {
-        let cancelado = false;
+    const paradasRotaAtual = useMemo(() => {
         const fonteFila = (Array.isArray(pedidosPendentes) && pedidosPendentes.length > 0)
             ? pedidosPendentes
             : (Array.isArray(entregaMarkers) ? entregaMarkers : []);
-        const paradas = ordenarParadasRota(fonteFila);
+        return ordenarParadasRota(fonteFila);
+    }, [pedidosPendentes, rotaOrdenadaState, entregaMarkers]);
 
-        if (paradas.length === 0) {
+    const origemRotaAtual = useMemo(() => {
+        const fonteFila = (Array.isArray(pedidosPendentes) && pedidosPendentes.length > 0)
+            ? pedidosPendentes
+            : (Array.isArray(entregaMarkers) ? entregaMarkers : []);
+        return obterOrigemMotorista(frota, motoristaSelecionadoId, motoristaDaRota, fonteFila);
+    }, [frota, motoristaSelecionadoId, motoristaDaRota, pedidosPendentes, entregaMarkers]);
+
+    const chaveRotaAtual = useMemo(
+        () => gerarChaveRota(origemRotaAtual, paradasRotaAtual),
+        [origemRotaAtual, paradasRotaAtual]
+    );
+
+    useEffect(() => {
+        let cancelado = false;
+
+        if (paradasRotaAtual.length === 0) {
             setDataRotaCoordenadas([]);
             setEstimatedDistanceKm(0);
             setResumoRotaTexto('0 km (0 min)');
@@ -2146,10 +2161,9 @@ function App() {
             return () => { cancelado = true; };
         }
 
-        const origem = obterOrigemMotorista(frota, motoristaSelecionadoId, motoristaDaRota, fonteFila);
         setDistanceCalculating(true);
 
-        calcularRotaCompletaOSRM(origem, paradas)
+        calcularRotaCompletaOSRM(origemRotaAtual, paradasRotaAtual)
             .then((resultado) => {
                 if (cancelado || !resultado) return;
                 setDataRotaCoordenadas(Array.isArray(resultado.coordinates) ? resultado.coordinates : []);
@@ -2168,7 +2182,7 @@ function App() {
             });
 
         return () => { cancelado = true; };
-    }, [pedidosPendentes, rotaOrdenadaState, entregaMarkers, frota, motoristaSelecionadoId, motoristaDaRota]);
+    }, [chaveRotaAtual]);
 
     // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
     useEffect(() => {

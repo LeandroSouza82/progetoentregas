@@ -5,11 +5,11 @@ import L from 'leaflet';
 import polyline from 'polyline';
 import { supabase } from './supabaseClient';
 import createCustomPinIcon from './CustomPin.jsx';
-import { calcularRotaCompletaOSRM, calcularFallbackHaversine, obterOrigemMotorista, ordenarParadasRota } from './services/routeService';
+import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota, gerarChaveRota } from './services/routeService';
 
 const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
 
-const OSM_OFFICIAL_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const GOOGLE_MAPS_TILE_URL = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=pt-BR';
 
 const isValidSC = (lat, lng) => {
     if (lat == null || lng == null) return false;
@@ -729,40 +729,43 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
     };
 
-    // Polilinha calculada entre o ponto do motorista / ponto azul e os marcadores numerados (1, 2, 3...)
+    // Polilinha seguindo estritamente as ruas e rodovias (OSRM) entre o motorista e as paradas (1, 2, 3...)
     const [polilinhaInterna, setPolilinhaInterna] = useState([]);
+
+    const paradasOrdenadasMapa = useMemo(() => ordenarParadasRota(entregaMarkers), [entregaMarkers]);
+
+    const origemMotoristaMapa = useMemo(() => {
+        const frotaAtiva = (Array.isArray(frotaMarkers) && frotaMarkers.length > 0) ? frotaMarkers : frota;
+        const orig = obterOrigemMotorista(frotaAtiva, null, motoristaDaRota, entregaMarkers);
+        if (orig) return orig;
+        if (Array.isArray(gestorPos) && gestorPos.length >= 2 && Number.isFinite(Number(gestorPos[0])) && Number.isFinite(Number(gestorPos[1]))) {
+            return { lat: Number(gestorPos[0]), lng: Number(gestorPos[1]), nome: 'Gestor' };
+        }
+        return null;
+    }, [frotaMarkers, frota, motoristaDaRota, entregaMarkers, gestorPos]);
+
+    const chaveRotaMapa = useMemo(
+        () => gerarChaveRota(origemMotoristaMapa, paradasOrdenadasMapa),
+        [origemMotoristaMapa, paradasOrdenadasMapa]
+    );
 
     useEffect(() => {
         let cancelado = false;
-        const paradas = ordenarParadasRota(entregaMarkers);
-        if (paradas.length === 0) {
+        if (paradasOrdenadasMapa.length === 0) {
             setPolilinhaInterna([]);
             return () => { cancelado = true; };
         }
 
-        const frotaAtiva = (Array.isArray(frotaMarkers) && frotaMarkers.length > 0) ? frotaMarkers : frota;
-        let origem = obterOrigemMotorista(frotaAtiva, null, motoristaDaRota, entregaMarkers);
-        if (!origem && Array.isArray(gestorPos) && gestorPos.length >= 2 && Number.isFinite(Number(gestorPos[0])) && Number.isFinite(Number(gestorPos[1]))) {
-            origem = { lat: Number(gestorPos[0]), lng: Number(gestorPos[1]), nome: 'Gestor' };
-        }
-
-        // Desenho imediato via fallback Haversine enquanto o OSRM responde
-        const waypointsIniciais = origem ? [origem, ...paradas] : [...paradas];
-        if (waypointsIniciais.length >= 2) {
-            const imediato = calcularFallbackHaversine(waypointsIniciais);
-            if (imediato && Array.isArray(imediato.coordinates) && imediato.coordinates.length >= 2) {
-                setPolilinhaInterna(imediato.coordinates);
-            }
-        }
-
-        calcularRotaCompletaOSRM(origem, paradas).then((res) => {
-            if (!cancelado && res && Array.isArray(res.coordinates) && res.coordinates.length >= 2) {
-                setPolilinhaInterna(res.coordinates);
-            }
-        }).catch(() => { });
+        calcularRotaCompletaOSRM(origemMotoristaMapa, paradasOrdenadasMapa)
+            .then((res) => {
+                if (!cancelado && res && Array.isArray(res.coordinates) && res.coordinates.length >= 2) {
+                    setPolilinhaInterna(res.coordinates);
+                }
+            })
+            .catch(() => { });
 
         return () => { cancelado = true; };
-    }, [entregaMarkers, frotaMarkers, frota, motoristaDaRota, gestorPos]);
+    }, [chaveRotaMapa]);
 
     const polilinhaParaDesenhar = useMemo(() => {
         if (Array.isArray(polilinhaInterna) && polilinhaInterna.length >= 2) return polilinhaInterna;
@@ -799,7 +802,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         <div className={estiloMapa === 'dark' ? 'v10-map-dark-mode' : 'v10-map-vias-mode'} style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
             <style>{`
                 .v10-map-dark-mode .leaflet-tile-pane {
-                    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%) !important;
+                    filter: invert(90%) hue-rotate(180deg) brightness(105%) contrast(105%) !important;
                 }
                 .v10-map-vias-mode .leaflet-tile-pane {
                     filter: none !important;
@@ -808,7 +811,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             <MapContainer
                 center={[-27.66090, -48.70871]}
                 zoom={13}
-                maxZoom={19}
+                maxZoom={20}
                 attributionControl={false}
                 accessToken={token}
                 maxBounds={[[-27.90, -48.98], [-27.35, -48.30]]}
@@ -818,7 +821,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 zoomAnimation={true}
                 fadeAnimation={true}
                 markerZoomAnimation={true}
-                style={{ width: '100%', height: '100%', background: estiloMapa === 'dark' ? '#0b1220' : '#e2e8f0' }}
+                style={{ width: '100%', height: '100%', background: estiloMapa === 'dark' ? '#0f172a' : '#e2e8f0' }}
                 whenReady={(mapInstance) => { mapRef.current = mapInstance.target; }}
             >
                 <Geolocate />
@@ -827,13 +830,13 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 <AutoFitBounds gestorPos={gestorPos} entregas={entregaMarkers} />
 
                 <TileLayer
-                    url={OSM_OFFICIAL_TILE_URL}
-                    className={estiloMapa === 'dark' ? 'v10-osm-tiles-dark' : 'v10-osm-tiles-vias'}
+                    url={GOOGLE_MAPS_TILE_URL}
+                    className={estiloMapa === 'dark' ? 'v10-gmaps-tiles-dark' : 'v10-gmaps-tiles-vias'}
                     attribution=""
-                    maxZoom={19}
+                    maxZoom={20}
                 />
 
-                {/* Polilinha Dupla Padrão Apps Consolidados (Saindo da Posição do Motorista / Ponto Azul -> Paradas 1..N) */}
+                {/* Polilinha Dupla Padrão Apps Consolidados (Saindo da Posição do Motorista -> Paradas 1..N) */}
                 {showPins && polilinhaParaDesenhar.length >= 2 && (
                     <>
                         <Polyline

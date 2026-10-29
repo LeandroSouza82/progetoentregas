@@ -3,6 +3,9 @@
 const FATOR_CORRECAO_VIARIA = 1.3;
 const VELOCIDADE_MEDIA_URBANA_KMH = 35;
 
+// Cache em memória por assinatura de coordenadas para resposta instantânea e sem cancelamentos por polling
+const cacheRotasOSRM = new Map();
+
 /**
  * Calcula a distância em linha reta (Haversine) em quilômetros entre dois pontos { lat, lng }.
  */
@@ -45,6 +48,7 @@ export function formatarResumoRota(distanceKm, durationMin) {
  * 1) Motorista selecionado manualmente no dropdown (motoristaSelecionadoId) ou motoristaDaRota
  * 2) Caso haja 1 motorista online (ou o primeiro motorista online com GPS válido), usa automaticamente sua posição
  * 3) Qualquer motorista da frota com coordenada válida
+ * 4) Fallback para coordenada de coleta salva nos pedidos
  */
 export function obterOrigemMotorista(frota = [], motoristaSelecionadoId = null, motoristaDaRota = null, entregas = []) {
     const lista = Array.isArray(frota) ? frota : [];
@@ -85,7 +89,6 @@ export function obterOrigemMotorista(frota = [], motoristaSelecionadoId = null, 
         return extrairPonto(qualquerComGps);
     }
 
-    // Fallback para coordenada de coleta salva nos pedidos caso a tabela motoristas ainda esteja carregando
     const listaEntregas = Array.isArray(entregas) ? entregas : [];
     const entregaComColeta = listaEntregas.find((e) =>
         e && Number.isFinite(Number(e.lat_coleta)) && Number.isFinite(Number(e.lng_coleta)) && Number(e.lat_coleta) !== 0 && Number(e.lng_coleta) !== 0
@@ -130,6 +133,19 @@ export function ordenarParadasRota(entregas = []) {
 }
 
 /**
+ * Gera uma chave estável para um conjunto de origem + paradas (arredondando ~11m na origem para ignorar ruído de polling).
+ */
+export function gerarChaveRota(origem, paradas = []) {
+    const origKey = origem && Number.isFinite(Number(origem.lat)) && Number.isFinite(Number(origem.lng))
+        ? `${Number(origem.lat).toFixed(4)},${Number(origem.lng).toFixed(4)}`
+        : 'sem-origem';
+    const paradasKey = (Array.isArray(paradas) ? paradas : [])
+        .map((p) => `${p.id ?? ''}:${Number(p.lat).toFixed(5)},${Number(p.lng).toFixed(5)}`)
+        .join('|');
+    return `${origKey}=>${paradasKey}`;
+}
+
+/**
  * Calcula fallback via Haversine * 1.3x e velocidade média urbana de 35 km/h.
  */
 export function calcularFallbackHaversine(waypoints = []) {
@@ -163,11 +179,56 @@ export function calcularFallbackHaversine(waypoints = []) {
 }
 
 /**
- * Busca a geometria real pelas ruas e rodovias usando OSRM, partindo da posição do motorista
- * e percorrendo todas as paradas na ordem exata da fila. Cai para Haversine (1.3x / 35 km/h) se o OSRM oscilar.
+ * Consulta um endpoint OSRM específico e converte GeoJSON [lng, lat] para Leaflet [lat, lng].
+ */
+async function consultarEndpointOSRM(url, timeoutMs = 8000) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+        const resp = await fetch(url, {
+            signal: controller ? controller.signal : undefined,
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!resp || !resp.ok) return null;
+        const data = await resp.json();
+        const route = data && Array.isArray(data.routes) && data.routes[0] ? data.routes[0] : null;
+        const geoCoords = route && route.geometry && Array.isArray(route.geometry.coordinates)
+            ? route.geometry.coordinates
+            : null;
+
+        if (route && geoCoords && geoCoords.length >= 2) {
+            // Converter estritamente de GeoJSON [lng, lat] para Leaflet [lat, lng]
+            const coordinates = geoCoords.map(([lng, lat]) => [Number(lat), Number(lng)]);
+            const distanceKm = Number(((Number(route.distance) || 0) / 1000).toFixed(1));
+            const durationMin = distanceKm > 0
+                ? Math.max(1, Math.round((Number(route.duration) || 0) / 60))
+                : 0;
+
+            return {
+                coordinates,
+                distanceKm,
+                durationMin,
+                formattedSummary: formatarResumoRota(distanceKm, durationMin),
+                source: 'osrm'
+            };
+        }
+        return null;
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/**
+ * Busca a geometria real pelas ruas e rodovias usando OSRM (LONGITUDE,LATITUDE),
+ * partindo da posição do motorista e percorrendo todas as paradas na ordem exata da fila.
+ * 1º Servidor: routing.openstreetmap.de/routed-car
+ * 2º Servidor: router.project-osrm.org
+ * Fallback: Haversine (1.3x / 35 km/h) somente se ambos os servidores falharem.
  */
 export async function calcularRotaCompletaOSRM(origemMotorista, paradas = []) {
-    const paradasValidas = Array.isArray(paradas) ? paradas.filter((p) => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng))) : [];
+    const paradasValidas = Array.isArray(paradas)
+        ? paradas.filter((p) => p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
+        : [];
 
     if (paradasValidas.length === 0) {
         return {
@@ -193,49 +254,32 @@ export async function calcularRotaCompletaOSRM(origemMotorista, paradas = []) {
         };
     }
 
-    const coordsParam = waypoints
+    const chaveCache = gerarChaveRota(origemMotorista, paradasValidas);
+    if (cacheRotasOSRM.has(chaveCache)) {
+        return cacheRotasOSRM.get(chaveCache);
+    }
+
+    // OSRM exige estritamente LONGITUDE,LATITUDE separados por ponto-e-vírgula
+    const coordsString = waypoints
         .map((p) => `${Number(p.lng).toFixed(6)},${Number(p.lat).toFixed(6)}`)
         .join(';');
 
-    const url = `https://router.project-osrm.org/route/v1/driving/${coordsParam}?overview=full&geometries=geojson`;
+    const endpoints = [
+        `https://routing.openstreetmap.de/routed-car/route/v1/driving/${coordsString}?overview=full&geometries=geojson`,
+        `https://router.project-osrm.org/route/v1/driving/${coordsString}?overview=full&geometries=geojson`
+    ];
 
-    try {
-        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timer = controller ? setTimeout(() => controller.abort(), 7000) : null;
-
-        const resp = await fetch(url, {
-            signal: controller ? controller.signal : undefined,
-            headers: { 'Accept': 'application/json' }
-        });
-        if (timer) clearTimeout(timer);
-
-        if (resp && resp.ok) {
-            const data = await resp.json();
-            const route = data && Array.isArray(data.routes) && data.routes[0] ? data.routes[0] : null;
-            const geoCoords = route && route.geometry && Array.isArray(route.geometry.coordinates)
-                ? route.geometry.coordinates
-                : null;
-
-            if (route && geoCoords && geoCoords.length >= 2) {
-                const coordinates = geoCoords.map(([lng, lat]) => [Number(lat), Number(lng)]);
-                const distanceKm = Number(((Number(route.distance) || 0) / 1000).toFixed(1));
-                const durationMin = distanceKm > 0
-                    ? Math.max(1, Math.round((Number(route.duration) || 0) / 60))
-                    : 0;
-
-                return {
-                    coordinates,
-                    distanceKm,
-                    durationMin,
-                    formattedSummary: formatarResumoRota(distanceKm, durationMin),
-                    source: 'osrm'
-                };
+    for (const url of endpoints) {
+        try {
+            const resultado = await consultarEndpointOSRM(url, 8000);
+            if (resultado && Array.isArray(resultado.coordinates) && resultado.coordinates.length >= 2) {
+                cacheRotasOSRM.set(chaveCache, resultado);
+                return resultado;
             }
+        } catch (err) {
+            console.warn(`⚠️ [OSRM] Tentativa falhou em ${url}:`, err);
         }
-    } catch (err) {
-        console.warn('⚠️ [OSRM] Oscilação ao traçar rota, acionando fallback Haversine (1.3x / 35 km/h):', err);
     }
 
     return calcularFallbackHaversine(waypoints);
 }
-
