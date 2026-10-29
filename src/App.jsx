@@ -913,12 +913,15 @@ function App() {
 
                 console.log(`[Histórico de Clientes] ${data.length} registros recebidos do Supabase.`);
 
-                // Deduplica por nome do cliente (case-insensitive) — mantém o mais recente
+                // Deduplica pela chave composta (cliente + '|' + endereco) — permite múltiplos endereços por cliente
                 const seen = new Set();
                 const unicos = [];
                 for (const row of data) {
-                    const chave = String(row.cliente || '').toLowerCase().trim();
-                    if (!chave || seen.has(chave)) continue;
+                    const nomeNorm = String(row.cliente || '').trim().toLowerCase();
+                    const endNorm = String(row.endereco || '').trim().toLowerCase();
+                    if (!nomeNorm) continue;
+                    const chave = `${nomeNorm}|${endNorm}`;
+                    if (seen.has(chave)) continue;
                     seen.add(chave);
                     unicos.push({
                         cliente: row.cliente,
@@ -930,11 +933,16 @@ function App() {
 
                 if (cancelled || unicos.length === 0) return;
 
-                // Mescla: prioriza SEMPRE o endereço/coordenada mais recente do banco sobre o cache antigo do localStorage
+                // Mescla: usa a chave composta (nome|endereco) para preservar múltiplos endereços do mesmo cliente
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
-                    const bancoKeys = new Set(unicos.map(u => String(u.cliente || '').toLowerCase().trim()));
-                    const apenasLocais = lista.filter(p => !bancoKeys.has(String(p && p.cliente || '').toLowerCase().trim()));
+                    const bancoKeys = new Set(
+                        unicos.map(u => `${String(u.cliente || '').trim().toLowerCase()}|${String(u.endereco || '').trim().toLowerCase()}`)
+                    );
+                    const apenasLocais = lista.filter(p => {
+                        const k = `${String(p && p.cliente || '').trim().toLowerCase()}|${String(p && p.endereco || '').trim().toLowerCase()}`;
+                        return !bancoKeys.has(k);
+                    });
                     return [...unicos, ...apenasLocais];
                 });
             } catch (e) {
@@ -963,11 +971,14 @@ function App() {
                     .limit(50);
                 if (cancelled || error || !data || data.length === 0) return;
 
-                // Pega sempre o registro mais recente (id DESC) de cada cliente retornado pelo banco
+                // Deduplica pela chave composta (nome|endereco) mantendo todos os endereços distintos do cliente
                 const maisRecentesBanco = new Map();
                 for (const row of data) {
-                    const chave = String(row.cliente || '').toLowerCase().trim();
-                    if (!chave || maisRecentesBanco.has(chave)) continue;
+                    const nomeNorm = String(row.cliente || '').trim().toLowerCase();
+                    const endNorm = String(row.endereco || '').trim().toLowerCase();
+                    if (!nomeNorm) continue;
+                    const chave = `${nomeNorm}|${endNorm}`;
+                    if (maisRecentesBanco.has(chave)) continue;
                     maisRecentesBanco.set(chave, {
                         cliente: row.cliente,
                         endereco: row.endereco || '',
@@ -980,25 +991,17 @@ function App() {
 
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
-                    const jaVistos = new Set();
-                    // Atualiza clientes já existentes com o endereço mais recente do banco
-                    const atualizada = lista.map(item => {
-                        const chave = String(item && item.cliente || '').toLowerCase().trim();
-                        if (chave && maisRecentesBanco.has(chave)) {
-                            jaVistos.add(chave);
-                            return maisRecentesBanco.get(chave);
-                        }
-                        if (chave) jaVistos.add(chave);
-                        return item;
-                    });
-                    // Adiciona clientes do banco que ainda não estavam na lista local
+                    const prevKeys = new Set(
+                        lista.map(p => `${String(p && p.cliente || '').trim().toLowerCase()}|${String(p && p.endereco || '').trim().toLowerCase()}`)
+                    );
                     const novos = [];
                     maisRecentesBanco.forEach((val, chave) => {
-                        if (!jaVistos.has(chave)) {
+                        if (!prevKeys.has(chave)) {
+                            prevKeys.add(chave);
                             novos.push(val);
                         }
                     });
-                    return novos.length > 0 ? [...atualizada, ...novos] : atualizada;
+                    return novos.length > 0 ? [...lista, ...novos] : lista;
                 });
             } catch (e) { /* ignore */ }
         }, 200);
@@ -2475,36 +2478,8 @@ function App() {
 
             const newPedido = inserted[0];
 
-            // ✅ Atualiza também registros anteriores do mesmo cliente (case-insensitive + trim) no Supabase
-            // para garantir que o Histórico de Clientes nunca volte a puxar um endereço antigo
-            try {
-                const chaveCliente = nomeLimpo.toLowerCase().trim();
-                if (chaveCliente) {
-                    const { data: existentes } = await supabase
-                        .from('entregas')
-                        .select('id, cliente')
-                        .ilike('cliente', `%${nomeLimpo}%`);
-                    const idsAntigos = (existentes || [])
-                        .filter(r => r && r.id !== (newPedido && newPedido.id) && String(r.cliente || '').toLowerCase().trim() === chaveCliente)
-                        .map(r => r.id);
-                    if (idsAntigos.length > 0) {
-                        await supabase
-                            .from('entregas')
-                            .update({
-                                cliente: nomeLimpo,
-                                endereco: enderecoPuro,
-                                lat: payload.lat,
-                                lng: payload.lng
-                            })
-                            .in('id', idsAntigos);
-                    }
-                }
-            } catch (errUpdHist) {
-                console.warn('⚠️ [Histórico de Clientes] Falha não-bloqueante ao sincronizar endereço antigo no banco:', errUpdHist);
-            }
-
             // ✅ PASSO 1: Atualiza a barra lateral e o localStorage em tempo real —
-            // se o cliente já existir (case-insensitive + trim), SUBSTITUI pelo novo endereço/coordenadas no TOPO
+            // usa a chave composta (nome|endereco) para manter múltiplos endereços válidos do mesmo cliente
             try {
                 const novoRegistroHistorico = {
                     cliente: nomeLimpo,
@@ -2512,13 +2487,14 @@ function App() {
                     lat: payload.lat,
                     lng: payload.lng
                 };
-                const chaveNova = nomeLimpo.toLowerCase().trim();
+                const chaveNova = `${nomeLimpo.trim().toLowerCase()}|${enderecoPuro.trim().toLowerCase()}`;
                 setRecentList(prev => {
                     const lista = Array.isArray(prev) ? prev : [];
-                    const semAntigo = lista.filter(it =>
-                        String(it && it.cliente || '').toLowerCase().trim() !== chaveNova
-                    );
-                    return [novoRegistroHistorico, ...semAntigo];
+                    const semDuplicadoExato = lista.filter(it => {
+                        const k = `${String(it && it.cliente || '').trim().toLowerCase()}|${String(it && it.endereco || '').trim().toLowerCase()}`;
+                        return k !== chaveNova;
+                    });
+                    return [novoRegistroHistorico, ...semDuplicadoExato];
                 });
             } catch (e) { /* ignore */ }
 
