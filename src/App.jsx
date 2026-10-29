@@ -6,6 +6,7 @@ import MapaLogistica from './MapaLogistica';
 import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montarQueryMapbox, buscarCoordenadas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import BarraAtalhosObs from './components/BarraAtalhosObs.jsx';
+import SeletorTipoCard from './components/SeletorTipoCard.jsx';
 
 // Safety: enable Supabase-backed flows during local debugging
 const HAS_SUPABASE_CREDENTIALS = true;
@@ -1582,6 +1583,38 @@ function App() {
             const lum = 0.2126 * (r <= 0.03928 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4)) + 0.7152 * (g <= 0.03928 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4)) + 0.0722 * (b <= 0.03928 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4));
             return lum > 0.5 ? '#000000' : '#ffffff';
         } catch (e) { return '#fff'; }
+    };
+
+    // Troca rápida do tipo (Entrega / Recolha / Outros) direto no card da Fila de Preparação
+    const alterarTipoPedido = async (pedido, novoTipo) => {
+        if (!pedido || pedido.id == null || !novoTipo) return;
+        const tipoAnterior = pedido.tipo;
+        const aplicarTipo = (valor) => {
+            const mapear = (lista) => (lista || []).map(item => (String(item.id) === String(pedido.id) ? { ...item, tipo: valor } : item));
+            setPedidosPendentes(mapear);
+            setRotaOrdenadaState(mapear);
+        };
+
+        // Atualização otimista: o card muda de cor imediatamente
+        aplicarTipo(novoTipo);
+        isUpdatingRef.current = true;
+        try {
+            const { data, error } = await supabase
+                .from('entregas')
+                .update({ tipo: novoTipo })
+                .eq('id', pedido.id)
+                .select('id, tipo');
+            if (error) throw error;
+            if (!data || data.length === 0) {
+                throw new Error('Nenhum registro atualizado (verifique a Policy de UPDATE da tabela "entregas" no Supabase).');
+            }
+        } catch (err) {
+            console.error('❌ Erro ao alterar tipo do pedido na tabela "entregas":', err);
+            aplicarTipo(tipoAnterior);
+            try { alert('Não foi possível alterar o tipo: ' + (err && err.message ? err.message : String(err))); } catch (e) { /* ignore */ }
+        } finally {
+            isUpdatingRef.current = false;
+        }
     };
 
     const getDriverServiceType = (motoristaId) => {
@@ -3707,7 +3740,6 @@ function App() {
                                     .map((p, index) => {
                                         const tipo = p.tipo || 'Entrega';
                                         const tipoColor = getColorForType(tipo);
-                                        const contrast = getContrastText(tipoColor);
 
                                         // 🛡️ FORÇA A CONVERSÃO: Transforma qualquer lixo que vier do banco em número
                                         const valorOrdem = Number(p.ordem_logistica);
@@ -3721,7 +3753,12 @@ function App() {
                                                         <div style={{ width: 36, height: 36, borderRadius: '50%', background: theme.primary, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>{numeroVisual}</div>
                                                         <h4 style={{ margin: '0 0 5px 0' }}>{p.cliente}</h4>
                                                     </div>
-                                                    <span style={{ fontSize: '12px', padding: '6px 10px', borderRadius: '12px', background: tipoColor, color: contrast, fontWeight: 700 }}>{tipo}</span>
+                                                    <SeletorTipoCard
+                                                        tipo={tipo}
+                                                        getColorForType={getColorForType}
+                                                        getContrastText={getContrastText}
+                                                        onAlterarTipo={(novoTipo) => alterarTipoPedido(p, novoTipo)}
+                                                    />
                                                 </div>
                                                 <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>📍 {p.endereco} {(!(p.lat && p.lng)) && <span title="Sem coordenadas: não participará da roteirização automática" style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Sem coords</span>}</p>
                                                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, margin: '6px 0', flexWrap: 'wrap' }}>
