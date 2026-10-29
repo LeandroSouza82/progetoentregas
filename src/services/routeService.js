@@ -46,55 +46,55 @@ export function formatarResumoRota(distanceKm, durationMin) {
  * 2) Caso haja 1 motorista online (ou o primeiro motorista online com GPS válido), usa automaticamente sua posição
  * 3) Qualquer motorista da frota com coordenada válida
  */
-export function obterOrigemMotorista(frota = [], motoristaSelecionadoId = null, motoristaDaRota = null) {
+export function obterOrigemMotorista(frota = [], motoristaSelecionadoId = null, motoristaDaRota = null, entregas = []) {
     const lista = Array.isArray(frota) ? frota : [];
     const coordValida = (m) => {
-        if (!m || m.lat == null || m.lng == null) return false;
-        const lat = Number(m.lat);
-        const lng = Number(m.lng);
+        if (!m) return false;
+        const lat = Number(m.lat ?? m.latitude);
+        const lng = Number(m.lng ?? m.longitude);
         return Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0;
     };
+
+    const extrairPonto = (m) => ({
+        lat: Number(m.lat ?? m.latitude),
+        lng: Number(m.lng ?? m.longitude),
+        nome: m.nome || m.title || 'Motorista'
+    });
 
     const idAlvo = motoristaSelecionadoId || (motoristaDaRota && (motoristaDaRota.uuid || motoristaDaRota.id)) || null;
     if (idAlvo) {
         const escolhido = lista.find((m) =>
             coordValida(m) && (String(m.id) === String(idAlvo) || String(m.uuid) === String(idAlvo))
         );
-        if (escolhido) {
-            return {
-                lat: Number(escolhido.lat),
-                lng: Number(escolhido.lng),
-                nome: escolhido.nome || escolhido.title || 'Motorista'
-            };
-        }
+        if (escolhido) return extrairPonto(escolhido);
     }
 
     if (motoristaDaRota && coordValida(motoristaDaRota)) {
-        return {
-            lat: Number(motoristaDaRota.lat),
-            lng: Number(motoristaDaRota.lng),
-            nome: motoristaDaRota.nome || 'Motorista'
-        };
+        return extrairPonto(motoristaDaRota);
     }
 
     const onlineComGps = lista.filter(
         (m) => coordValida(m) && (m.esta_online === true || String(m.esta_online) === 'true')
     );
     if (onlineComGps.length >= 1) {
-        const ativo = onlineComGps[0];
-        return {
-            lat: Number(ativo.lat),
-            lng: Number(ativo.lng),
-            nome: ativo.nome || ativo.title || 'Motorista'
-        };
+        return extrairPonto(onlineComGps[0]);
     }
 
     const qualquerComGps = lista.find(coordValida);
     if (qualquerComGps) {
+        return extrairPonto(qualquerComGps);
+    }
+
+    // Fallback para coordenada de coleta salva nos pedidos caso a tabela motoristas ainda esteja carregando
+    const listaEntregas = Array.isArray(entregas) ? entregas : [];
+    const entregaComColeta = listaEntregas.find((e) =>
+        e && Number.isFinite(Number(e.lat_coleta)) && Number.isFinite(Number(e.lng_coleta)) && Number(e.lat_coleta) !== 0 && Number(e.lng_coleta) !== 0
+    );
+    if (entregaComColeta) {
         return {
-            lat: Number(qualquerComGps.lat),
-            lng: Number(qualquerComGps.lng),
-            nome: qualquerComGps.nome || qualquerComGps.title || 'Motorista'
+            lat: Number(entregaComColeta.lat_coleta),
+            lng: Number(entregaComColeta.lng_coleta),
+            nome: 'Origem'
         };
     }
 
@@ -238,3 +238,4 @@ export async function calcularRotaCompletaOSRM(origemMotorista, paradas = []) {
 
     return calcularFallbackHaversine(waypoints);
 }
+

@@ -2146,7 +2146,7 @@ function App() {
             return () => { cancelado = true; };
         }
 
-        const origem = obterOrigemMotorista(frota, motoristaSelecionadoId, motoristaDaRota);
+        const origem = obterOrigemMotorista(frota, motoristaSelecionadoId, motoristaDaRota, fonteFila);
         setDistanceCalculating(true);
 
         calcularRotaCompletaOSRM(origem, paradas)
