@@ -671,7 +671,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
         } catch (e) { /* ignore */ }
     }, []);
 
-    // Inject CSS to ensure delivery popups are above polylines
+    // Inject CSS to ensure delivery popups are above polylines, sharpen map tiles, and hide bottom-right attribution
     useEffect(() => {
         try {
             if (typeof document === 'undefined') return;
@@ -681,6 +681,18 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             style.innerHTML = `
                 .delivery-popup.leaflet-popup-content-wrapper { z-index: 5000 !important; }
                 .delivery-popup.leaflet-popup-tip { z-index: 5000 !important; }
+                .leaflet-control-attribution,
+                .mapboxgl-ctrl-attrib,
+                .mapboxgl-ctrl-logo {
+                    display: none !important;
+                    visibility: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                }
+                .leaflet-container .leaflet-tile {
+                    filter: contrast(1.06) saturate(1.12);
+                    image-rendering: -webkit-optimize-contrast;
+                }
             `;
             document.head.appendChild(style);
         } catch (e) { /* ignore */ }
@@ -703,11 +715,11 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     // removed processedRotaCoordenadas to avoid noisy logs and fixed test data being rendered
 
-    /* INTERVENÇÃO: Mapa Estabilizado (Removido useMemo que destruía o MapContainer) */
+    /* INTERVENÇÃO: Mapa Estabilizado em Alta Definição (@2x Retina) e Sem Marca D'água Inferior Direita */
 
-    // 1. Defina a URL do Tile fora para evitar recálculos
+    // 1. Defina a URL do Tile em alta nitidez (streets-v12 @2x Retina) fora para evitar recálculos
     const initialMapboxUrl = token && token.length > 0
-        ? `https://api.mapbox.com/styles/v1/mapbox/dark-v11/tiles/{z}/{x}/{y}?access_token=${token}`
+        ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/512/{z}/{x}/{y}@2x?access_token=${token}`
         : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
     
     const [currentTileUrl, setCurrentTileUrl] = useState(initialMapboxUrl);
@@ -746,6 +758,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
             <MapContainer
                 center={[-27.66090, -48.70871]}
                 zoom={13}
+                maxZoom={19}
+                attributionControl={false}
                 accessToken={token}
                 maxBounds={[[-27.90, -48.98], [-27.35, -48.30]]}
                 scrollWheelZoom={true}
@@ -764,7 +778,8 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
                 <TileLayer
                     url={currentTileUrl}
-                    attribution={'© Mapbox © OSM'}
+                    attribution=""
+                    maxZoom={19}
                     tileSize={currentTileUrl.includes('mapbox') ? 512 : 256}
                     zoomOffset={currentTileUrl.includes('mapbox') ? -1 : 0}
                     eventHandlers={{

@@ -128,3 +128,13 @@ button:focus-visible {
   color: #000000 !important;
   box-sizing: border-box !important;
 }
+
+/* Remove marca d'água/atribuição no canto inferior direito do mapa (Leaflet / Mapbox / OSM) */
+.leaflet-control-attribution,
+.mapboxgl-ctrl-attrib,
+.mapboxgl-ctrl-logo {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

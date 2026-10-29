@@ -12,12 +12,12 @@ export default function MapComponent({
     try {
         const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
         const url = token && token.length > 0
-            ? `https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=${token}`
+            ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/512/{z}/{x}/{y}@2x?access_token=${token}`
             : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
 
         return (
-            <MapContainer center={[Number(center.lat), Number(center.lng)]} zoom={Number(zoom)} style={style} whenCreated={map => { try { onLoad(map); } catch (e) { onError(e); } }}>
-                <TileLayer url={url} attribution={token ? '© Mapbox' : '© OpenStreetMap contributors'} />
+            <MapContainer center={[Number(center.lat), Number(center.lng)]} zoom={Number(zoom)} maxZoom={19} attributionControl={false} style={style} whenCreated={map => { try { onLoad(map); } catch (e) { onError(e); } }}>
+                <TileLayer url={url} attribution="" maxZoom={19} tileSize={url.includes('mapbox') ? 512 : 256} zoomOffset={url.includes('mapbox') ? -1 : 0} />
             </MapContainer>
         );
     } catch (e) {
