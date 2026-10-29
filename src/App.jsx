@@ -7,6 +7,7 @@ import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montar
 import ErrorBoundary from './ErrorBoundary.jsx';
 import BarraAtalhosObs from './components/BarraAtalhosObs.jsx';
 import SeletorTipoCard from './components/SeletorTipoCard.jsx';
+import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota } from './services/routeService.js';
 
 // Safety: enable Supabase-backed flows during local debugging
 const HAS_SUPABASE_CREDENTIALS = true;
@@ -519,12 +520,11 @@ function App() {
     const [estimatedDistanceKm, setEstimatedDistanceKm] = useState(null);
     const [estimatedTimeSec, setEstimatedTimeSec] = useState(null);
     const [estimatedTimeText, setEstimatedTimeText] = useState(null);
+    const [resumoRotaTexto, setResumoRotaTexto] = useState('0 km (0 min)');
     const [distanceCalculating, setDistanceCalculating] = useState(false);
     const queueCalcTimerRef = useRef(null);
     const lastQueueHashRef = useRef('');
     const [driverSelectMode, setDriverSelectMode] = useState('dispatch'); // 'dispatch' | 'reopt'
-    const [logsHistory, setLogsHistory] = useState([]);
-    const [showLogsPopover, setShowLogsPopover] = useState(false);
 
     // Helpers: Haversine formula (returns km)
     function haversineKm(a, b) {
@@ -2130,17 +2130,45 @@ function App() {
         }
     }
     // (Optimização e persistência já executadas dentro desta função.)
-    // Fetch last 3 logs for a given motorista
-    async function fetchLogsForMotorista(motoristaId) {
-        try {
-            if (!motoristaId) { setLogsHistory([]); return; }
-            const { data, error } = await supabase.from('logs_roteirizacao').select('*').eq('motorista_id', String(motoristaId)).order('created_at', { ascending: false }).limit(3);
-            if (error) { console.error('fetchLogsForMotorista: erro', error); setLogsHistory([]); return; }
-            setLogsHistory(Array.isArray(data) ? data : []);
-        } catch (e) { console.error('fetchLogsForMotorista: exceção', e); setLogsHistory([]); }
-    }
+    // Recálculo automático da polilinha OSRM, distância total e tempo estimado a partir da posição do motorista
+    useEffect(() => {
+        let cancelado = false;
+        const fonteFila = (Array.isArray(pedidosPendentes) && pedidosPendentes.length > 0)
+            ? pedidosPendentes
+            : (Array.isArray(entregaMarkers) ? entregaMarkers : []);
+        const paradas = ordenarParadasRota(fonteFila);
 
-    useEffect(() => { try { if (motoristaDaRota && motoristaDaRota.id) fetchLogsForMotorista(String(motoristaDaRota.id)); else setLogsHistory([]); } catch (e) { /* ignore */ } }, [motoristaDaRota]);
+        if (paradas.length === 0) {
+            setDataRotaCoordenadas([]);
+            setEstimatedDistanceKm(0);
+            setResumoRotaTexto('0 km (0 min)');
+            setDistanceCalculating(false);
+            return () => { cancelado = true; };
+        }
+
+        const origem = obterOrigemMotorista(frota, motoristaSelecionadoId, motoristaDaRota);
+        setDistanceCalculating(true);
+
+        calcularRotaCompletaOSRM(origem, paradas)
+            .then((resultado) => {
+                if (cancelado || !resultado) return;
+                setDataRotaCoordenadas(Array.isArray(resultado.coordinates) ? resultado.coordinates : []);
+                setEstimatedDistanceKm(resultado.distanceKm || 0);
+                setResumoRotaTexto(resultado.formattedSummary || '0 km (0 min)');
+            })
+            .catch(() => {
+                if (!cancelado) {
+                    setResumoRotaTexto('0 km (0 min)');
+                }
+            })
+            .finally(() => {
+                if (!cancelado) {
+                    setDistanceCalculating(false);
+                }
+            });
+
+        return () => { cancelado = true; };
+    }, [pedidosPendentes, rotaOrdenadaState, entregaMarkers, frota, motoristaSelecionadoId, motoristaDaRota]);
 
     // Realtime: escuta inserções/atualizações em `entregas` para recalcular rotas dinamicamente
     useEffect(() => {
@@ -3609,27 +3637,12 @@ function App() {
                             {/* LINHA INFERIOR: Distância (Esquerda) e Botões (Direita) */}
                             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
 
-                                {/* Esquerda: Distância Estimada */}
-                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
+                                {/* Esquerda: Distância Estimada + Tempo Estimado */}
+                                <div style={{ color: theme.textLight, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap', marginRight: '18px' }}>
                                     <span>Distância Estimada:</span>
-                                    <span style={{ color: theme.primary, fontSize: '16px' }}>
-                                        {estimatedDistanceKm ? `${estimatedDistanceKm} KM` : (distanceCalculating ? 'Calculando...' : 'Pronto')}
+                                    <span style={{ color: theme.accent || theme.primary, fontSize: '16px', fontWeight: 800 }}>
+                                        {distanceCalculating ? 'Calculando...' : (resumoRotaTexto || '0 km (0 min)')}
                                     </span>
-                                    <button title="Histórico de otimizações" onClick={() => setShowLogsPopover(s => !s)} style={{ background: 'transparent', border: 'none', color: theme.textLight, cursor: 'pointer', fontSize: '18px', marginLeft: '4px' }}>📜</button>
-
-                                    {showLogsPopover && (
-                                        <div style={{ position: 'absolute', left: '40px', top: '180px', background: theme.card, color: theme.textMain, padding: '15px', borderRadius: '8px', boxShadow: theme.shadow, width: '320px', zIndex: 2200, border: '1px solid rgba(255,255,255,0.1)' }}>
-                                            <div style={{ fontWeight: 700, marginBottom: '8px' }}>Últimas otimizações</div>
-                                            {logsHistory?.length === 0 ? <div style={{ color: theme.textLight }}>Nenhum registro recente.</div> : (
-                                                logsHistory?.map((l, i) => (
-                                                    <div key={i} style={{ padding: '8px 0', borderBottom: i < (logsHistory?.length || 0) - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
-                                                        <div style={{ fontSize: '12px', color: theme.textLight }}>{new Date(l.created_at).toLocaleString()}</div>
-                                                        <div style={{ fontSize: '13px', fontWeight: 700 }}>{(l.distancia_nova != null) ? `${l.distancia_nova} KM` : '—'} • {l.nova_ordem ? l.nova_ordem.join(', ') : '—'}</div>
-                                                    </div>
-                                                ))
-                                            )}
-                                        </div>
-                                    )}
                                 </div>
 
                                 {/* Direita: Botões */}

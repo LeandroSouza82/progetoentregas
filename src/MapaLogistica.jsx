@@ -1,15 +1,26 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import 'leaflet/dist/leaflet.css';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, LayersControl, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import polyline from 'polyline';
 import { supabase } from './supabaseClient';
 import createCustomPinIcon from './CustomPin.jsx';
-// Import opcional do Mapbox React (aliased para evitar conflitos com react-leaflet)
-// Disponibiliza `MapboxMap`, `MapboxMarker` e `MapboxPopup` se você quiser usar Mapbox GL React
-import MapboxMap, { Marker as MapboxMarker, Popup as MapboxPopup } from 'react-map-gl';
+import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota } from './services/routeService';
 
 const token = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
+
+const TILE_LAYERS_MAPA = {
+    dark: {
+        label: 'Dark (Noturno)',
+        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        fallbackUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+    },
+    vias: {
+        label: 'Vias / Ruas',
+        url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+        fallbackUrl: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png'
+    }
+};
 
 const isValidSC = (lat, lng) => {
     if (lat == null || lng == null) return false;
@@ -715,19 +726,62 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
 
     // removed processedRotaCoordenadas to avoid noisy logs and fixed test data being rendered
 
-    /* INTERVENÇÃO: Mapa Estabilizado em Alta Definição (@2x Retina) e Sem Marca D'água Inferior Direita */
+    // Preferência de estilo do mapa ('dark' = Noturno alto contraste | 'vias' = Vias/Ruas destacadas) salva no localStorage
+    const [estiloMapa, setEstiloMapa] = useState(() => {
+        try {
+            const salvo = typeof window !== 'undefined' && window.localStorage
+                ? window.localStorage.getItem('v10_estilo_mapa')
+                : null;
+            if (salvo === 'dark' || salvo === 'vias') return salvo;
+        } catch (e) { /* ignore */ }
+        return 'dark';
+    });
 
-    // 1. Defina a URL do Tile em alta nitidez (streets-v12 @2x Retina) fora para evitar recálculos
-    const initialMapboxUrl = token && token.length > 0
-        ? `https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/512/{z}/{x}/{y}@2x?access_token=${token}`
-        : `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`;
-    
-    const [currentTileUrl, setCurrentTileUrl] = useState(initialMapboxUrl);
+    const selecionarEstiloMapa = (novoEstilo) => {
+        setEstiloMapa(novoEstilo);
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                window.localStorage.setItem('v10_estilo_mapa', novoEstilo);
+            }
+        } catch (e) { /* ignore */ }
+    };
 
-    // Se o token mudar externamente, reseta a URL
+    const camadaAtiva = TILE_LAYERS_MAPA[estiloMapa] || TILE_LAYERS_MAPA.dark;
+    const [currentTileUrl, setCurrentTileUrl] = useState(camadaAtiva.url);
+
     useEffect(() => {
-        setCurrentTileUrl(initialMapboxUrl);
-    }, [token, initialMapboxUrl]);
+        setCurrentTileUrl((TILE_LAYERS_MAPA[estiloMapa] || TILE_LAYERS_MAPA.dark).url);
+    }, [estiloMapa]);
+
+    // Polilinha local calculada via OSRM caso o componente pai ainda não tenha enviado rotaCoordenadas
+    const [polilinhaInterna, setPolilinhaInterna] = useState([]);
+
+    useEffect(() => {
+        let cancelado = false;
+        if (Array.isArray(rotaCoordenadas) && rotaCoordenadas.length >= 2) {
+            setPolilinhaInterna(rotaCoordenadas);
+            return () => { cancelado = true; };
+        }
+        const paradas = ordenarParadasRota(entregaMarkers);
+        if (paradas.length === 0) {
+            setPolilinhaInterna([]);
+            return () => { cancelado = true; };
+        }
+        const origem = obterOrigemMotorista(frotaMarkers, null, motoristaDaRota);
+        calcularRotaCompletaOSRM(origem, paradas).then((res) => {
+            if (!cancelado && res && Array.isArray(res.coordinates)) {
+                setPolilinhaInterna(res.coordinates);
+            }
+        }).catch(() => { });
+        return () => { cancelado = true; };
+    }, [rotaCoordenadas, entregaMarkers, frotaMarkers, motoristaDaRota]);
+
+    const polilinhaParaDesenhar = useMemo(() => {
+        if (Array.isArray(rotaCoordenadas) && rotaCoordenadas.length >= 2) return rotaCoordenadas;
+        if (Array.isArray(polilinhaInterna) && polilinhaInterna.length >= 2) return polilinhaInterna;
+        if (Array.isArray(processedRuntimePolylines) && processedRuntimePolylines.length > 0) return processedRuntimePolylines[0];
+        return [];
+    }, [rotaCoordenadas, polilinhaInterna, processedRuntimePolylines]);
 
     // 📍 CORREÇÃO MANUAL: atualiza a coordenada do pino no banco após arrastar
     const handleArrastarPino = async (e, id) => {
@@ -754,7 +808,15 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
     };
 
     return (
-        <div style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
+        <div className={estiloMapa === 'dark' ? 'v10-map-dark-mode' : 'v10-map-vias-mode'} style={{ position: 'relative', width: '100%', height: mobile ? 250 : height }}>
+            <style>{`
+                .v10-map-dark-mode .leaflet-tile {
+                    filter: brightness(1.24) contrast(1.18) saturate(1.15) !important;
+                }
+                .v10-map-vias-mode .leaflet-tile {
+                    filter: contrast(1.06) saturate(1.14) !important;
+                }
+            `}</style>
             <MapContainer
                 center={[-27.66090, -48.70871]}
                 zoom={13}
@@ -768,7 +830,7 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 zoomAnimation={true}
                 fadeAnimation={true}
                 markerZoomAnimation={true}
-                style={{ width: '100%', height: '100%' }}
+                style={{ width: '100%', height: '100%', background: estiloMapa === 'dark' ? '#0b1220' : '#e2e8f0' }}
                 whenReady={(mapInstance) => { mapRef.current = mapInstance.target; }}
             >
                 <Geolocate />
@@ -777,20 +839,45 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                 <AutoFitBounds gestorPos={gestorPos} entregas={entregaMarkers} />
 
                 <TileLayer
+                    key={currentTileUrl}
                     url={currentTileUrl}
                     attribution=""
                     maxZoom={19}
-                    tileSize={currentTileUrl.includes('mapbox') ? 512 : 256}
-                    zoomOffset={currentTileUrl.includes('mapbox') ? -1 : 0}
                     eventHandlers={{
-                        tileerror: (e) => {
-                            if (currentTileUrl.includes('mapbox')) {
-                                console.warn('⚠️ Falha ao carregar tiles do Mapbox. Verifique o Token. Usando fallback OpenStreetMap.');
-                                setCurrentTileUrl('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+                        tileerror: () => {
+                            const fallback = (TILE_LAYERS_MAPA[estiloMapa] || TILE_LAYERS_MAPA.dark).fallbackUrl;
+                            if (currentTileUrl !== fallback) {
+                                setCurrentTileUrl(fallback);
                             }
                         }
                     }}
                 />
+
+                {/* Polilinha Dupla Padrão Apps Consolidados (Saindo da Posição do Motorista -> Paradas 1..N) */}
+                {showPins && polilinhaParaDesenhar.length >= 2 && (
+                    <>
+                        <Polyline
+                            positions={polilinhaParaDesenhar}
+                            pathOptions={{
+                                color: estiloMapa === 'dark' ? '#0369a1' : '#1e3a8a',
+                                weight: 8,
+                                opacity: 0.4,
+                                lineCap: 'round',
+                                lineJoin: 'round'
+                            }}
+                        />
+                        <Polyline
+                            positions={polilinhaParaDesenhar}
+                            pathOptions={{
+                                color: estiloMapa === 'dark' ? '#00e5ff' : '#3b82f6',
+                                weight: 5,
+                                opacity: 0.95,
+                                lineCap: 'round',
+                                lineJoin: 'round'
+                            }}
+                        />
+                    </>
+                )}
 
                 {/* Marcadores de Entregas - HISTÓRICO COMPLETO NO MAPA */}
                 {showPins && [...entregaMarkers]
@@ -906,6 +993,59 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     </Marker>
                 )}
             </MapContainer>
+
+            {/* Seletor Flutuante de Estilo do Mapa (Dark Noturno vs Vias / Ruas) */}
+            <div
+                style={{
+                    position: 'absolute',
+                    bottom: 12,
+                    left: 12,
+                    zIndex: 1500,
+                    display: 'flex',
+                    gap: '4px',
+                    background: 'rgba(15, 23, 42, 0.88)',
+                    padding: '4px',
+                    borderRadius: '10px',
+                    border: '1px solid rgba(148, 163, 184, 0.25)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
+                    backdropFilter: 'blur(6px)'
+                }}
+            >
+                <button
+                    type="button"
+                    onClick={() => selecionarEstiloMapa('dark')}
+                    style={{
+                        padding: '5px 10px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        borderRadius: '7px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        background: estiloMapa === 'dark' ? '#0ea5e9' : 'transparent',
+                        color: estiloMapa === 'dark' ? '#ffffff' : '#cbd5e1',
+                        transition: 'all 0.15s ease'
+                    }}
+                >
+                    🌙 Dark (Noturno)
+                </button>
+                <button
+                    type="button"
+                    onClick={() => selecionarEstiloMapa('vias')}
+                    style={{
+                        padding: '5px 10px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        borderRadius: '7px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        background: estiloMapa === 'vias' ? '#0ea5e9' : 'transparent',
+                        color: estiloMapa === 'vias' ? '#ffffff' : '#cbd5e1',
+                        transition: 'all 0.15s ease'
+                    }}
+                >
+                    🛣️ Vias / Ruas
+                </button>
+            </div>
 
             {/* Botão de Centralizar */}
             <button
