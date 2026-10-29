@@ -836,25 +836,27 @@ function MapaLogistica({ entregas = [], frota = [], height = 500, mobile = false
                     maxZoom={20}
                 />
 
-                {/* Polilinha Dupla Padrão Apps Consolidados (Saindo da Posição do Motorista -> Paradas 1..N) */}
+                {/* Polilinha Dupla em Camadas (Contorno Preto + Linha Principal Azul Royal #0038a8) */}
                 {showPins && polilinhaParaDesenhar.length >= 2 && (
                     <>
                         <Polyline
                             positions={polilinhaParaDesenhar}
+                            pane="overlayPane"
                             pathOptions={{
-                                color: estiloMapa === 'dark' ? '#0c4a6e' : '#1e3a8a',
-                                weight: 8,
-                                opacity: 0.45,
+                                color: '#000000',
+                                weight: 9,
+                                opacity: 0.9,
                                 lineCap: 'round',
                                 lineJoin: 'round'
                             }}
                         />
                         <Polyline
                             positions={polilinhaParaDesenhar}
+                            pane="overlayPane"
                             pathOptions={{
-                                color: estiloMapa === 'dark' ? '#00e5ff' : '#2563eb',
+                                color: '#0038a8',
                                 weight: 5,
-                                opacity: 0.95,
+                                opacity: 1,
                                 lineCap: 'round',
                                 lineJoin: 'round'
                             }}
