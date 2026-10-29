@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const OPCOES_OUTROS = [
+    'Documentos',
+    'Advertência',
+    'Multa',
     'Comunicado',
     'Pasta de Leitura',
     'Editais',
