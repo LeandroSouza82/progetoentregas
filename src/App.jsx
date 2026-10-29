@@ -778,22 +778,27 @@ function App() {
 
     const confirmarExclusaoClienteHistorico = async () => {
         if (!clienteParaExcluir || excluindoCliente) return;
-        const nomeAlvo = String(clienteParaExcluir.cliente || '');
-        const chaveAlvo = nomeAlvo.toLowerCase().trim();
-        if (!chaveAlvo) {
+        const nomeAlvo = String(clienteParaExcluir.cliente || '').trim();
+        const enderecoAlvo = String(clienteParaExcluir.endereco || '').trim();
+        const chaveNomeAlvo = nomeAlvo.toLowerCase();
+        const chaveEnderecoAlvo = enderecoAlvo.toLowerCase();
+        if (!chaveNomeAlvo) {
             setClienteParaExcluir(null);
             return;
         }
         setExcluindoCliente(true);
         try {
-            // 1. Busca todos os IDs desse cliente no banco (case-insensitive / sem espaços extras)
+            // 1. Busca apenas os IDs que combinam exatamente o cliente E o endereço clicado (case-insensitive / trim)
             const { data: rows } = await supabase
                 .from('entregas')
-                .select('id, cliente')
-                .ilike('cliente', `%${nomeAlvo.trim()}%`);
+                .select('id, cliente, endereco')
+                .ilike('cliente', `%${nomeAlvo}%`);
 
             const idsParaDeletar = (rows || [])
-                .filter(r => String(r.cliente || '').toLowerCase().trim() === chaveAlvo)
+                .filter(r =>
+                    String(r.cliente || '').trim().toLowerCase() === chaveNomeAlvo &&
+                    String(r.endereco || '').trim().toLowerCase() === chaveEnderecoAlvo
+                )
                 .map(r => r.id)
                 .filter(Boolean);
 
@@ -811,28 +816,32 @@ function App() {
                         .in('id', idsParaDeletar);
                     if (fbErr) throw fbErr;
                 }
-            } else {
+            } else if (enderecoAlvo) {
                 const { data: delData, error: delErr } = await supabase
                     .from('entregas')
                     .delete()
-                    .eq('cliente', nomeAlvo)
+                    .ilike('cliente', nomeAlvo)
+                    .ilike('endereco', enderecoAlvo)
                     .select('id');
                 if (delErr || !delData || delData.length === 0) {
                     await supabase
                         .from('entregas')
                         .update({ cliente: null, endereco: null, status: 'cancelado' })
-                        .eq('cliente', nomeAlvo);
+                        .ilike('cliente', nomeAlvo)
+                        .ilike('endereco', enderecoAlvo);
                 }
             }
 
-            // 2. Remove da lista local (e consequentemente do localStorage)
+            // 2. Remove da lista local (e consequentemente do localStorage) APENAS o par cliente + endereço clicado
             setRecentList(prev =>
-                (Array.isArray(prev) ? prev : []).filter(
-                    it => String(it && it.cliente || '').toLowerCase().trim() !== chaveAlvo
-                )
+                (Array.isArray(prev) ? prev : []).filter(it => {
+                    const mesmoCliente = String(it && it.cliente || '').trim().toLowerCase() === chaveNomeAlvo;
+                    const mesmoEndereco = String(it && it.endereco || '').trim().toLowerCase() === chaveEnderecoAlvo;
+                    return !(mesmoCliente && mesmoEndereco);
+                })
             );
 
-            // 3. Atualiza os dados da tela caso houvesse entrega ativa desse cliente
+            // 3. Atualiza os dados da tela caso houvesse entrega ativa desse item específico
             try { if (typeof carregarDados === 'function') await carregarDados(); } catch (e) { /* ignore */ }
 
             setClienteParaExcluir(null);
