@@ -11,10 +11,42 @@ const getMapboxToken = () => {
 };
 
 /**
+ * Expande abreviações de logradouros e títulos comuns em nomes de ruas (case-insensitive).
+ * Ex: "R. Jorn. Manoel Menezes" -> "Rua Jornalista Manoel Menezes"
+ */
+const ABREVIACOES_ENDERECO = [
+    [/\bR\.?\s+/gi, 'Rua '],
+    [/\bAv\.?\s+/gi, 'Avenida '],
+    [/\bRod\.?\s+/gi, 'Rodovia '],
+    [/\bServ\.?\s+/gi, 'Servidão '],
+    [/\bJorn\.?\s+/gi, 'Jornalista '],
+    [/\bProf\.?\s+/gi, 'Professor '],
+    [/\bDr\.?\s+/gi, 'Doutor '],
+    [/\bCel\.?\s+/gi, 'Coronel '],
+    [/\bGen\.?\s+/gi, 'General '],
+    [/\bDep\.?\s+/gi, 'Deputado '],
+    [/\bGov\.?\s+/gi, 'Governador '],
+    [/\bPres\.?\s+/gi, 'Presidente '],
+    [/\bVer\.?\s+/gi, 'Vereador '],
+    [/\bMal\.?\s+/gi, 'Marechal ']
+];
+
+export const expandirAbreviacoesEndereco = (texto) => {
+    let saida = String(texto || '');
+    for (const [regex, substituto] of ABREVIACOES_ENDERECO) {
+        saida = saida.replace(regex, substituto);
+    }
+    return saida
+        .replace(/\bRua\s+Avenida\b/gi, 'Avenida')
+        .replace(/\bRua\s*:\s*/gi, 'Rua ');
+};
+
+/**
  * Higieniza e padroniza uma string de endereço antes de enviá-la para APIs de geocodificação.
  * - Remove prefixos ("Endereço:", "Endereçõ:", "End:")
  * - Remove "nº", "n°", "numero", "número" antes dos dígitos
- * - Expande abreviações ("R.", "Av.", "Rod.", "Serv.")
+ * - Expande abreviações ("R.", "Av.", "Rod.", "Serv.", "Jorn.", "Prof.", "Dr.", "Cel.", "Gov.", etc.)
+ * - Remove o CEP (somente na query de busca; o texto original do card não é alterado)
  * - Substitui "Fpolis" / "Floripa" por "Florianópolis"
  * - Garante o sufixo ", SC, Brasil"
  */
@@ -28,22 +60,18 @@ export const higienizarEnderecoParaGeocoding = (enderecoBruto, garantirSufixoSC 
         .replace(/^\s*(?:endere[cç][oõ]s?\s*:?|end\.?\s*:?)\s*/gi, '')
         .replace(/\b(?:endere[cç][oõ]s?\s*:|end\.?\s*:)\s*/gi, '');
 
-    // 2. Remover "CEP:" / rótulos de CEP mantendo ou limpando excessos
-    texto = texto.replace(/\bcep\s*:?\s*\d{5}-?\d{3}\b/gi, '');
+    // 2. Remover CEP (com ou sem rótulo "CEP:") — o CEP faz o Nominatim retornar vazio em ruas menores
+    texto = texto
+        .replace(/\bcep\s*:?\s*\d{5}-?\d{3}\b/gi, '')
+        .replace(/\b\d{5}-?\d{3}\b/g, '');
 
     // 3. Remover "nº", "n°", "numero", "número" antes dos dígitos (ou isolados)
     texto = texto
         .replace(/\b(?:n[º°ª.]?|n[uú]mero|num\.?)\s*(?=\d)/gi, '')
         .replace(/\bn[º°ª]\s*/gi, '');
 
-    // 4. Substituir abreviações de logradouro no início ou meio do texto
-    texto = texto
-        .replace(/\bR\.?\s+/gi, 'Rua ')
-        .replace(/\bAv\.?\s+/gi, 'Avenida ')
-        .replace(/\bRod\.?\s+/gi, 'Rodovia ')
-        .replace(/\bServ\.?\s+/gi, 'Servidão ')
-        .replace(/\bRua\s+Avenida\b/gi, 'Avenida')
-        .replace(/\bRua\s*:\s*/gi, 'Rua ');
+    // 4. Expandir abreviações de logradouro e de títulos (case-insensitive)
+    texto = expandirAbreviacoesEndereco(texto);
 
     // 5. Substituir "Fpolis" ou "Floripa" por "Florianópolis"
     texto = texto.replace(/\b(?:fpolis|f\.?\s*polis|floripa)\b/gi, 'Florianópolis');
@@ -112,23 +140,40 @@ export const detectarCidadeGrandeFlorianopolis = (endereco) => {
 };
 
 /**
- * Gera as 3 tentativas progressivas de busca para o Fallback Inteligente:
- * - Tentativa 1: Endereço limpo completo + ", Santa Catarina, Brasil"
- * - Tentativa 2: Endereço limpo SEM o nome do bairro (apenas Rua + Número + Cidade + ", SC, Brasil")
- * - Tentativa 3: Apenas o nome da Rua + Cidade + ", SC, Brasil"
+ * Normaliza texto para comparação (minúsculas, sem acentos).
  */
-export const gerarTentativasGeocoding = (enderecoBruto) => {
-    if (!enderecoBruto || !String(enderecoBruto).trim()) return [];
+const normalizarTextoGeo = (texto) => String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
 
+/**
+ * Verifica se o texto de um resultado de geocoding (display_name / place_name) pertence à cidade esperada.
+ */
+export const resultadoPertenceACidade = (textoResultado, cidadeEsperada) => {
+    if (!cidadeEsperada) return true;
+    const alvo = normalizarTextoGeo(textoResultado);
+    if (!alvo) return false;
+    return alvo.includes(normalizarTextoGeo(cidadeEsperada));
+};
+
+/**
+ * Extrai os componentes (rua, número, bairro, cidade) de um endereço já higienizado.
+ */
+export const extrairComponentesEndereco = (enderecoBruto) => {
     const cidade = detectarCidadeGrandeFlorianopolis(enderecoBruto);
     const baseSemSufixo = higienizarEnderecoParaGeocoding(enderecoBruto, false)
-        .replace(/,\s*(?:sc|santa catarina|brasil)\b/gi, '')
+        .replace(/\b(?:sc|santa catarina|brasil)\b/gi, '')
+        .replace(/,\s*,+/g, ',')
+        .replace(/\s*,\s*/g, ', ')
+        .replace(/^[\s,]+|[\s,]+$/g, '')
         .trim();
 
-    // Extrair Rua e Número
     const partes = baseSemSufixo.split(',').map(p => p.trim()).filter(Boolean);
     let rua = partes[0] || '';
     let numero = '';
+    let indiceNumero = 0;
 
     // Caso o número esteja colado na primeira parte (ex: "Avenida Presidente Kenedy 1333")
     const matchNumeroNaRua = rua.match(/^(.*?)\s+(\d+[A-Za-z0-9\/\-]*)(?:\s+.*)?$/);
@@ -140,6 +185,7 @@ export const gerarTentativasGeocoding = (enderecoBruto) => {
             const m = partes[i].match(/^(\d+[A-Za-z0-9\/\-]*)/) || partes[i].match(/\b(\d{1,5})\b/);
             if (m && m[1].length < 6) { // evita confundir CEP de 8 dígitos com número
                 numero = m[1];
+                indiceNumero = i;
                 break;
             }
         }
@@ -148,13 +194,36 @@ export const gerarTentativasGeocoding = (enderecoBruto) => {
     // Limpar eventual nome de bairro colado após o número na rua
     rua = rua.replace(/\d+/g, '').replace(/\s{2,}/g, ' ').trim();
 
-    // Tentativa 1: Endereço limpo completo + ", Santa Catarina, Brasil"
-    let tentativa1 = baseSemSufixo;
-    if (!tentativa1.toLowerCase().includes(cidade.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')) &&
-        !tentativa1.toLowerCase().includes(cidade.toLowerCase())) {
-        tentativa1 = `${tentativa1}, ${cidade}`;
+    // Bairro: primeira parte após rua/número que não seja número, cidade, estado ou país
+    const cidadeNorm = normalizarTextoGeo(cidade);
+    const bairro = partes.slice(Math.max(1, indiceNumero + 1)).find(p => {
+        const pn = normalizarTextoGeo(p);
+        return pn && !/\d/.test(pn) && pn !== cidadeNorm && !/^(sc|santa catarina|brasil)$/.test(pn);
+    }) || '';
+
+    return { rua, numero, bairro, cidade, baseSemSufixo };
+};
+
+/**
+ * Gera as 3 tentativas progressivas de busca para o Fallback Inteligente:
+ * - Tentativa 1: Rua + Número + Bairro + Cidade + ", SC, Brasil" (sem CEP)
+ * - Tentativa 2: Endereço limpo SEM o nome do bairro (apenas Rua + Número + Cidade + ", SC, Brasil")
+ * - Tentativa 3: Apenas o nome da Rua + Cidade + ", SC, Brasil"
+ */
+export const gerarTentativasGeocoding = (enderecoBruto) => {
+    if (!enderecoBruto || !String(enderecoBruto).trim()) return [];
+
+    const { rua, numero, bairro, cidade, baseSemSufixo } = extrairComponentesEndereco(enderecoBruto);
+
+    // Tentativa 1: Prioriza estrutura limpa Rua + Número + Bairro + Cidade + SC, Brasil
+    let tentativa1 = '';
+    if (rua) {
+        const blocosT1 = [rua, numero, bairro, cidade, 'SC', 'Brasil'].filter(Boolean);
+        tentativa1 = blocosT1.join(', ');
+    } else {
+        tentativa1 = `${baseSemSufixo}, ${cidade}, SC, Brasil`;
     }
-    tentativa1 = `${tentativa1}, Santa Catarina, Brasil`
+    tentativa1 = tentativa1
         .replace(/,\s*,+/g, ',')
         .replace(/\s*,\s*/g, ', ')
         .trim();
@@ -818,14 +887,16 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
         
         // 🛑 Fallback para Nominatim se Mapbox falhar (401/403 ou limite atingido)
         if (!response.ok && (response.status === 401 || response.status === 403)) {
-            console.warn(`⚠️ Mapbox retornou ${response.status}. Tentando fallback Nominatim para: ${addressWithSuffix}`);
-            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressWithSuffix)}&limit=1`;
+            const querySemCep = higienizarEnderecoParaGeocoding(addressWithSuffix, true);
+            const cidadeEsperada = detectarCidadeGrandeFlorianopolis(addressWithSuffix);
+            console.warn(`⚠️ Mapbox retornou ${response.status}. Tentando fallback Nominatim para: ${querySemCep}`);
+            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(querySemCep)}&countrycodes=br&viewbox=-48.98,-27.35,-48.30,-27.90&bounded=1&limit=5`;
             try {
                 const nomResp = await fetch(nomUrl, { headers: { 'User-Agent': 'V10-Logistica-Dashboard' } });
                 if (nomResp.ok) {
                     const nomData = await nomResp.json();
-                    if (nomData && nomData.length > 0) {
-                        const first = nomData[0];
+                    if (Array.isArray(nomData) && nomData.length > 0) {
+                        const first = nomData.find(r => resultadoPertenceACidade(r.display_name, cidadeEsperada)) || nomData[0];
                         console.log('✅ Fallback Nominatim funcionou!');
                         return { 
                             lat: parseFloat(first.lat), 
@@ -1025,6 +1096,7 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
 
         const MAPBOX_TOKEN = getMapboxToken();
         const tentativas = gerarTentativasGeocoding(enderecoBruto);
+        const { rua, numero, bairro, cidade } = extrairComponentesEndereco(enderecoBruto);
 
         const estaNaRegiaoSC = (lat, lng) => {
             const nLat = Number(lat);
@@ -1033,12 +1105,105 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
             return nLat >= -29.4 && nLat <= -25.9 && nLng >= -53.9 && nLng <= -48.0;
         };
 
-        for (let idx = 0; idx < tentativas.length; idx++) {
-            const queryTentativa = tentativas[idx];
-            const isTentativaRua = idx === 2;
-            console.log(`🔎 [GEO Tentativa ${idx + 1}/${tentativas.length}] Buscando: "${queryTentativa}"`);
+        // Tokens significativos do nome da rua (para evitar que o fuzzyMatch do Mapbox pegue outra rua parecida)
+        const tokensRua = normalizarTextoGeo(rua)
+            .split(/\s+/)
+            .filter(t => t.length >= 4 && !['avenida', 'rodovia', 'servidao', 'jornalista', 'professor', 'doutor', 'coronel', 'general', 'deputado', 'governador', 'presidente', 'vereador', 'marechal'].includes(t));
 
-            // 1) Tentar via Mapbox Geocoding API
+        // Escolhe o melhor resultado: precisa estar na região, na cidade esperada e bater com o nome da rua; prioriza o que também cita o bairro
+        const escolherResultadoNaCidade = (lista, getTexto, getCoords, exigirMatchRua = false) => {
+            const validos = (lista || []).filter(item => {
+                const [lat, lng] = getCoords(item);
+                const textoNorm = normalizarTextoGeo(getTexto(item));
+                if (!estaNaRegiaoSC(lat, lng) || !resultadoPertenceACidade(textoNorm, cidade)) return false;
+                if (exigirMatchRua && tokensRua.length > 0) {
+                    const bateuRua = tokensRua.every(tk => textoNorm.includes(tk));
+                    if (!bateuRua) return false;
+                }
+                return true;
+            });
+            if (validos.length === 0) return null;
+            if (bairro) {
+                const comBairro = validos.find(item => normalizarTextoGeo(getTexto(item)).includes(normalizarTextoGeo(bairro)));
+                if (comBairro) return comBairro;
+            }
+            return validos[0];
+        };
+
+        // Consulta ao Nominatim restrita à Grande Florianópolis (countrycodes=br + viewbox + bounded=1) e sem CEP
+        const consultarNominatim = async (params) => {
+            const url = new URL('https://nominatim.openstreetmap.org/search');
+            url.searchParams.append('format', 'json');
+            url.searchParams.append('addressdetails', '1');
+            url.searchParams.append('countrycodes', 'br');
+            url.searchParams.append('viewbox', '-48.98,-27.35,-48.30,-27.90');
+            url.searchParams.append('bounded', '1');
+            url.searchParams.append('limit', '5');
+            Object.entries(params).forEach(([k, v]) => {
+                if (v) {
+                    const valorSemCep = String(v).replace(/\b\d{5}-?\d{3}\b/g, '').replace(/\s{2,}/g, ' ').trim();
+                    url.searchParams.append(k, valorSemCep);
+                }
+            });
+            const resp = await fetch(url.toString(), {
+                headers: {
+                    'Accept': 'application/json',
+                    'Accept-Language': 'pt-BR,pt;q=0.9',
+                    'User-Agent': 'V10-Logistica-Dashboard/1.0'
+                }
+            });
+            if (!resp || !resp.ok) return null;
+            const data = await resp.json();
+            if (!Array.isArray(data) || data.length === 0) return null;
+            return escolherResultadoNaCidade(
+                data,
+                (r) => r.display_name,
+                (r) => [parseFloat(r.lat), parseFloat(r.lon)],
+                false
+            );
+        };
+
+        const montarRetornoNominatim = (r, tentativa, precisao) => ({
+            lat: parseFloat(r.lat),
+            lng: parseFloat(r.lon),
+            precisao,
+            place_name: r.display_name,
+            display_name: r.display_name,
+            source: 'nominatim',
+            tentativa
+        });
+
+        for (let idx = 0; idx < tentativas.length; idx++) {
+            const queryTentativa = tentativas[idx].replace(/\b\d{5}-?\d{3}\b/g, '').trim();
+            const isTentativaRua = idx === 2;
+            console.log(`🔎 [GEO Tentativa ${idx + 1}/${tentativas.length}] Buscando: "${queryTentativa}" (cidade travada: ${cidade})`);
+
+            // 1) Tentar via OpenStreetMap / Nominatim (sem CEP, com abreviações expandidas e trava de cidade/bairro)
+            try {
+                const livre = await consultarNominatim({ q: queryTentativa });
+                if (livre) {
+                    console.log(`✅ [GEO Tentativa ${idx + 1} - Nominatim] Coordenadas encontradas:`, livre.display_name);
+                    return montarRetornoNominatim(livre, idx + 1, isTentativaRua ? 0.75 : 0.92);
+                }
+
+                // Se a última tentativa por texto livre não retornar, tenta busca estruturada (street + city + state)
+                if (isTentativaRua && rua) {
+                    const estruturado = await consultarNominatim({
+                        street: numero ? `${numero} ${rua}` : rua,
+                        city: cidade,
+                        state: 'Santa Catarina',
+                        country: 'Brasil'
+                    });
+                    if (estruturado) {
+                        console.log(`✅ [GEO Tentativa ${idx + 1} - Nominatim estruturado] Coordenadas encontradas:`, estruturado.display_name);
+                        return montarRetornoNominatim(estruturado, idx + 1, 0.85);
+                    }
+                }
+            } catch (errNom) {
+                console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Nominatim] Falha:`, errNom);
+            }
+
+            // 2) Fallback via Mapbox Geocoding API (exigindo match da cidade e dos tokens da rua)
             if (MAPBOX_TOKEN) {
                 try {
                     const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(queryTentativa)}.json`);
@@ -1050,66 +1215,40 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
                     url.searchParams.append('language', 'pt');
                     url.searchParams.append('autocomplete', 'true');
                     url.searchParams.append('fuzzyMatch', 'true');
-                    url.searchParams.append('limit', '1');
+                    url.searchParams.append('limit', '5');
 
                     const resp = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
                     if (resp && resp.ok) {
                         const data = await resp.json();
-                        if (data && data.features && data.features.length > 0) {
-                            const feat = data.features[0];
-                            const [lng, lat] = feat.center || [];
-                            const precisao = typeof feat.relevance === 'number'
-                                ? feat.relevance
-                                : ((feat.properties && feat.properties.accuracy) || 0.7);
-                            // Na tentativa 1 (com bairro), exige relevância mínima para não aceitar falso positivo antes de tentar sem bairro
-                            const minRelevance = idx === 0 ? 0.65 : 0.45;
-                            if (estaNaRegiaoSC(lat, lng) && precisao >= minRelevance) {
-                                console.log(`✅ [GEO Tentativa ${idx + 1} - Mapbox] Coordenadas encontradas:`, { lat, lng, place_name: feat.place_name });
-                                return {
-                                    lat: Number(lat),
-                                    lng: Number(lng),
-                                    precisao,
-                                    place_name: feat.place_name,
-                                    display_name: feat.place_name,
-                                    context: feat.context || null,
-                                    tentativa: idx + 1
-                                };
-                            }
+                        const minRelevance = idx === 0 ? 0.65 : 0.45;
+                        const relevantes = ((data && data.features) || []).filter(f => {
+                            const rel = typeof f.relevance === 'number' ? f.relevance : 0.7;
+                            return rel >= minRelevance;
+                        });
+                        const feat = escolherResultadoNaCidade(
+                            relevantes,
+                            (f) => f.place_name,
+                            (f) => { const [lng, lat] = f.center || []; return [lat, lng]; },
+                            true
+                        );
+                        if (feat) {
+                            const [lng, lat] = feat.center;
+                            const precisao = typeof feat.relevance === 'number' ? feat.relevance : 0.7;
+                            console.log(`✅ [GEO Tentativa ${idx + 1} - Mapbox] Coordenadas encontradas:`, { lat, lng, place_name: feat.place_name });
+                            return {
+                                lat: Number(lat),
+                                lng: Number(lng),
+                                precisao,
+                                place_name: feat.place_name,
+                                display_name: feat.place_name,
+                                context: feat.context || null,
+                                tentativa: idx + 1
+                            };
                         }
                     }
                 } catch (errMapbox) {
                     console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Mapbox] Falha:`, errMapbox);
                 }
-            }
-
-            // 2) Tentar via OpenStreetMap / Nominatim (excelente para Tentativa 2 sem bairro e Tentativa 3 nível rua)
-            try {
-                const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(queryTentativa)}&countrycodes=br&viewbox=-48.98,-27.35,-48.30,-27.90&bounded=0&limit=1`;
-                const nomResp = await fetch(nomUrl, {
-                    headers: { 'Accept': 'application/json', 'Accept-Language': 'pt-BR,pt;q=0.9' }
-                });
-                if (nomResp && nomResp.ok) {
-                    const nomData = await nomResp.json();
-                    if (Array.isArray(nomData) && nomData.length > 0) {
-                        const first = nomData[0];
-                        const lat = parseFloat(first.lat);
-                        const lng = parseFloat(first.lon);
-                        if (estaNaRegiaoSC(lat, lng)) {
-                            console.log(`✅ [GEO Tentativa ${idx + 1} - Nominatim] Coordenadas encontradas:`, { lat, lng, display_name: first.display_name });
-                            return {
-                                lat,
-                                lng,
-                                precisao: isTentativaRua ? 0.75 : 0.9,
-                                place_name: first.display_name,
-                                display_name: first.display_name,
-                                source: 'nominatim',
-                                tentativa: idx + 1
-                            };
-                        }
-                    }
-                }
-            } catch (errNom) {
-                console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Nominatim] Falha:`, errNom);
             }
         }
 
@@ -1387,30 +1526,33 @@ export async function geocodeNominatim(address, bounds = null) {
         };
 
         const b = bounds || defaultBounds;
-        const viewbox = `${b.west},${b.south},${b.east},${b.north}`;
+        const viewbox = `${b.west},${b.north},${b.east},${b.south}`;
+        const cidadeEsperada = detectarCidadeGrandeFlorianopolis(address);
 
-        // LIMPEZA RIGOROSA: Remover vírgulas duplas e espaços extras
-        const addressClean = address
-            .replace(/,\s*,+/g, ',')        // Remove vírgulas múltiplas
-            .replace(/\s*,\s*/g, ', ')      // Normaliza espaços
-            .replace(/,\s*$/g, '')          // Remove vírgula final
-            .replace(/\s+/g, ' ')           // Múltiplos espaços -> único
+        // LIMPEZA RIGOROSA: Expande abreviações (Jorn., Prof., Dr., etc.) e remove o CEP antes de consultar o Nominatim
+        const addressClean = higienizarEnderecoParaGeocoding(address, false)
+            .replace(/\b\d{5}-?\d{3}\b/g, '')
+            .replace(/,\s*,+/g, ',')
+            .replace(/\s*,\s*/g, ', ')
+            .replace(/,\s*$/g, '')
+            .replace(/\s+/g, ' ')
             .trim();
 
         console.log('🧹 Nominatim - Endereço limpo:', addressClean);
 
-        // Adicionar "Santa Catarina, Brasil" se não estiver presente
+        // Adicionar "SC, Brasil" se não estiver presente
         const searchQuery = addressClean.toLowerCase().includes('santa catarina') || addressClean.toLowerCase().includes('brasil')
             ? addressClean
-            : `${addressClean}, Grande Florianópolis, Santa Catarina, Brasil`;
+            : `${addressClean}, ${cidadeEsperada}, SC, Brasil`;
 
-        // TENTATIVA 1: Busca restrita ao viewbox (cirúrgica)
+        // TENTATIVA 1: Busca restrita ao viewbox da Grande Florianópolis (countrycodes=br + bounded=1)
         let url = `https://nominatim.openstreetmap.org/search?` +
             `q=${encodeURIComponent(searchQuery)}` +
             `&format=json` +
+            `&countrycodes=br` +
             `&viewbox=${viewbox}` +
             `&bounded=1` +
-            `&limit=1` +
+            `&limit=5` +
             `&addressdetails=1`;
 
 
@@ -1432,21 +1574,21 @@ export async function geocodeNominatim(address, bounds = null) {
 
         let data = await response.json();
 
-        // PLANO B: Se viewbox restrito retornar vazio, tentar sem bounded=1
+        // PLANO B: Se a busca completa retornar vazio, tentar query sem bairro dentro do mesmo viewbox (countrycodes=br + bounded=1)
         if (!data || data.length === 0) {
-            console.warn('⚠️ Busca restrita retornou vazio. Tentando sem bounded=1...');
+            console.warn('⚠️ Busca inicial Nominatim retornou vazio. Tentando versão simplificada sem bairro...');
 
-            const queryFallback = address.toLowerCase().includes('santa catarina') || address.toLowerCase().includes('brasil')
-                ? address
-                : `${address}, Santa Catarina, Brasil`;
+            const tentativas = gerarTentativasGeocoding(address);
+            const queryFallback = tentativas[1] || tentativas[2] || `${addressClean}, ${cidadeEsperada}, SC, Brasil`;
 
             url = `https://nominatim.openstreetmap.org/search?` +
                 `q=${encodeURIComponent(queryFallback)}` +
                 `&format=json` +
+                `&countrycodes=br` +
                 `&viewbox=${viewbox}` +
+                `&bounded=1` +
                 `&limit=5` +
                 `&addressdetails=1`;
-
 
             response = await fetch(url, {
                 headers: {
@@ -1465,7 +1607,11 @@ export async function geocodeNominatim(address, bounds = null) {
             return null;
         }
 
-        const result = data[0];
+        const result = data.find(r => resultadoPertenceACidade(r.display_name, cidadeEsperada)) || data[0];
+        if (!resultadoPertenceACidade(result.display_name, cidadeEsperada)) {
+            console.warn(`⚠️ Nominatim descartado: resultado fora da cidade esperada (${cidadeEsperada}):`, result.display_name);
+            return null;
+        }
         const lat = parseFloat(result.lat);
         const lng = parseFloat(result.lon);
 
