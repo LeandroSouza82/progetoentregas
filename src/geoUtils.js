@@ -170,7 +170,10 @@ export const extrairComponentesEndereco = (enderecoBruto) => {
         .replace(/^[\s,]+|[\s,]+$/g, '')
         .trim();
 
-    const partes = baseSemSufixo.split(',').map(p => p.trim()).filter(Boolean);
+    // O pedido pode começar pelo nome do condomínio: "Cond. Positano Rua Veneza 390...".
+    const inicioRua = baseSemSufixo.search(/\b(?:rua|avenida|rodovia|servid[aã]o|travessa|estrada|alameda)\s+/i);
+    const textoRua = inicioRua >= 0 ? baseSemSufixo.slice(inicioRua) : baseSemSufixo;
+    const partes = textoRua.split(',').map(p => p.trim()).filter(Boolean);
     let rua = partes[0] || '';
     let numero = '';
     let indiceNumero = 0;
@@ -204,12 +207,30 @@ export const extrairComponentesEndereco = (enderecoBruto) => {
     return { rua, numero, bairro, cidade, baseSemSufixo };
 };
 
-/**
- * Gera as 3 tentativas progressivas de busca para o Fallback Inteligente:
- * - Tentativa 1: Rua + Número + Bairro + Cidade + ", SC, Brasil" (sem CEP)
- * - Tentativa 2: Endereço limpo SEM o nome do bairro (apenas Rua + Número + Cidade + ", SC, Brasil")
- * - Tentativa 3: Apenas o nome da Rua + Cidade + ", SC, Brasil"
- */
+/** Confere rua e número, além do município, antes de aceitar um destino. */
+export const resultadoCorrespondeAoEndereco = (endereco, textoResultado, detalhes = {}) => {
+    const { rua, numero, cidade } = extrairComponentesEndereco(endereco);
+    if (!resultadoPertenceACidade(textoResultado, cidade)) return false;
+    const palavras = texto => normalizarTextoGeo(expandirAbreviacoesEndereco(texto))
+        .replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/);
+    const ignorados = new Set(['rua', 'avenida', 'rodovia', 'servidao', 'de', 'da', 'do', 'das', 'dos', 'e']);
+    const tokens = palavras(rua).filter(t => t && !ignorados.has(t));
+    const resolvida = new Set(palavras(detalhes.road || detalhes.pedestrian || detalhes.street || textoResultado));
+    if (!tokens.length || !tokens.every(t => resolvida.has(t))) return false;
+    if (!numero) return true;
+    if (detalhes.house_number != null) {
+        return normalizarTextoGeo(String(detalhes.house_number)) === normalizarTextoGeo(numero);
+    }
+    // Não confundir número do imóvel com CEP ou número do bairro.
+    return normalizarTextoGeo(textoResultado).split(',').some(segmento => {
+        const parte = segmento.trim();
+        if (parte === normalizarTextoGeo(numero)) return true;
+        const termos = new Set(palavras(parte));
+        return tokens.every(t => termos.has(t)) && parte.split(/\s+/).includes(normalizarTextoGeo(numero));
+    });
+};
+
+/** Busca endereço completo, sem bairro e por rua; valida sempre o destino original. */
 export const gerarTentativasGeocoding = (enderecoBruto) => {
     if (!enderecoBruto || !String(enderecoBruto).trim()) return [];
 
@@ -1115,7 +1136,8 @@ export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
             const validos = (lista || []).filter(item => {
                 const [lat, lng] = getCoords(item);
                 const textoNorm = normalizarTextoGeo(getTexto(item));
-                if (!estaNaRegiaoSC(lat, lng) || !resultadoPertenceACidade(textoNorm, cidade)) return false;
+                if (!estaNaRegiaoSC(lat, lng) ||
+                    !resultadoCorrespondeAoEndereco(enderecoBruto, getTexto(item), item.address || {})) return false;
                 if (exigirMatchRua && tokensRua.length > 0) {
                     const bateuRua = tokensRua.every(tk => textoNorm.includes(tk));
                     if (!bateuRua) return false;
@@ -1288,7 +1310,8 @@ export async function buscarCoordenadasComFallback(endereco, opts = {}) {
         // 2) Fallback secundário para geocodeMapbox com heurísticas de CEP/fuzzy
         try {
             const gm = await geocodeMapbox(endereco, opts.bounds || null, opts.proximity || null);
-            if (gm && gm.lat != null && gm.lng != null) {
+            if (gm && gm.lat != null && gm.lng != null &&
+                resultadoCorrespondeAoEndereco(endereco, gm.display_name || gm.place_name || '')) {
                 return {
                     lat: Number(gm.lat),
                     lng: Number(gm.lng),
@@ -1823,4 +1846,3 @@ export async function getOSRMRoute(coordinates) {
         return null;
     }
 }
-
