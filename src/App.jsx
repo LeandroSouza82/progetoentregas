@@ -309,6 +309,9 @@ function App() {
     // Controle visual: flag para quando o mapa foi limpo por ação do usuário
     const [mapCleared, setMapCleared] = useState(false);
 
+    const autoGeoEmAndamentoRef = useRef(false);
+    const idsSemCoordsTentadosRef = useRef(new Set());
+
     // Atualiza o estado `entregas` garantindo ordenação por `ordem_logistica`.
     const carregarDados = React.useCallback(async () => {
         console.log("🔄 [Sincronização Inteligente] Organizando Cards e Mapa...");
@@ -335,6 +338,47 @@ function App() {
             try { setEntregaMarkers(Array.isArray(todasAsEntregas) ? todasAsEntregas : []); } catch (e) { }
 
             console.log(`✅ Central: ${pendentes.length} | Mapa: ${(todasAsEntregas || []).length}`);
+
+            // 🎯 LÓGICA 3: Auto-recuperação em background de cards com "⚠️ Sem coords"
+            const itensSemCoords = pendentes.filter(
+                item => item && item.id && (!item.lat || !item.lng) && item.endereco && !idsSemCoordsTentadosRef.current.has(item.id)
+            );
+            if (itensSemCoords.length > 0 && !autoGeoEmAndamentoRef.current) {
+                autoGeoEmAndamentoRef.current = true;
+                (async () => {
+                    try {
+                        for (let i = 0; i < itensSemCoords.length; i++) {
+                            const item = itensSemCoords[i];
+                            idsSemCoordsTentadosRef.current.add(item.id);
+                            try {
+                                console.log(`🔄 [AUTO-GEO] Recuperando coordenadas para card #${item.id}: "${item.endereco}"`);
+                                const resGeo = await buscarCoordenadas(item.endereco);
+                                const novaLat = resGeo && resGeo.lat != null ? parseFloat(resGeo.lat) : null;
+                                const novaLng = resGeo && resGeo.lng != null ? parseFloat(resGeo.lng) : null;
+                                if (Number.isFinite(novaLat) && Number.isFinite(novaLng) && novaLat !== 0 && novaLng !== 0) {
+                                    await supabase.from('entregas').update({ lat: novaLat, lng: novaLng }).eq('id', item.id);
+                                    const aplicarCoords = prev => (Array.isArray(prev) ? prev : []).map(p =>
+                                        p && p.id === item.id ? { ...p, lat: novaLat, lng: novaLng } : p
+                                    );
+                                    setPedidosPendentes(aplicarCoords);
+                                    setEntregas(aplicarCoords);
+                                    setEntregaMarkers(aplicarCoords);
+                                    console.log(`✅ [AUTO-GEO] Coordenadas atualizadas para card #${item.id}:`, { lat: novaLat, lng: novaLng });
+                                } else {
+                                    console.warn(`⚠️ [AUTO-GEO] Não foi possível geocodificar card #${item.id}: "${item.endereco}"`);
+                                }
+                            } catch (errItem) {
+                                console.warn(`⚠️ [AUTO-GEO] Exceção ao geocodificar card #${item.id}:`, errItem);
+                            }
+                            if (i < itensSemCoords.length - 1) {
+                                await new Promise(r => setTimeout(r, 1100)); // respeita limite de 1 req/s do Nominatim
+                            }
+                        }
+                    } finally {
+                        autoGeoEmAndamentoRef.current = false;
+                    }
+                })();
+            }
         } catch (e) {
             console.error("Erro na sincronização de visibilidade:", e);
         }
