@@ -1,3 +1,4 @@
+import NavegacaoEntrega from './NavegacaoEntrega.jsx';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient'; // Usar o Supabase real do projeto
 import MapaLogistica from '../../src/MapaLogistica';
@@ -405,22 +406,6 @@ function InternalMobileApp() {
             console.error('Erro na persistência em massa da ordem logistica', e);
             // Reverte mudança local em caso de erro
             carregarRota(true);
-        }
-    };
-
-    // Função para abrir GPS
-    const abrirGPS = (app, lat, lng) => {
-        const latN = lat == null ? null : Number(lat);
-        const lngN = lng == null ? null : Number(lng);
-        if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
-            alert('Coordenadas inválidas para navegação');
-            return;
-        }
-        if (app === 'waze') {
-            window.open('https://waze.com/ul?ll=' + latN + ',' + lngN + '&navigate=yes', '_blank');
-        } else {
-            // Open in OpenStreetMap instead of Google Maps
-            window.open('https://www.openstreetmap.org/?mlat=' + latN + '&mlon=' + lngN + '#map=18/' + latN + '/' + lngN, '_blank');
         }
     };
 
@@ -851,21 +836,7 @@ function InternalMobileApp() {
 
                                         {/* Recado/Obs removido (campo 'msg' não existe) */}
 
-                                        {/* BOTÕES DE NAVEGAÇÃO (GPS) */}
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                                            <button
-                                                onClick={() => abrirGPS('waze', tarefaAtual.lat_coleta || tarefaAtual.lat, tarefaAtual.lng_coleta || tarefaAtual.lng)}
-                                                style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                                            >
-                                                🚙 WAZE
-                                            </button>
-                                            <button
-                                                onClick={() => abrirGPS('maps', tarefaAtual.lat_coleta || tarefaAtual.lat, tarefaAtual.lng_coleta || tarefaAtual.lng)}
-                                                style={{ padding: '15px', borderRadius: '15px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-                                            >
-                                                🗺️ MAPS
-                                            </button>
-                                        </div>
+                                        <NavegacaoEntrega entrega={tarefaAtual} />
 
                                         <hr style={{ border: 'none', borderTop: '1px solid #f3f4f6', margin: '5px 0' }} />
 

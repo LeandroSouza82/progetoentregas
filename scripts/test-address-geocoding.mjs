@@ -2,12 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { extrairComponentesEndereco, resultadoCorrespondeAoEndereco, buscarCoordenadas } from '../src/geoUtils.js';
 const pedido = 'Cond. Positano Rua Veneza 390 passa vinte palhoça';
+const leParque = 'R Najla Carone Guedert 821 Pagani - palhoça';
 
 test('separa condomínio, rua e número no texto real do pedido', () => {
     const { rua, numero, cidade } = extrairComponentesEndereco(pedido);
     assert.equal(rua, 'Rua Veneza');
     assert.equal(numero, '390');
     assert.equal(cidade, 'Palhoça');
+    const destino = extrairComponentesEndereco(leParque);
+    assert.equal(destino.rua, 'Rua Najla Carone Goedert');
+    assert.equal(destino.numero, '821');
+    assert.equal(destino.bairro, 'Pagani');
+    assert.equal(extrairComponentesEndereco('Rua 7 de Setembro, 821, Palhoça').rua, 'Rua 7 de Setembro');
+    assert.equal(extrairComponentesEndereco('Rua 7, 821, Palhoça').rua, 'Rua 7');
 
     // Garante que "Bloco A, Sala 801" seja limpo sem amputar o sobrenome "Blum" da rua
     const emilio = extrairComponentesEndereco('R. Emílio Blum, 131 - Bloco A, Sala 801 - Centro, Florianópolis - SC, 88020-010');
@@ -49,21 +56,54 @@ test('busca ignora o ponto incorreto e encontra o imóvel solicitado', async () 
         // Coordenadas sintéticas: este teste verifica seleção, não localização real.
         assert.equal(result.lat, -27.64);
         assert.equal(result.aproximado, false);
-        globalThis.fetch = async () => new Response(JSON.stringify([
-            { lat: '-27.632061', lon: '-48.652295', display_name: 'Rua Geraldo Jansem, 580, Palhoça' },
-            { lat: '-27.64', lon: '-48.68', display_name: 'Rua Veneza, Palhoça' },
-        ]));
-        // Sem número no mapa: usa o trecho da rua correta (nunca a Geraldo Jansem) e marca como aproximado.
-        const aproximado = await buscarCoordenadas(pedido);
-        assert.equal(aproximado.display_name, 'Rua Veneza, Palhoça');
-        assert.equal(aproximado.aproximado, true);
-        globalThis.fetch = async () => new Response(JSON.stringify([
-            { lat: '-27.632061', lon: '-48.652295', display_name: 'Rua Geraldo Jansem, 580, Palhoça' },
-        ]));
+        const ruaSemNumero = {
+            lat: '-27.64',
+            lon: '-48.68',
+            display_name: 'Rua Najla Carone Goedert, Pagani, Palhoça',
+            category: 'highway',
+            address: { road: 'Rua Najla Carone Goedert', city: 'Palhoça' }
+        };
+        globalThis.fetch = async () => Response.json([ruaSemNumero]);
+        assert.equal(await buscarCoordenadas(leParque), null);
+        const referencia = await buscarCoordenadas(leParque, { incluirReferencia: true });
+        assert.equal(referencia.display_name, ruaSemNumero.display_name);
+        assert.equal(referencia.aproximado, true);
+
+        const consultas = [];
+        globalThis.fetch = async url => {
+            consultas.push(url);
+            if (url.searchParams.has('street')) {
+                return Response.json([{
+                    ...ruaSemNumero,
+                    category: 'building',
+                    display_name: '821, Rua Najla Carone Goedert, Palhoça',
+                    address: { ...ruaSemNumero.address, house_number: '821' }
+                }]);
+            }
+            return Response.json([
+                ruaSemNumero,
+                {
+                    ...ruaSemNumero,
+                    category: 'building',
+                    display_name: '821, Rua Najla Carone Goedert, São José, Palhoça',
+                    address: { ...ruaSemNumero.address, house_number: '821', city: 'São José' }
+                }
+            ]);
+        };
+        const imovel = await buscarCoordenadas(leParque);
+        assert.equal(imovel.aproximado, false);
+        assert.equal(imovel.display_name, '821, Rua Najla Carone Goedert, Palhoça');
+        assert.equal(consultas.length, 3);
+        assert.equal(consultas[2].searchParams.get('street'), '821 Rua Najla Carone Goedert');
+
+        let requisicoes = 0;
+        globalThis.fetch = async () => {
+            requisicoes++;
+            return new Response('', { status: 429 });
+        };
         assert.equal(await buscarCoordenadas(pedido), null);
-        globalThis.fetch = async () => new Response('', { status: 429 });
-        assert.equal(await buscarCoordenadas(pedido), null);
-        globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
-        assert.equal(await buscarCoordenadas(pedido), null);
-    } finally { globalThis.fetch = fetchAnterior; }
+        assert.equal(requisicoes, 1);
+    } finally {
+        globalThis.fetch = fetchAnterior;
+    }
 });

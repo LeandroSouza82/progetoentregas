@@ -17,7 +17,7 @@ export const mapboxTokenBloqueado = () => mapboxTokenStatusFalha !== null;
 export const registrarFalhaTokenMapbox = (status) => {
     if (mapboxTokenStatusFalha !== null) return;
     mapboxTokenStatusFalha = status;
-    console.error(`❌ [GEO Mapbox] Token recusado (HTTP ${status}). Verifique VITE_MAPBOX_ACCESS_TOKEN (token válido, escopo de geocoding e URLs permitidas). ` +
+    console.error(`❌ [GEO Mapbox] Token recusado (HTTP ${status}). Verifique VITE_MAPBOX_ACCESS_TOKEN (token válido, permissão de geocodificação permanente e URLs permitidas). ` +
         'Seguindo apenas com OpenStreetMap/Nominatim nesta sessão.');
 };
 
@@ -170,9 +170,15 @@ export const resultadoPertenceACidade = (textoResultado, cidadeEsperada) => {
     return alvo.includes(normalizarTextoGeo(cidadeEsperada));
 };
 
-/**
- * Extrai os componentes (rua, número, bairro, cidade) de um endereço já higienizado.
- */
+// Grafias da mesma rua registradas no cadastro do cliente e no OpenStreetMap.
+const padronizarLogradouro = (rua, cidade) => {
+    if (cidade === 'Palhoça' && normalizarTextoGeo(rua) === 'rua najla carone guedert') {
+        return 'Rua Najla Carone Goedert';
+    }
+    return rua;
+};
+
+/** Extrai rua, número, bairro e cidade de um endereço. */
 export const extrairComponentesEndereco = (enderecoBruto) => {
     const cidade = detectarCidadeGrandeFlorianopolis(enderecoBruto);
     const baseSemSufixo = higienizarEnderecoParaGeocoding(enderecoBruto, false)
@@ -189,32 +195,37 @@ export const extrairComponentesEndereco = (enderecoBruto) => {
     let rua = partes[0] || '';
     let numero = '';
     let indiceNumero = 0;
+    let bairroColado = '';
 
     // Caso o número esteja colado na primeira parte (ex: "Avenida Presidente Kenedy 1333")
-    const matchNumeroNaRua = rua.match(/^(.*?)\s+(\d+[A-Za-z0-9\/\-]*)(?:\s+.*)?$/);
-    if (matchNumeroNaRua && matchNumeroNaRua[1].trim().length >= 3) {
+    const matchNumeroNaRua = rua.match(/^(.+)\s+(\d+[A-Za-z0-9/\-]*)(?:\s+(?!de\s)(.+))?$/i);
+    if (matchNumeroNaRua && !/^(?:rua|avenida|rodovia|servid[aã]o|travessa|estrada|alameda)$/i.test(matchNumeroNaRua[1].trim())) {
         rua = matchNumeroNaRua[1].trim();
         numero = matchNumeroNaRua[2].trim();
+        bairroColado = matchNumeroNaRua[3] || '';
     } else if (partes.length > 1) {
         for (let i = 1; i < partes.length; i++) {
-            const m = partes[i].match(/^(\d+[A-Za-z0-9\/\-]*)/) || partes[i].match(/\b(\d{1,5})\b/);
+            const m = partes[i].match(/^(\d+[A-Za-z0-9/\-]*)(?:\s+(.+))?$/);
             if (m && m[1].length < 6) { // evita confundir CEP de 8 dígitos com número
                 numero = m[1];
                 indiceNumero = i;
+                bairroColado = m[2] || '';
                 break;
             }
         }
     }
 
-    // Limpar eventual nome de bairro colado após o número na rua
-    rua = rua.replace(/\d+/g, '').replace(/\s{2,}/g, ' ').trim();
-
-    // Bairro: primeira parte após rua/número que não seja número, cidade, estado ou país
+    rua = padronizarLogradouro(rua, cidade);
     const cidadeNorm = normalizarTextoGeo(cidade);
-    const bairro = partes.slice(Math.max(1, indiceNumero + 1)).find(p => {
-        const pn = normalizarTextoGeo(p);
-        return pn && !/\d/.test(pn) && pn !== cidadeNorm && !/^(sc|santa catarina|brasil)$/.test(pn);
-    }) || '';
+    const bairro = [bairroColado, ...partes.slice(indiceNumero + 1)]
+        .map(parte => {
+            const normalizado = normalizarTextoGeo(parte);
+            if (normalizado === cidadeNorm) return '';
+            return normalizado.endsWith(' ' + cidadeNorm)
+                ? parte.slice(0, -cidade.length).trim()
+                : parte;
+        })
+        .find(parte => parte && !/\d/.test(parte)) || '';
 
     return { rua, numero, bairro, cidade, baseSemSufixo };
 };
@@ -227,16 +238,23 @@ export const extrairComponentesEndereco = (enderecoBruto) => {
  *   mas continua rejeitando se o resultado trouxer explicitamente um número DIFERENTE.
  */
 export const diagnosticarCorrespondenciaEndereco = (endereco, textoResultado, detalhes = {}, opcoes = {}) => {
-    const { exigirNumero = true } = opcoes;
+    const { exigirNumero = true, exigirNumeroEstruturado = false } = opcoes;
     const det = (detalhes && typeof detalhes === 'object') ? detalhes : {};
     const { rua, numero, cidade } = extrairComponentesEndereco(endereco);
-    if (!resultadoPertenceACidade(textoResultado, cidade)) return `cidade diferente de "${cidade}"`;
+    const cidadeResultado = det.city || det.town || det.municipality || det.village;
+    if (cidadeResultado
+        ? normalizarTextoGeo(cidadeResultado) !== normalizarTextoGeo(cidade)
+        : !normalizarTextoGeo(textoResultado).split(',').some(parte => parte.trim() === normalizarTextoGeo(cidade))) return 'cidade diferente de "' + cidade + '"';
     const palavras = texto => normalizarTextoGeo(expandirAbreviacoesEndereco(texto))
         .replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/);
     const ignorados = new Set(['rua', 'avenida', 'rodovia', 'servidao', 'de', 'da', 'do', 'das', 'dos', 'e']);
     const tokens = palavras(rua).filter(t => t && !ignorados.has(t));
     if (!tokens.length) return 'nome da rua não identificado no endereço digitado';
-    const resolvida = new Set(palavras(det.road || det.pedestrian || det.street || textoResultado));
+    const via = det.road || det.pedestrian || det.street;
+    if (exigirNumeroEstruturado && !via) return 'logradouro ausente no resultado';
+    const palavrasVia = palavras(padronizarLogradouro(via || textoResultado, cidade));
+    const resolvida = new Set(via ? palavrasVia.filter(t => t && !ignorados.has(t)) : palavrasVia);
+    if (via && resolvida.size !== new Set(tokens).size) return 'logradouro diferente';
     if (!tokens.every(t => resolvida.has(t))) return `rua diferente de "${rua}"`;
     if (!numero) return null;
     const numeroNorm = normalizarTextoGeo(numero);
@@ -245,6 +263,7 @@ export const diagnosticarCorrespondenciaEndereco = (endereco, textoResultado, de
             ? null
             : `número diferente (${det.house_number} ≠ ${numero})`;
     }
+    if (exigirNumeroEstruturado) return 'número do imóvel ausente no resultado';
     // Não confundir número do imóvel com CEP ou número do bairro.
     const numeroNoTexto = normalizarTextoGeo(textoResultado).split(',').some(segmento => {
         const parte = segmento.trim();
@@ -1141,290 +1160,180 @@ export async function geocodeMapbox(address, bounds = null, proximity = null) {
 }
 
 // Busca simplificada e robusta conforme solicitado pelo time — utilidade geral
-export const buscarCoordenadasMelhoradas = async (enderecoBruto) => {
-    try {
-        if (!enderecoBruto || !String(enderecoBruto).trim()) return null;
+let filaNominatim = Promise.resolve();
+let proximaConsultaNominatim = 0;
+let nominatimBloqueadoAte = 0;
 
-        const MAPBOX_TOKEN = getMapboxToken();
-        const tentativas = gerarTentativasGeocoding(enderecoBruto);
-        const { rua, numero, bairro, cidade } = extrairComponentesEndereco(enderecoBruto);
+function consultarEnderecoNominatim(params) {
+    const consulta = filaNominatim.then(async () => {
+        if (Date.now() < nominatimBloqueadoAte) return [];
+        const espera = proximaConsultaNominatim - Date.now();
+        if (espera > 0) await new Promise(resolve => setTimeout(resolve, espera));
+        proximaConsultaNominatim = Date.now() + 1100;
 
-        const estaNaRegiaoSC = (lat, lng) => {
-            const nLat = Number(lat);
-            const nLng = Number(lng);
-            if (!Number.isFinite(nLat) || !Number.isFinite(nLng)) return false;
-            return nLat >= -29.4 && nLat <= -25.9 && nLng >= -53.9 && nLng <= -48.0;
-        };
-
-        // Tokens significativos do nome da rua (para evitar que o fuzzyMatch do Mapbox pegue outra rua parecida)
-        const tokensRua = normalizarTextoGeo(rua)
-            .split(/\s+/)
-            .filter(t => t.length >= 4 && !['avenida', 'rodovia', 'servidao', 'jornalista', 'professor', 'doutor', 'coronel', 'general', 'deputado', 'governador', 'presidente', 'vereador', 'marechal'].includes(t));
-
-        // Melhor candidato no nível da rua (rua + cidade corretas, sem número de casa no OSM/Mapbox).
-        // Só é usado se nenhuma tentativa encontrar o número exato — evita o "⚠️ Sem coords".
-        let candidatoAproximado = null;
-        const motivosRejeicao = [];
-
-        // Escolhe o melhor resultado: precisa estar na região, na cidade esperada e bater com o nome da rua; prioriza o que também cita o bairro
-        const escolherResultadoNaCidade = (lista, getTexto, getCoords, exigirMatchRua = false, fonte = 'geo') => {
-            const validos = (lista || []).filter(item => {
-                const [lat, lng] = getCoords(item);
-                const texto = getTexto(item);
-                const textoNorm = normalizarTextoGeo(texto);
-                if (!estaNaRegiaoSC(lat, lng)) {
-                    motivosRejeicao.push(`[${fonte}] "${texto}": fora de SC`);
-                    return false;
-                }
-                if (exigirMatchRua && tokensRua.length > 0 && !tokensRua.every(tk => textoNorm.includes(tk))) {
-                    motivosRejeicao.push(`[${fonte}] "${texto}": rua diferente de "${rua}"`);
-                    return false;
-                }
-                const detalhes = (item.address && typeof item.address === 'object') ? item.address : {};
-                const motivo = diagnosticarCorrespondenciaEndereco(enderecoBruto, texto, detalhes);
-                if (motivo === null) return true;
-                motivosRejeicao.push(`[${fonte}] "${texto}": ${motivo}`);
-                if (!candidatoAproximado &&
-                    diagnosticarCorrespondenciaEndereco(enderecoBruto, texto, detalhes, { exigirNumero: false }) === null) {
-                    candidatoAproximado = { lat: Number(lat), lng: Number(lng), display_name: texto, context: item.context || null, source: fonte };
-                }
-                return false;
-            });
-            if (validos.length === 0) return null;
-            if (bairro) {
-                const comBairro = validos.find(item => normalizarTextoGeo(getTexto(item)).includes(normalizarTextoGeo(bairro)));
-                if (comBairro) return comBairro;
-            }
-            return validos[0];
-        };
-
-        // Consulta ao Nominatim restrita à Grande Florianópolis (countrycodes=br + viewbox + bounded=1) e sem CEP
-        const consultarNominatim = async (params) => {
-            const url = new URL('https://nominatim.openstreetmap.org/search');
-            url.searchParams.append('format', 'json');
-            url.searchParams.append('addressdetails', '1');
-            url.searchParams.append('countrycodes', 'br');
-            url.searchParams.append('viewbox', '-48.98,-27.35,-48.30,-27.90');
-            url.searchParams.append('bounded', '1');
-            url.searchParams.append('limit', '5');
-            Object.entries(params).forEach(([k, v]) => {
-                if (v) {
-                    const valorSemCep = String(v).replace(/\b\d{5}-?\d{3}\b/g, '').replace(/\s{2,}/g, ' ').trim();
-                    url.searchParams.append(k, valorSemCep);
-                }
-            });
-            const resp = await fetch(url.toString(), {
-                headers: {
-                    'Accept': 'application/json',
-                    'Accept-Language': 'pt-BR,pt;q=0.9',
-                    'User-Agent': 'V10-Logistica-Dashboard/1.0'
-                }
-            });
-            if (!resp || !resp.ok) {
-                const status = resp ? resp.status : 'sem resposta';
-                const detalhe = status === 429 ? 'limite de requisições do Nominatim atingido (1 req/s)' : `HTTP ${status}`;
-                motivosRejeicao.push(`[nominatim] ${detalhe}`);
-                console.warn(`⚠️ [GEO Nominatim] ${detalhe} para "${enderecoBruto}"`);
-                return null;
-            }
-            const data = await resp.json();
-            if (!Array.isArray(data) || data.length === 0) return null;
-            return escolherResultadoNaCidade(
-                data,
-                (r) => r.display_name,
-                (r) => [parseFloat(r.lat), parseFloat(r.lon)],
-                false,
-                'nominatim'
-            );
-        };
-
-        const montarRetornoNominatim = (r, tentativa, precisao) => ({
-            lat: parseFloat(r.lat),
-            lng: parseFloat(r.lon),
-            precisao,
-            place_name: r.display_name,
-            display_name: r.display_name,
-            source: 'nominatim',
-            tentativa
+        const url = new URL('https://nominatim.openstreetmap.org/search');
+        url.search = new URLSearchParams({
+            format: 'jsonv2',
+            addressdetails: '1',
+            countrycodes: 'br',
+            viewbox: '-48.98,-27.35,-48.30,-27.90',
+            bounded: '1',
+            limit: '5',
+            ...params
         });
-
-        for (let idx = 0; idx < tentativas.length; idx++) {
-            const queryTentativa = tentativas[idx].replace(/\b\d{5}-?\d{3}\b/g, '').trim();
-            const isTentativaRua = idx === 2;
-            console.log(`🔎 [GEO Tentativa ${idx + 1}/${tentativas.length}] Buscando: "${queryTentativa}" (cidade travada: ${cidade})`);
-
-            // 1) Tentar via OpenStreetMap / Nominatim (sem CEP, com abreviações expandidas e trava de cidade/bairro)
-            try {
-                const livre = await consultarNominatim({ q: queryTentativa });
-                if (livre) {
-                    console.log(`✅ [GEO Tentativa ${idx + 1} - Nominatim] Coordenadas encontradas:`, livre.display_name);
-                    return montarRetornoNominatim(livre, idx + 1, isTentativaRua ? 0.75 : 0.92);
-                }
-
-                // Se a última tentativa por texto livre não retornar, tenta busca estruturada (street + city + state)
-                if (isTentativaRua && rua) {
-                    const estruturado = await consultarNominatim({
-                        street: numero ? `${numero} ${rua}` : rua,
-                        city: cidade,
-                        state: 'Santa Catarina',
-                        country: 'Brasil'
-                    });
-                    if (estruturado) {
-                        console.log(`✅ [GEO Tentativa ${idx + 1} - Nominatim estruturado] Coordenadas encontradas:`, estruturado.display_name);
-                        return montarRetornoNominatim(estruturado, idx + 1, 0.85);
-                    }
-                }
-            } catch (errNom) {
-                console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Nominatim] Falha:`, errNom);
+        try {
+            const response = await fetch(url, {
+                headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' },
+                signal: AbortSignal.timeout(5000)
+            });
+            if (response.status === 429 || response.status === 403) {
+                const segundos = Math.max(1, Number(response.headers.get('Retry-After')) || 60);
+                nominatimBloqueadoAte = Date.now() + segundos * 1000;
             }
-
-            // Rua já validada sem número e sem Mapbox disponível: tentativas menos específicas não trarão o número.
-            if (candidatoAproximado && (!MAPBOX_TOKEN || mapboxTokenBloqueado())) break;
-
-            // 2) Fallback via Mapbox Geocoding API (exigindo match da cidade e dos tokens da rua)
-            if (MAPBOX_TOKEN && !mapboxTokenBloqueado()) {
-                try {
-                    const url = new URL(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(queryTentativa)}.json`);
-                    url.searchParams.append('access_token', MAPBOX_TOKEN);
-                    url.searchParams.append('proximity', '-48.61,-27.60');
-                    url.searchParams.append('bbox', '-48.98,-27.90,-48.30,-27.35');
-                    url.searchParams.append('country', 'br');
-                    url.searchParams.append('types', isTentativaRua ? 'street,address,poi' : 'address,street,poi');
-                    url.searchParams.append('language', 'pt');
-                    url.searchParams.append('autocomplete', 'true');
-                    url.searchParams.append('fuzzyMatch', 'true');
-                    url.searchParams.append('limit', '5');
-
-                    const resp = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
-                    if (resp && (resp.status === 401 || resp.status === 403)) {
-                        registrarFalhaTokenMapbox(resp.status);
-                        motivosRejeicao.push(`[mapbox] token recusado (HTTP ${resp.status})`);
-                    } else if (resp && !resp.ok) {
-                        motivosRejeicao.push(`[mapbox] HTTP ${resp.status}${resp.status === 429 ? ' (limite de requisições)' : ''}`);
-                    }
-                    if (resp && resp.ok) {
-                        const data = await resp.json();
-                        const minRelevance = idx === 0 ? 0.65 : 0.45;
-                        const relevantes = ((data && data.features) || []).filter(f => {
-                            const rel = typeof f.relevance === 'number' ? f.relevance : 0.7;
-                            return rel >= minRelevance;
-                        });
-                        const feat = escolherResultadoNaCidade(
-                            relevantes,
-                            (f) => f.place_name,
-                            (f) => { const [lng, lat] = f.center || []; return [lat, lng]; },
-                            true,
-                            'mapbox'
-                        );
-                        if (feat) {
-                            const [lng, lat] = feat.center;
-                            const precisao = typeof feat.relevance === 'number' ? feat.relevance : 0.7;
-                            console.log(`✅ [GEO Tentativa ${idx + 1} - Mapbox] Coordenadas encontradas:`, { lat, lng, place_name: feat.place_name });
-                            return {
-                                lat: Number(lat),
-                                lng: Number(lng),
-                                precisao,
-                                place_name: feat.place_name,
-                                display_name: feat.place_name,
-                                context: feat.context || null,
-                                tentativa: idx + 1
-                            };
-                        }
-                    }
-                } catch (errMapbox) {
-                    console.warn(`⚠️ [GEO Tentativa ${idx + 1} - Mapbox] Falha:`, errMapbox);
-                }
-            }
+            return response.ok ? await response.json() : [];
+        } catch (error) {
+            console.warn('Falha ao buscar endereço no OpenStreetMap', error);
+            return [];
         }
+    });
+    filaNominatim = consulta.catch(() => {});
+    return consulta;
+}
 
-        // 3) Nenhum número exato encontrado: usa o melhor resultado no nível da RUA (rua + cidade validadas).
-        if (candidatoAproximado) {
-            console.warn(`📍 [GEO Aproximado] "${enderecoBruto}" → número não mapeado; usando o trecho da rua: ${candidatoAproximado.display_name}`);
-            return {
-                ...candidatoAproximado,
-                place_name: candidatoAproximado.display_name,
-                precisao: 0.6,
-                aproximado: true,
-                tentativa: tentativas.length
-            };
-        }
+export const coordenadasNaRegiaoDeEntregas = (lat, lng) =>
+    lat != null && lng != null &&
+    Number(lat) >= -27.90 && Number(lat) <= -27.35 &&
+    Number(lng) >= -48.98 && Number(lng) <= -48.30;
 
-        console.error(`❌ [GEO Falhou] Sem coordenadas para "${enderecoBruto}" (rua="${rua}", número="${numero}", cidade="${cidade}"). Motivos:`,
-            motivosRejeicao.length ? motivosRejeicao : ['nenhum resultado retornado pelas APIs']);
-        return null;
-    } catch (error) {
-        console.error(`❌ [GEO Exceção] buscarCoordenadasMelhoradas("${enderecoBruto}"):`, error);
-        return null;
-    }
-};
+const enderecosEmBusca = new Map();
+const precisaoMapboxValida = new Set(['rooftop', 'parcel', 'point']);
 
-/**
- * Wrapper que tenta o fallback inteligente de 3 níveis (`buscarCoordenadasMelhoradas`) e `geocodeMapbox`.
- * @param {string} endereco - Endereço bruto
- * @param {object} opts - Opcional: { bounds, proximity }
- * @returns {Promise<object|null>} Objeto unificado: { lat, lng, display_name, precisao, context }
- */
-export async function buscarCoordenadasComFallback(endereco, opts = {}) {
+async function consultarImovelMapbox(endereco, consulta) {
+    const token = getMapboxToken();
+    if (!token || mapboxTokenBloqueado()) return null;
+
+    const url = new URL('https://api.mapbox.com/search/geocode/v6/forward');
+    url.search = new URLSearchParams({
+        q: consulta,
+        access_token: token,
+        country: 'br',
+        bbox: '-48.98,-27.90,-48.30,-27.35',
+        types: 'address',
+        language: 'pt',
+        autocomplete: 'false',
+        permanent: 'true',
+        limit: '5'
+    });
+
     try {
-        if (!endereco || !String(endereco).trim()) return null;
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (response.status === 401 || response.status === 403) registrarFalhaTokenMapbox(response.status);
+        if (!response.ok) return null;
 
-        // 1) Tentar o Fallback Inteligente de 3 níveis (Completo -> Sem Bairro -> Apenas Rua + Cidade)
-        try {
-            const fb = await buscarCoordenadasMelhoradas(endereco);
-            if (fb && fb.lat != null && fb.lng != null) {
-                return {
-                    lat: Number(fb.lat),
-                    lng: Number(fb.lng),
-                    display_name: fb.display_name || fb.place_name || null,
-                    precisao: fb.precisao || null,
-                    context: fb.context || null,
-                    aproximado: fb.aproximado === true
-                };
-            }
-        } catch (e) {
-            console.warn('buscarCoordenadasComFallback: buscarCoordenadasMelhoradas falhou', e);
-        }
+        const { features = [] } = await response.json();
+        const melhor = features.find(feature => {
+            const dados = feature.properties || {};
+            const { address, street, place, locality } = dados.context || {};
+            const { latitude, longitude, accuracy } = dados.coordinates || {};
+            return dados.feature_type === 'address' &&
+                precisaoMapboxValida.has(accuracy) &&
+                coordenadasNaRegiaoDeEntregas(latitude, longitude) &&
+                resultadoCorrespondeAoEndereco(endereco, dados.full_address, {
+                    house_number: address?.address_number,
+                    road: street?.name || address?.street_name,
+                    city: place?.name || locality?.name
+                }, { exigirNumeroEstruturado: true });
+        });
+        if (!melhor) return null;
 
-        // 2) Fallback secundário para geocodeMapbox com heurísticas de CEP/fuzzy (pulado se o token foi recusado)
-        if (mapboxTokenBloqueado() || !getMapboxToken()) return null;
-        try {
-            const gm = await geocodeMapbox(endereco, opts.bounds || null, opts.proximity || null);
-            if (gm && gm.lat != null && gm.lng != null &&
-                resultadoCorrespondeAoEndereco(endereco, gm.display_name || gm.place_name || '')) {
-                return {
-                    lat: Number(gm.lat),
-                    lng: Number(gm.lng),
-                    display_name: gm.display_name || gm.place_name || null,
-                    precisao: gm.precisao || gm.precision || null,
-                    context: gm.context || null
-                };
-            }
-        } catch (e) {
-            console.warn('buscarCoordenadasComFallback: geocodeMapbox falhou', e);
-        }
-
-        return null;
-    } catch (err) {
-        console.error('Erro em buscarCoordenadasComFallback:', err);
+        const dados = melhor.properties;
+        return {
+            lat: dados.coordinates.latitude,
+            lng: dados.coordinates.longitude,
+            display_name: dados.full_address,
+            context: dados.context,
+            source: 'mapbox',
+            aproximado: false
+        };
+    } catch (error) {
+        console.warn('Falha ao buscar imóvel no Mapbox', error);
         return null;
     }
 }
 
-// Wrapper consolidado para uso no App.jsx: executa higienização + Fallback Inteligente em 3 tentativas
-export const obterCoordenadasSeguras = async (endereco) => {
-    try {
-        if (!endereco || !String(endereco).trim()) return null;
-        return await buscarCoordenadasComFallback(endereco);
-    } catch (error) {
-        console.error('❌ Erro no wrapper de coordenadas:', error);
+async function localizarEndereco(endereco, incluirReferencia) {
+    const { rua, numero, bairro, cidade } = extrairComponentesEndereco(endereco);
+    if (!rua || (!numero && !incluirReferencia)) return null;
+
+    let referencia = null;
+    const conferirResultados = (resultados) => {
+        if (!Array.isArray(resultados)) return null;
+        for (const item of resultados) {
+            const lat = Number(item.lat);
+            const lng = Number(item.lon);
+            if (!coordenadasNaRegiaoDeEntregas(lat, lng)) continue;
+            const ponto = { lat, lng, display_name: item.display_name, source: 'nominatim' };
+            const eVia = (item.category || item.class) === 'highway';
+            if (!eVia && numero && resultadoCorrespondeAoEndereco(
+                endereco, item.display_name, item.address, { exigirNumeroEstruturado: true }
+            )) {
+                return { ...ponto, aproximado: false };
+            }
+            if (eVia && resultadoCorrespondeAoEndereco(
+                endereco, item.display_name, item.address, { exigirNumero: false }
+            )) {
+                referencia ??= { ...ponto, aproximado: true };
+            }
+        }
         return null;
+    };
+
+    if (numero) {
+        const consultas = [
+            [rua + ' ' + numero, bairro, cidade, 'Santa Catarina, Brasil'].filter(Boolean).join(', '),
+            [rua + ' ' + numero, cidade, 'Santa Catarina, Brasil'].join(', ')
+        ];
+        const [mapbox, livre] = await Promise.all([
+            consultarImovelMapbox(endereco, consultas[1]),
+            consultarEnderecoNominatim({ q: consultas[0] }).then(conferirResultados)
+        ]);
+        if (mapbox || livre) return mapbox || livre;
+
+        if (consultas[0] !== consultas[1]) {
+            const semBairro = conferirResultados(await consultarEnderecoNominatim({ q: consultas[1] }));
+            if (semBairro) return semBairro;
+        }
+        const estruturado = conferirResultados(await consultarEnderecoNominatim({
+            street: numero + ' ' + rua,
+            city: cidade,
+            state: 'Santa Catarina',
+            country: 'Brasil'
+        }));
+        if (estruturado) return estruturado;
     }
+
+    if (!incluirReferencia) return null;
+    if (!referencia) {
+        conferirResultados(await consultarEnderecoNominatim({ q: [rua, cidade, 'Santa Catarina, Brasil'].join(', ') }));
+    }
+    return referencia;
+}
+
+export const buscarCoordenadasMelhoradas = (endereco, { incluirReferencia = false } = {}) => {
+    const texto = String(endereco || '').trim();
+    if (!texto) return Promise.resolve(null);
+
+    const chave = JSON.stringify([normalizarTextoGeo(texto), incluirReferencia]);
+    if (!enderecosEmBusca.has(chave)) {
+        const busca = localizarEndereco(texto, incluirReferencia).finally(() => enderecosEmBusca.delete(chave));
+        enderecosEmBusca.set(chave, busca);
+    }
+    return enderecosEmBusca.get(chave);
 };
 
-// Compatibilidade: wrapper simples com nome solicitado "buscarCoordenadas"
-export const buscarCoordenadas = async (endereco) => {
-    return await obterCoordenadasSeguras(endereco);
-};
+export const buscarCoordenadasComFallback = buscarCoordenadasMelhoradas;
+export const obterCoordenadasSeguras = buscarCoordenadasComFallback;
+export const buscarCoordenadas = obterCoordenadasSeguras;
 
 /**
  * Mapbox Search Box / Autosuggest API - Retorna sugestões de endereços conforme o usuário digita

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import supabase, { onSupabaseReady } from '../../src/supabaseClient';
 import MapComponent from '../../src/MapComponent';
+import NavegacaoEntrega from './NavegacaoEntrega.jsx';
 
 // Safety helper: valida se coordenadas estão dentro de Santa Catarina
 // lat: entre -30.0 e -25.0 | lng: entre -54.0 e -48.0 (negativo aumenta p/ oeste)
@@ -37,20 +38,6 @@ export default function AppMotorista() {
     const [loginError, setLoginError] = useState('');
     const [loginVisible, setLoginVisible] = useState(false); // animação modal
     const [session, setSession] = useState(null);
-
-    const abrirGPS = (app, lat, lng) => {
-        const latN = lat == null ? null : Number(lat);
-        const lngN = lng == null ? null : Number(lng);
-        if (!Number.isFinite(latN) || !Number.isFinite(lngN)) {
-            alert('Coordenadas inválidas para navegação');
-            return;
-        }
-        if (app === 'waze') {
-            window.open('https://waze.com/ul?ll=' + latN + ',' + lngN + '&navigate=yes', '_blank');
-        } else {
-            window.open('https://www.openstreetmap.org/?mlat=' + latN + '&mlon=' + lngN + '#map=18/' + latN + '/' + lngN, '_blank');
-        }
-    };
 
     // evitar logs repetidos ao carregar rota
     const carregarRotaLogRef = useRef(false);
@@ -875,20 +862,7 @@ export default function AppMotorista() {
                             <div style={{ color: '#fb923c', fontSize: '14px', marginBottom: '8px', fontWeight: 'bold' }}>📥 Coleta: {e.endereco_coleta}</div>
                         )}
                         <div style={{ color: '#aaa', fontSize: '14px', marginBottom: '16px' }}>📍 Entrega: {e.endereco || 'Endereço não informado'}</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '16px' }}>
-                            <button
-                                onClick={() => abrirGPS('waze', e.lat_coleta || e.lat, e.lng_coleta || e.lng)}
-                                style={{ padding: '10px', borderRadius: '10px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
-                            >
-                                🚙 WAZE
-                            </button>
-                            <button
-                                onClick={() => abrirGPS('maps', e.lat_coleta || e.lat, e.lng_coleta || e.lng)}
-                                style={{ padding: '10px', borderRadius: '10px', border: 'none', background: '#34a853', color: '#fff', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
-                            >
-                                🗺️ MAPS
-                            </button>
-                        </div>
+                        <NavegacaoEntrega entrega={e} />
                         <button
                             onClick={() => {
                                 // Se esta é a ÚLTIMA entrega, tocar som de sucesso

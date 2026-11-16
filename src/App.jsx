@@ -3,10 +3,11 @@ import HistoricoEntregas from './HistoricoEntregas';
 import supabase, { subscribeToTable } from './supabaseClient';
 import polyline from 'polyline';
 import MapaLogistica from './MapaLogistica';
-import { nearestNeighborRoute, getRouteGeometry, obterCoordenadasSeguras, montarQueryMapbox, buscarCoordenadas } from './geoUtils';
+import { nearestNeighborRoute, getRouteGeometry, buscarCoordenadas, coordenadasNaRegiaoDeEntregas } from './geoUtils';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import BarraAtalhosObs from './components/BarraAtalhosObs.jsx';
 import SeletorTipoCard from './components/SeletorTipoCard.jsx';
+import LocalizacaoEntrega from './components/LocalizacaoEntrega.jsx';
 import { calcularRotaCompletaOSRM, obterOrigemMotorista, ordenarParadasRota, gerarChaveRota } from './services/routeService.js';
 
 // Safety: enable Supabase-backed flows during local debugging
@@ -168,7 +169,47 @@ const obterGpsDespacho = () => new Promise((resolve) => {
     );
 });
 
-// mapa dinamicamente importado para prevenir que falhas no build do pacote quebrem o app
+async function buscarMemoriaDoMotorista(endereco) {
+    const padrao = String(endereco || '').trim().replace(/[\\%_]/g, '\\$&');
+    if (!padrao) return null;
+
+    const { data, error } = await supabase
+        .from('entregas')
+        .select('lat_conclusao, lng_conclusao')
+        .eq('status', 'entregue')
+        .ilike('endereco', padrao)
+        .not('lat_conclusao', 'is', null)
+        .not('lng_conclusao', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    if (error) {
+        console.warn('Falha ao consultar o GPS do histórico', error);
+        return null;
+    }
+    if (!coordenadasNaRegiaoDeEntregas(data?.lat_conclusao, data?.lng_conclusao)) return null;
+    return { lat: Number(data.lat_conclusao), lng: Number(data.lng_conclusao) };
+}
+
+async function localizarDestino(endereco, opcoes) {
+    return (await buscarMemoriaDoMotorista(endereco)) || buscarCoordenadas(endereco, opcoes);
+}
+
+async function salvarCoordenadasEntrega(entrega, ponto) {
+    const campos = { lat: ponto.lat, lng: ponto.lng };
+    let query = supabase.from('entregas').update(campos)
+        .eq('id', entrega.id)
+        .eq('endereco', entrega.endereco)
+        .in('status', ['adicionado', 'pendente']);
+    for (const campo of ['lat', 'lng']) {
+        query = entrega[campo] == null ? query.is(campo, null) : query.eq(campo, entrega[campo]);
+    }
+    const { data, error } = await query.select('id').maybeSingle();
+    if (error) throw error;
+    return data ? campos : null;
+}
+
 function App() {
     const [rotaPronta, setRotaPronta] = useState(false);
     const [rotaOrdenadaState, setRotaOrdenadaState] = useState([]);
@@ -263,6 +304,7 @@ function App() {
     // Estados do Supabase
     const [entregas, setEntregas] = useState(null);
     const [pedidosPendentes, setPedidosPendentes] = useState([]);
+    const [entregaEmLocalizacao, setEntregaEmLocalizacao] = useState(null);
     const [cardCopiado, setCardCopiado] = useState(null);
     const [toastCopiarTudo, setToastCopiarTudo] = useState(false);
     // compat shim: estado para seleções de vagas (se o projeto usar esse nome em outros trechos)
@@ -339,39 +381,29 @@ function App() {
 
             console.log(`✅ Central: ${pendentes.length} | Mapa: ${(todasAsEntregas || []).length}`);
 
-            // 🎯 LÓGICA 3: Auto-recuperação em background de cards com "⚠️ Sem coords"
+            // Recupera coordenadas de entregas anteriores para o mesmo endereço.
             const itensSemCoords = pendentes.filter(
-                item => item && item.id && (!item.lat || !item.lng) && item.endereco && !idsSemCoordsTentadosRef.current.has(item.id)
+                item => item && item.id && !coordenadasNaRegiaoDeEntregas(item.lat, item.lng) && item.endereco && !idsSemCoordsTentadosRef.current.has(item.id)
             );
             if (itensSemCoords.length > 0 && !autoGeoEmAndamentoRef.current) {
                 autoGeoEmAndamentoRef.current = true;
                 (async () => {
                     try {
-                        for (let i = 0; i < itensSemCoords.length; i++) {
-                            const item = itensSemCoords[i];
-                            idsSemCoordsTentadosRef.current.add(item.id);
+                        for (const item of itensSemCoords) {
                             try {
-                                console.log(`🔄 [AUTO-GEO] Recuperando coordenadas para card #${item.id}: "${item.endereco}"`);
-                                const resGeo = await buscarCoordenadas(item.endereco);
-                                const novaLat = resGeo && resGeo.lat != null ? parseFloat(resGeo.lat) : null;
-                                const novaLng = resGeo && resGeo.lng != null ? parseFloat(resGeo.lng) : null;
-                                if (Number.isFinite(novaLat) && Number.isFinite(novaLng) && novaLat !== 0 && novaLng !== 0) {
-                                    await supabase.from('entregas').update({ lat: novaLat, lng: novaLng }).eq('id', item.id);
-                                    const aplicarCoords = prev => (Array.isArray(prev) ? prev : []).map(p =>
-                                        p && p.id === item.id ? { ...p, lat: novaLat, lng: novaLng } : p
-                                    );
-                                    setPedidosPendentes(aplicarCoords);
-                                    setEntregas(aplicarCoords);
-                                    setEntregaMarkers(aplicarCoords);
-                                    console.log(`✅ [AUTO-GEO] Coordenadas atualizadas para card #${item.id}:`, { lat: novaLat, lng: novaLng });
-                                } else {
-                                    console.warn(`⚠️ [AUTO-GEO] Não foi possível geocodificar card #${item.id}: "${item.endereco}"`);
-                                }
-                            } catch (errItem) {
-                                console.warn(`⚠️ [AUTO-GEO] Exceção ao geocodificar card #${item.id}:`, errItem);
-                            }
-                            if (i < itensSemCoords.length - 1) {
-                                await new Promise(r => setTimeout(r, 1100)); // respeita limite de 1 req/s do Nominatim
+                                const ponto = await buscarMemoriaDoMotorista(item.endereco);
+                                const campos = ponto && await salvarCoordenadasEntrega(item, ponto);
+                                idsSemCoordsTentadosRef.current.add(item.id);
+                                if (!campos) continue;
+                                const aplicarCoords = prev => (prev || []).map(p =>
+                                    p.id === item.id && p.endereco === item.endereco &&
+                                        p.lat === item.lat && p.lng === item.lng ? { ...p, ...campos } : p
+                                );
+                                setPedidosPendentes(aplicarCoords);
+                                setEntregas(aplicarCoords);
+                                setEntregaMarkers(aplicarCoords);
+                            } catch (error) {
+                                console.warn('Falha ao recuperar localização pelo histórico', error);
                             }
                         }
                     } finally {
@@ -2430,26 +2462,6 @@ function App() {
         }
     };
 
-    // 🧠 MEMÓRIA DO MOTORISTA: verifica se já temos coordenadas exatas de conclusão para este endereço
-    const buscarMemoriaDoMotorista = async (enderecoBuscado) => {
-        try {
-            const { data, error } = await supabase
-                .from('entregas')
-                .select('lat_conclusao, lng_conclusao')
-                .eq('status', 'entregue')
-                .ilike('endereco', `%${enderecoBuscado}%`)
-                .not('lat_conclusao', 'is', null)
-                .order('created_at', { ascending: false })
-                .limit(1);
-
-            if (data && data.length > 0 && data[0].lat_conclusao) {
-                console.log("🧠 [MEMÓRIA] Coordenada exata recuperada do histórico!");
-                return { lat: parseFloat(data[0].lat_conclusao), lng: parseFloat(data[0].lng_conclusao) };
-            }
-            return null;
-        } catch (e) { return null; }
-    };
-
     const adicionarAosPendentes = async (e) => {
         if (e && typeof e.preventDefault === 'function') e.preventDefault();
         if (adicionando) return;
@@ -2464,40 +2476,7 @@ function App() {
 
         try {
             const enderecoTrim = String(enderecoEntrega || '').trim();
-            console.log("🔍 Preparando endereço e buscando coordenadas para:", enderecoTrim);
-
-            // 1) Limpeza da query para o MAPBOX (pino mais confiável)
-            const enderecoLimpoParaMapa = montarQueryMapbox(enderecoTrim);
-
-            // 2) Buscar coordenadas: primeiro tenta memória do histórico, depois Fallback Inteligente em 3 tentativas
-            let coords = { lat: 0, lng: 0 };
-            try {
-                // 2a) Tenta a memória do motorista (lat_conclusao / lng_conclusao do histórico)
-                const memoriaCoords = (await buscarMemoriaDoMotorista(enderecoTrim)) || (await buscarMemoriaDoMotorista(enderecoLimpoParaMapa));
-                if (memoriaCoords) {
-                    coords = memoriaCoords;
-                    console.log("📍 Coordenadas recuperadas da memória do histórico:", coords);
-                } else {
-                    console.log("🗺️ Endereço novo. Buscando coordenadas com limpeza e fallback inteligente...");
-                    const res = await buscarCoordenadas(enderecoTrim);
-                    if (res && res.lat != null && res.lng != null) {
-                        coords = { lat: Number(res.lat), lng: Number(res.lng) };
-                        console.log("📍 Coordenadas encontradas para query de mapa:", enderecoLimpoParaMapa, coords, res.precisao || res.precision || null);
-                        // Validação de município: alerta se resultado for fora da área de atuação
-                        try {
-                            const _AREAS_VALIDAS = ['palhoca', 'sao jose', 'florianopolis', 'biguacu', 'ingleses', 'santo amaro', 'governador celso ramos', 'santa catarina'];
-                            const _displayNorm = String(res.display_name || res.place_name || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
-                            if (_displayNorm && !_AREAS_VALIDAS.some(a => _displayNorm.includes(a))) {
-                                alert('⚠️ Endereço fora da área de atuação!');
-                            }
-                        } catch (_e) { /* ignore */ }
-                    } else {
-                        console.warn("⚠️ Nenhuma coordenada confiável encontrada para a query do mapa. Salvando como nulo.");
-                    }
-                }
-            } catch (err) {
-                console.error("❌ Erro ao obter coordenadas:", err);
-            }
+            const coords = await localizarDestino(enderecoTrim);
 
             // 3) Payload puro: cliente e endereço salvos exatamente como digitados
             const nomeLimpo = String(nomeCliente || '').trim();
@@ -2513,8 +2492,8 @@ function App() {
                 status: 'pendente',
                 tipo: tipoEncomenda || 'Entrega',
                 obs: observacoesGestor || '',
-                lat: (Number.isFinite(coords.lat) && coords.lat !== 0) ? parseFloat(coords.lat) : null,
-                lng: (Number.isFinite(coords.lng) && coords.lng !== 0) ? parseFloat(coords.lng) : null,
+                lat: coords?.lat ?? null,
+                lng: coords?.lng ?? null,
                 endereco_coleta: localColeta.lat ? 'Localização Dinâmica (Gestor)' : null,
                 lat_coleta: localColeta.lat || null,
                 lng_coleta: localColeta.lng || null
@@ -2559,16 +2538,15 @@ function App() {
             try { if (typeof carregarDados === 'function') await carregarDados(); } catch (e) { /* ignore */ }
 
             // Foca o mapa no novo ponto se ele for válido
-            if (Number.isFinite(coords.lat) && coords.lat !== 0) {
-                try { setMapFocusCoords(coords); } catch (e) { /* ignore */ }
-            }
+            if (coords) setMapFocusCoords(coords);
+            else setEntregaEmLocalizacao(newPedido);
 
             // Limpa os campos
             setNomeCliente('');
             setEnderecoEntrega('');
             setObservacoesGestor('');
 
-            alert('📍 Ponto cadastrado e pronto para despacho!');
+            if (coords) alert('📍 Ponto cadastrado e pronto para despacho!');
 
         } catch (err) {
             console.error(err);
@@ -2812,34 +2790,19 @@ function App() {
                 return;
             }
 
-            // 1.1 Resgate automático no banco (Supabase) para os cards que ainda estiverem com "Sem coords"
             for (const item of todasEntregas) {
-                if ((!item.lat || !item.lng) && item.endereco) {
-                    try {
-                        console.log(`🔄 [REORGANIZAR ROTA] Tentando geocodificar item sem coords (#${item.id}):`, item.endereco);
-                        const mem = await buscarMemoriaDoMotorista(item.endereco);
-                        const resGeo = mem || (await buscarCoordenadas(item.endereco));
-                        if (resGeo && resGeo.lat != null && resGeo.lng != null) {
-                            const novaLat = parseFloat(resGeo.lat);
-                            const novaLng = parseFloat(resGeo.lng);
-                            if (Number.isFinite(novaLat) && Number.isFinite(novaLng) && novaLat !== 0 && novaLng !== 0) {
-                                item.lat = novaLat;
-                                item.lng = novaLng;
-                                await supabase
-                                    .from('entregas')
-                                    .update({ lat: novaLat, lng: novaLng })
-                                    .eq('id', item.id);
-                                console.log(`✅ [REORGANIZAR ROTA] Coordenadas salvas no Supabase para #${item.id}:`, { lat: novaLat, lng: novaLng });
-                            }
-                        }
-                    } catch (errGeo) {
-                        console.warn(`⚠️ [REORGANIZAR ROTA] Erro ao recuperar coords para #${item.id}:`, errGeo);
-                    }
+                if (coordenadasNaRegiaoDeEntregas(item.lat, item.lng) || !item.endereco || item.status !== 'pendente') continue;
+                try {
+                    const ponto = await localizarDestino(item.endereco);
+                    const campos = ponto && await salvarCoordenadasEntrega(item, ponto);
+                    if (campos) Object.assign(item, campos);
+                } catch (error) {
+                    console.warn('Falha ao recuperar localização antes de ordenar a rota', error);
                 }
             }
 
-            const pedidosValidos = todasEntregas.filter(p => p.lat && p.lng);
-            const pedidosSemCoords = todasEntregas.filter(p => !p.lat || !p.lng);
+            const pedidosValidos = todasEntregas.filter(p => coordenadasNaRegiaoDeEntregas(p.lat, p.lng));
+            const pedidosSemCoords = todasEntregas.filter(p => !coordenadasNaRegiaoDeEntregas(p.lat, p.lng));
 
             // 2. Ponto Zero: onde o motorista está agora?
             let atualLat = -27.5953; // Posição fallback (Central)
@@ -2929,10 +2892,6 @@ function App() {
                     lat_coleta: payloadFinal[i].lat_coleta,
                     lng_coleta: payloadFinal[i].lng_coleta
                 };
-                if (payloadFinal[i].lat && payloadFinal[i].lng) {
-                    updateFields.lat = payloadFinal[i].lat;
-                    updateFields.lng = payloadFinal[i].lng;
-                }
                 await supabase
                     .from('entregas')
                     .update(updateFields)
@@ -3864,7 +3823,15 @@ function App() {
                                                         onAlterarTipo={(novoTipo) => alterarTipoPedido(p, novoTipo)}
                                                     />
                                                 </div>
-                                                <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>📍 {p.endereco} {(!(p.lat && p.lng)) && <span title="Sem coordenadas: não participará da roteirização automática" style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Sem coords</span>}</p>
+                                                <p style={{ fontSize: '13px', color: theme.textLight, margin: '4px 0' }}>
+                                                    📍 {p.endereco}
+                                                    {!coordenadasNaRegiaoDeEntregas(p.lat, p.lng) && (
+                                                        <span style={{ color: '#f59e0b', marginLeft: 8 }}>⚠️ Localização pendente</span>
+                                                    )}
+                                                </p>
+                                                <button type="button" onClick={() => setEntregaEmLocalizacao(p)} style={btnStyle(theme.primary)}>
+                                                    Ajustar localização
+                                                </button>
                                                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, margin: '6px 0', flexWrap: 'wrap' }}>
                                                     <span style={{ fontSize: '13px', fontWeight: 700, color: '#FF8C00', whiteSpace: 'nowrap' }}>Obs:</span>
                                                     <span style={{ fontSize: '13px', fontWeight: 700, color: '#FF8C00', flex: 1, wordBreak: 'break-word', minWidth: 0 }}>
@@ -3879,14 +3846,8 @@ function App() {
                                                             const obsAtualizada = nova.trim();
                                                             try {
                                                                 const camposUpdate = { obs: obsAtualizada };
-                                                                if ((!p.lat || !p.lng) && p.endereco) {
-                                                                    const resGeo = await buscarCoordenadas(p.endereco);
-                                                                    if (resGeo && resGeo.lat != null && resGeo.lng != null) {
-                                                                        camposUpdate.lat = parseFloat(resGeo.lat);
-                                                                        camposUpdate.lng = parseFloat(resGeo.lng);
-                                                                    }
-                                                                }
-                                                                await supabase.from('entregas').update(camposUpdate).eq('id', p.id);
+                                                                const { error } = await supabase.from('entregas').update(camposUpdate).eq('id', p.id);
+                                                                if (error) throw error;
                                                                 setPedidosPendentes(prev => (prev || []).map(item =>
                                                                     item.id === p.id ? { ...item, ...camposUpdate } : item
                                                                 ));
@@ -4288,7 +4249,26 @@ function App() {
                 )}
             </main>
 
-            {/* Driver selection is now inline; modal-based selection removed. */}
+            {entregaEmLocalizacao && (
+                <LocalizacaoEntrega
+                    key={entregaEmLocalizacao.id}
+                    entrega={entregaEmLocalizacao}
+                    theme={theme}
+                    onBuscar={endereco => localizarDestino(endereco, { incluirReferencia: true })}
+                    onFechar={() => setEntregaEmLocalizacao(null)}
+                    onSalvar={async (entrega, ponto) => {
+                        const campos = await salvarCoordenadasEntrega(entrega, ponto);
+                        if (!campos) {
+                            await carregarDados();
+                            throw new Error('O pedido mudou. Reabra o ajuste para ver os dados atualizados.');
+                        }
+                        await carregarDados();
+                        setRotaOrdenadaState([]);
+                        setRotaPronta(false);
+                        setMapFocusCoords(campos);
+                    }}
+                />
+            )}
         </div>
     );
 
